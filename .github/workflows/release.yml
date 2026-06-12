@@ -53,6 +53,20 @@ on:
     tags:
       - "v*"
 
+  # Manual re-run hatch: rebuild ONLY the Flatpak and attach it to an existing
+  # release draft, WITHOUT rebuilding the desktop/Android assets. Use when a
+  # single job failed on a tag push and you don't want to redo the rest. The
+  # heavy jobs below are gated to the `push` event, so on a manual dispatch only
+  # build-flatpak runs; publishing stays a manual flip afterwards.
+  #   gh workflow run release.yml --ref main -f tag=v0.14.0
+  # NOTE: a new heavy job added later must also carry the push-only gate, or it
+  # will run on manual dispatches too.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the rebuilt Flatpak to (e.g. v0.14.0)"
+        required: true
+
 # Release operations create the release and upload assets to it.
 permissions:
   contents: write
@@ -64,6 +78,7 @@ jobs:
   # ─── create the draft release ──────────────────────────────────────────────
   create-release:
     name: Create draft release
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-22.04
     outputs:
       release_id: ${{ steps.create.outputs.release_id }}
@@ -96,6 +111,7 @@ jobs:
   # ─── desktop bundles (Linux / macOS / Windows) ─────────────────────────────
   build-tauri:
     name: Build desktop (${{ matrix.platform }})
+    if: ${{ github.event_name == 'push' }}
     needs: create-release
     strategy:
       fail-fast: false
@@ -214,9 +230,17 @@ jobs:
   build-flatpak:
     name: Build Flatpak
     needs: create-release
+    # Runs on a normal tag push (ordered after create-release, which makes the
+    # draft) AND on a manual workflow_dispatch (where create-release is skipped).
+    # always() + the result guard lets it proceed when the dependency was
+    # skipped, while still skipping if create-release actually FAILED on a push.
+    if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') }}
     runs-on: ubuntu-22.04
     env:
       DEBIAN_FRONTEND: noninteractive
+      # Tag on both event types: the dispatch input, else the pushed tag ref.
+      # (create-release is skipped on dispatch, so don't read its output here.)
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -233,20 +257,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends flatpak ca-certificates
 
-      # Cache the installed flatpak runtimes + builder (~1 GB). Static key —
-      # `flatpak install` skips anything already present; bump the suffix to force
-      # a clean cache.
-      - name: Cache Flatpak runtimes
-        uses: actions/cache@v4
-        with:
-          path: ~/.local/share/flatpak
-          key: flatpak-runtimes-v2
-
-      - name: Add Flathub and install builder + runtimes (user install)
+      # Runtimes MUST go into the SYSTEM installation (/var/lib/flatpak), not
+      # --user. org.flatpak.Builder runs flatpak-builder inside its own Flatpak
+      # sandbox, and that sandbox can only resolve SDKs/runtimes from the system
+      # installation (it has /var/lib/flatpak access); a --user install is
+      # invisible to it, so the build dies at init with "Unable to find sdk
+      # org.gnome.Sdk version 50" even though the install step succeeded.
+      #
+      # No actions/cache here: a system install is root-owned, and the cache
+      # restore (which runs unprivileged) can't write back into /var/lib/flatpak.
+      # Tag releases are infrequent, so the ~one-time runtime download is fine.
+      - name: Add Flathub and install builder + runtimes (system install)
         run: |
-          flatpak remote-add --user --if-not-exists flathub \
+          sudo flatpak remote-add --system --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y flathub \
+          sudo flatpak install --system -y flathub \
             org.flatpak.Builder \
             org.gnome.Platform//50 \
             org.gnome.Sdk//50 \
@@ -259,22 +284,22 @@ jobs:
       # deps) — keep it in sync with the renamed bundle id.
       - name: Build Flatpak bundle
         run: |
-          flatpak run org.flatpak.Builder --user --force-clean --repo=flatpak-repo \
+          flatpak run org.flatpak.Builder --system --force-clean --repo=flatpak-repo \
             flatpak-build flatpak/tel.quark.app.yml
           flatpak build-bundle flatpak-repo quark.flatpak tel.quark.app
 
       - name: Rename bundle to release asset name
-        run: cp quark.flatpak "quark-${GITHUB_REF_NAME}.flatpak"
+        run: cp quark.flatpak "quark-${TAG}.flatpak"
 
       - name: Upload Flatpak to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.create-release.outputs.tag }}
         run: gh release upload "$TAG" "quark-${TAG}.flatpak" --repo "$GITHUB_REPOSITORY" --clobber
 
   # ─── Android APK (arm64) ───────────────────────────────────────────────────
   build-android:
     name: Build Android APK
+    if: ${{ github.event_name == 'push' }}
     needs: create-release
     runs-on: ubuntu-22.04
     env:
@@ -386,6 +411,7 @@ jobs:
   # ─── publish the release (flip draft → published) ──────────────────────────
   publish-release:
     name: Publish release
+    if: ${{ github.event_name == 'push' }}
     needs: [create-release, build-tauri, build-flatpak, build-android]
     runs-on: ubuntu-22.04
     steps:
