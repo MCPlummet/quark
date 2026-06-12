@@ -158,22 +158,50 @@ jobs:
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
 
-      # tauri-action runs the beforeBuildCommand (`pnpm build`) itself, builds
-      # the release bundles, and uploads them to the draft release identified by
-      # releaseId. Bundles are named by Tauri; we don't force-rename them.
-      - name: Build and upload Tauri bundles
-        uses: tauri-apps/tauri-action@v0
+      # Apple signing is opt-in: only when an actual certificate secret is set do
+      # we export the signing/notarisation vars into the job environment for
+      # tauri-action to pick up. Passing these directly in the step `env:` block
+      # is unsafe — an unset secret resolves to an EMPTY STRING, and Tauri's macOS
+      # bundler treats a *present* (even empty) APPLE_CERTIFICATE as "sign this",
+      # then fails in `security import` on the empty data. Writing them to
+      # $GITHUB_ENV only when present means an unconfigured repo leaves them unset
+      # entirely, and the bundler cleanly produces an unsigned .app/.dmg.
+      - name: Configure Apple signing (macOS, only if a certificate is present)
+        if: matrix.platform == 'macos-latest'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Apple signing / notarisation — all optional. tauri-action signs only
-          # when these are populated; unset secrets resolve to empty strings and
-          # the build proceeds unsigned.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${APPLE_CERTIFICATE}" ]; then
+            echo "Apple certificate present — building a SIGNED macOS bundle."
+            {
+              echo "APPLE_CERTIFICATE=${APPLE_CERTIFICATE}"
+              echo "APPLE_CERTIFICATE_PASSWORD=${APPLE_CERTIFICATE_PASSWORD}"
+              echo "APPLE_SIGNING_IDENTITY=${APPLE_SIGNING_IDENTITY}"
+              echo "APPLE_ID=${APPLE_ID}"
+              echo "APPLE_PASSWORD=${APPLE_PASSWORD}"
+              echo "APPLE_TEAM_ID=${APPLE_TEAM_ID}"
+            } >> "$GITHUB_ENV"
+          else
+            echo "No APPLE_CERTIFICATE secret — building an UNSIGNED macOS bundle."
+            echo "  (Gatekeeper will warn on first launch; right-click → Open, or"
+            echo "   set the Apple signing secrets to produce a notarised build.)"
+          fi
+
+      # tauri-action runs the beforeBuildCommand (`pnpm build`) itself, builds
+      # the release bundles, and uploads them to the draft release identified by
+      # releaseId. Bundles are named by Tauri; we don't force-rename them.
+      # macOS signing vars (if any) come from the job environment configured by
+      # the step above — never hard-coded here, so empty secrets stay unset.
+      - name: Build and upload Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           tagName: ${{ needs.create-release.outputs.tag }}
@@ -192,26 +220,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # We install flatpak-builder from Flathub (org.flatpak.Builder) rather than
+      # apt: ubuntu-22.04 ships flatpak-builder 1.2.x, which post-processes the
+      # AppStream metainfo by shelling out to the `appstream-compose` binary. That
+      # binary was removed in AppStream 1.0 (replaced by `appstreamcli compose`),
+      # so it no longer exists in the org.gnome.Sdk//50 build sandbox and the
+      # build fails with "bwrap: execvp appstream-compose: No such file". The
+      # Flathub org.flatpak.Builder bundles a current flatpak-builder that calls
+      # the modern `appstreamcli compose`.
       - name: Install flatpak tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            flatpak flatpak-builder elfutils ca-certificates
+          sudo apt-get install -y --no-install-recommends flatpak ca-certificates
 
-      # Cache the installed flatpak runtimes (~1 GB). Static key — runtime bumps
-      # are handled by `flatpak install` skipping anything already present; bump
-      # the -v1 suffix to force a clean cache.
+      # Cache the installed flatpak runtimes + builder (~1 GB). Static key —
+      # `flatpak install` skips anything already present; bump the suffix to force
+      # a clean cache.
       - name: Cache Flatpak runtimes
         uses: actions/cache@v4
         with:
           path: ~/.local/share/flatpak
-          key: flatpak-runtimes-v1
+          key: flatpak-runtimes-v2
 
-      - name: Add Flathub and install runtimes (user install)
+      - name: Add Flathub and install builder + runtimes (user install)
         run: |
           flatpak remote-add --user --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y flathub \
+            org.flatpak.Builder \
             org.gnome.Platform//50 \
             org.gnome.Sdk//50 \
             org.freedesktop.Sdk.Extension.rust-stable//25.08 \
@@ -223,7 +259,7 @@ jobs:
       # deps) — keep it in sync with the renamed bundle id.
       - name: Build Flatpak bundle
         run: |
-          flatpak-builder --user --force-clean --repo=flatpak-repo \
+          flatpak run org.flatpak.Builder --user --force-clean --repo=flatpak-repo \
             flatpak-build flatpak/tel.quark.app.yml
           flatpak build-bundle flatpak-repo quark.flatpak tel.quark.app
 
