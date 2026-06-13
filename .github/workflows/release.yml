@@ -235,7 +235,9 @@ jobs:
     # always() + the result guard lets it proceed when the dependency was
     # skipped, while still skipping if create-release actually FAILED on a push.
     if: ${{ always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped') }}
-    runs-on: ubuntu-22.04
+    # ubuntu-24.04 ships flatpak-builder 1.4.x (22.04 only has 1.2.x). 1.4 is what
+    # makes the AppStream step work — see the Install step comment below.
+    runs-on: ubuntu-24.04
     env:
       DEBIAN_FRONTEND: noninteractive
       # Tag on both event types: the dispatch input, else the pushed tag ref.
@@ -244,35 +246,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # We install flatpak-builder from Flathub (org.flatpak.Builder) rather than
-      # apt: ubuntu-22.04 ships flatpak-builder 1.2.x, which post-processes the
-      # AppStream metainfo by shelling out to the `appstream-compose` binary. That
-      # binary was removed in AppStream 1.0 (replaced by `appstreamcli compose`),
-      # so it no longer exists in the org.gnome.Sdk//50 build sandbox and the
-      # build fails with "bwrap: execvp appstream-compose: No such file". The
-      # Flathub org.flatpak.Builder bundles a current flatpak-builder that calls
-      # the modern `appstreamcli compose`.
+      # Use the NATIVE apt flatpak-builder, NOT the sandboxed Flathub
+      # org.flatpak.Builder. flatpak-builder sandboxes each module build in bwrap,
+      # but it is itself a plain host binary that resolves the runtime/SDK from the
+      # user flatpak installation directly. The sandboxed org.flatpak.Builder, by
+      # contrast, can't run on a headless CI runner: its own `flatpak run` sandbox
+      # needs a writable XDG_RUNTIME_DIR (absent here — dconf init fails) and then
+      # dies at "Unable to find sdk org.gnome.Sdk version 50", with BOTH --user and
+      # --system installs.
+      #
+      # Why a modern flatpak-builder is required: 1.2.x (ubuntu-22.04) processes
+      # the AppStream metainfo with the `appstream-compose` binary, which was
+      # removed in AppStream 1.0 and is absent from the gnome//50 SDK, so the build
+      # dies with "bwrap: execvp appstream-compose: No such file". flatpak-builder
+      # 1.4+ (ubuntu-24.04 ships 1.4.2) calls `appstreamcli compose` on the host
+      # instead — hence ubuntu-24.04 and the `appstream` package (provides
+      # appstreamcli).
       - name: Install flatpak tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak ca-certificates
+          sudo apt-get install -y --no-install-recommends \
+            flatpak flatpak-builder appstream ca-certificates
 
-      # Runtimes MUST go into the SYSTEM installation (/var/lib/flatpak), not
-      # --user. org.flatpak.Builder runs flatpak-builder inside its own Flatpak
-      # sandbox, and that sandbox can only resolve SDKs/runtimes from the system
-      # installation (it has /var/lib/flatpak access); a --user install is
-      # invisible to it, so the build dies at init with "Unable to find sdk
-      # org.gnome.Sdk version 50" even though the install step succeeded.
-      #
-      # No actions/cache here: a system install is root-owned, and the cache
-      # restore (which runs unprivileged) can't write back into /var/lib/flatpak.
-      # Tag releases are infrequent, so the ~one-time runtime download is fine.
-      - name: Add Flathub and install builder + runtimes (system install)
+      # Cache the user flatpak installation (runtimes + SDK, ~3 GB). Static key —
+      # `flatpak install` skips anything already present; bump the suffix to force
+      # a clean cache.
+      - name: Cache Flatpak runtimes
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/flatpak
+          key: flatpak-runtimes-noble-v1
+
+      - name: Add Flathub and install runtimes (user install)
         run: |
-          sudo flatpak remote-add --system --if-not-exists flathub \
+          flatpak remote-add --user --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
-          sudo flatpak install --system -y flathub \
-            org.flatpak.Builder \
+          flatpak install --user -y flathub \
             org.gnome.Platform//50 \
             org.gnome.Sdk//50 \
             org.freedesktop.Sdk.Extension.rust-stable//25.08 \
@@ -280,11 +289,11 @@ jobs:
 
       # NOTE: the flatpak manifest is expected at flatpak/tel.quark.app.yml with
       # bundle id tel.quark.app. The manifest itself drives the frontend/Rust
-      # build inside the sandbox (network access via build-args if it vendors
-      # deps) — keep it in sync with the renamed bundle id.
+      # build inside the sandbox (network access via build-args because it fetches
+      # cargo/pnpm deps at build time) — keep it in sync with the renamed bundle id.
       - name: Build Flatpak bundle
         run: |
-          flatpak run org.flatpak.Builder --system --force-clean --repo=flatpak-repo \
+          flatpak-builder --user --force-clean --repo=flatpak-repo \
             flatpak-build flatpak/tel.quark.app.yml
           flatpak build-bundle flatpak-repo quark.flatpak tel.quark.app
 
