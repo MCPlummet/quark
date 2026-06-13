@@ -34,3 +34,9 @@ repo/
 
 # direnv
 .direnv/
+
+# Superpowers brainstorm scratch (visual companion mockups)
+.superpowers/
+
+# Claude Code worktrees
+.claude/worktrees/

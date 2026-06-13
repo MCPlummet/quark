@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quark — a terminal-aesthetic Matrix client</title>
+<meta name="description" content="Quark is a keyboard-driven Matrix chat client that looks like a terminal but renders in a real GUI window — vim keys, a :command bar, and inline images, GIFs, custom emoji and stickers. End-to-end encrypted.">
+<meta name="theme-color" content="#070b07">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="canonical" href="https://quark.tel/">
+
+<!-- Open Graph / social -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Quark — a terminal-aesthetic Matrix client">
+<meta property="og:description" content="Keyboard-driven Matrix with vim keys, a :command bar, and inline media. End-to-end encrypted, built on the Rust matrix-sdk.">
+<meta property="og:url" content="https://quark.tel/">
+<meta property="og:image" content="https://quark.tel/assets/logo.png">
+<meta name="twitter:card" content="summary">
+
+<link rel="preload" href="assets/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/jetbrains-mono-800.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="scanlines" aria-hidden="true"></div>
+
+<header class="topbar">
+  <a class="brand" href="#top" aria-label="Quark home">
+    <img src="assets/logo.png" alt="" width="26" height="26">
+    <span>quark</span>
+  </a>
+  <nav class="nav" aria-label="Primary">
+    <a href="#features"><span class="c">:</span>features</a>
+    <a href="#download"><span class="c">:</span>download</a>
+    <a class="nav-ext" href="https://github.com/MCPlummet/quark" rel="noopener">github&nbsp;↗</a>
+  </nav>
+</header>
+
+<main id="top">
+
+  <!-- ───────────── HERO ───────────── -->
+  <section class="hero">
+    <p class="eyebrow reveal">// a matrix client</p>
+    <h1 class="reveal d1">Keyboard interface without the compromise.</h1>
+    <p class="lede reveal d2">
+      Quark drives <a href="https://matrix.org" rel="noopener">Matrix</a> with vim keys and a
+      <span class="kbd">:</span> command bar — in a real GUI window, so custom emoji, GIFs and
+      stickers still render inline. End-to-end encrypted, by default.
+    </p>
+
+    <div class="cta reveal d3">
+      <a class="btn btn-primary" id="download-btn" href="https://github.com/MCPlummet/quark/releases/latest" rel="noopener">
+        <span class="btn-arrow">↓</span> <span id="download-label">Download</span>
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/MCPlummet/quark" rel="noopener">
+        <span class="btn-arrow">★</span> Star on GitHub
+      </a>
+    </div>
+    <p class="meta reveal d3">v0.14.0&ensp;·&ensp;AGPL-3.0&ensp;·&ensp;Linux&ensp;·&ensp;macOS&ensp;·&ensp;Windows</p>
+
+    <!-- Live demo: the REAL frontend built in ?debug mock mode (docs/demo),
+         lazy-loaded on click so the page stays light. main.js injects the
+         iframe scaled to a >768px logical width so the desktop 3-pane layout
+         shows; on a phone the button opens the demo in a new tab instead. -->
+    <figure class="shot reveal d4" aria-label="Live Quark demo">
+      <div class="window">
+        <div class="window-bar">
+          <span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+          <span class="window-title">quark — live demo</span>
+          <a class="window-newtab" href="demo/?debug" target="_blank" rel="noopener" title="Open the demo full-screen in a new tab">open ↗</a>
+        </div>
+        <div class="demo-stage" id="demo-stage" data-src="demo/?debug">
+          <div class="demo-poster" id="demo-poster">
+            <button class="demo-launch" id="demo-launch" type="button" aria-describedby="demo-note">
+              <span class="play" aria-hidden="true">▶</span> launch live demo
+            </button>
+            <p class="demo-note" id="demo-note">The <em>real</em> Quark client, running in your browser with demo data —
+              keyboard-driven, no install, no account. Try <span class="kbd">j</span>/<span class="kbd">k</span> and
+              <span class="kbd">:</span>theme.</p>
+            <a class="demo-newtab" href="demo/?debug" target="_blank" rel="noopener">or open full-screen in a new tab ↗</a>
+          </div>
+        </div>
+      </div>
+      <figcaption class="shot-cap">Live build of the actual client — not a mockup.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ───────────── FEATURES ───────────── -->
+  <section class="section" id="features">
+    <h2 class="marker"><span class="c">:</span>features</h2>
+    <div class="grid">
+      <article class="feature">
+        <span class="fic">⌁</span>
+        <h3>End-to-end encryption</h3>
+        <p>Megolm via Vodozemac, cross-signing, and device verification — SAS emoji <em>and</em> QR. The same Rust crypto behind Element X.</p>
+      </article>
+      <article class="feature">
+        <span class="fic">⌨</span>
+        <h3>Vim everything</h3>
+        <p>Normal, Insert, Command and Visual modes. Every binding is remappable through a vimrc-style <span class="kbd">quarkrc</span>.</p>
+      </article>
+      <article class="feature">
+        <span class="fic">☺</span>
+        <h3>Custom emoji &amp; stickers</h3>
+        <p>MSC2545 <span class="kbd">im.ponies</span> packs from rooms and your account. Type <span class="kbd">:shortcode:</span> for inline previews. Plays nice with Cinny, FluffyChat, Nheko.</p>
+      </article>
+      <article class="feature">
+        <span class="fic">▷</span>
+        <h3>GIF search</h3>
+        <p>Giphy &amp; Klipy built in. Picks are uploaded to <em>your</em> homeserver — never hot-linked — and sent as real images.</p>
+      </article>
+      <article class="feature">
+        <span class="fic">◰</span>
+        <h3>Spaces &amp; directory</h3>
+        <p>A Cinny-style icon strip with a stable, non-jumpy room list. <span class="kbd">:directory</span> opens a searchable public-room browser.</p>
+      </article>
+      <article class="feature">
+        <span class="fic">◐</span>
+        <h3>11 themes</h3>
+        <p>Phosphor, amber, dracula, nord, gruvbox, solarized, catppuccin… TOML themes, switched live with <span class="kbd">:theme</span>.</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ───────────── DOWNLOAD ───────────── -->
+  <section class="section" id="download">
+    <h2 class="marker"><span class="c">:</span>download</h2>
+    <p class="dl-lede">Pre-release <span class="kbd">v0.14.0</span>. Grab an installer from GitHub Releases, or build it yourself.</p>
+    <div class="grid dl-grid">
+      <a class="dl" href="https://github.com/MCPlummet/quark/releases/latest" rel="noopener">
+        <span class="dl-os">Linux</span><span class="dl-fmt">.deb · .rpm · Flatpak</span><span class="dl-go">releases ↗</span>
+      </a>
+      <a class="dl" href="https://github.com/MCPlummet/quark/releases/latest" rel="noopener">
+        <span class="dl-os">macOS</span><span class="dl-fmt">.dmg (Apple silicon &amp; Intel)</span><span class="dl-go">releases ↗</span>
+      </a>
+      <a class="dl" href="https://github.com/MCPlummet/quark/releases/latest" rel="noopener">
+        <span class="dl-os">Windows</span><span class="dl-fmt">.msi installer</span><span class="dl-go">releases ↗</span>
+      </a>
+      <a class="dl" href="https://github.com/MCPlummet/quark#getting-started" rel="noopener">
+        <span class="dl-os">From source</span><span class="dl-fmt">Rust + pnpm, or the Nix flake</span><span class="dl-go">how-to ↗</span>
+      </a>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="foot-main">
+    <a class="brand" href="#top"><img src="assets/logo.png" alt="" width="22" height="22"><span>quark</span></a>
+    <nav class="foot-links" aria-label="Footer">
+      <a href="https://github.com/MCPlummet/quark" rel="noopener">GitHub</a>
+      <a href="https://github.com/MCPlummet/quark/blob/main/DESIGN.md" rel="noopener">Design spec</a>
+      <a href="https://github.com/MCPlummet/quark/releases" rel="noopener">Releases</a>
+      <a href="https://github.com/MCPlummet/quark/blob/main/LICENSE" rel="noopener">AGPL-3.0</a>
+    </nav>
+  </div>
+  <p class="foot-fine">
+    <span class="c">$</span> built with Tauri, Rust &amp; the matrix-sdk. Not affiliated with The Matrix.org Foundation. “Matrix” is their trademark.
+  </p>
+</footer>
+
+<script src="main.js" defer></script>
+</body>
+</html>

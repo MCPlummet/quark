@@ -35,42 +35,48 @@ the app's own behaviour. Mobile-responsive down to ~360px.
 
 ## Tech & structure
 
-Hand-rolled static files, no build:
+Hand-rolled static page (no build), plus a prebuilt demo bundle:
 
 ```
 docs/
   index.html          # the page
   style.css           # all styles
-  main.js             # OS detection for the download button (progressive enhancement)
+  main.js             # OS-aware download label + lazy demo launcher
   .nojekyll           # serve files as-is, no Jekyll build
   CNAME               # "quark.tel" — GitHub Pages custom domain
-  assets/
-    quarklogo512.png  # copied from src-tauri/icons
-    favicon.png
-    (screenshot.png)  # optional, swapped in later; CSS mockup used until then
+  assets/             # logo.png, favicon.png, fonts/ (self-hosted JetBrains Mono)
+  demo/               # prebuilt frontend (vite build) — the live demo
+vite.demo.config.ts   # demo build config (repo root): base=./, outDir=docs/demo,
+                      # injects a guard so the demo always runs in ?debug mock mode
 ```
 
-`main.js` is progressive enhancement only: detect OS from `navigator` and set
-the primary button's label + href to the matching Release asset. With JS off,
-the button falls back to the GitHub Releases page and the full installer list
-below still works.
+`main.js` is progressive enhancement only: (1) detect OS from `navigator` and
+relabel the download button; (2) lazy-inject the demo iframe on click, scaled to
+a >768px logical width so the desktop 3-pane layout shows (phones open it in a
+new tab instead). With JS off, the download button points at the latest release
+and the demo's "open in new tab" link still works.
+
+Rebuild the demo after app changes:
+`pnpm exec vite build --config vite.demo.config.ts`
 
 ## Page sections (single scroll)
 
 1. **Hero** — eyebrow "A Matrix client", headline, one-line pitch, primary
    **Download** + ghost **GitHub** buttons, a small `v0.14.0 · AGPL-3.0 ·
    Linux · macOS · Windows` line.
-2. **Screenshot** — one large Quark app-window visual. Built as a high-fidelity
-   **CSS mockup** (room list + timeline + `:` command line) so the page ships
-   looking finished. Marked swap point for a real PNG (`assets/screenshot.png`)
-   later.
+2. **Live demo** — an app-window frame containing a lazy-loaded **live demo**:
+   the real frontend built in `?debug` mock mode (`docs/demo`), embedded in an
+   iframe on click. Genuine UI, mock data, ~zero drift. A build-time guard
+   forces `?debug` so the demo can never expose the (mock) login screen via the
+   URL. (Residual: the in-app `:logout` command still works — accepted.)
 3. **Features** — grid of 6: end-to-end encryption, vim/quarkrc, custom emoji &
-   stickers, GIF search, spaces, 11 live-switchable themes.
-4. **"Why a GUI, not a TUI"** — short callout (the README's strongest hook).
-5. **Get it / download** — installer list (.deb / .dmg / .msi / Flatpak →
+   stickers, GIF search, spaces, 11 live-switchable themes. (3×2 on desktop.)
+4. **Get it / download** — installer list (.deb / .dmg / .msi / Flatpak →
    GitHub Releases) plus a "build from source" link.
-6. **Footer** — GitHub, license (AGPL-3.0), "Matrix" wordmark courtesy line,
+5. **Footer** — GitHub, license (AGPL-3.0), "Matrix" wordmark courtesy line,
    "not affiliated with The Matrix.org Foundation".
+
+(The "why a GUI, not a TUI" section from the initial draft was cut.)
 
 ## Deployment
 
