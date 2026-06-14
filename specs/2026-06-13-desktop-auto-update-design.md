@@ -178,10 +178,11 @@ commands following the existing `commands.rs → ipc/index.ts → ipc/mock.ts` c
     **main** with a `[skip ci]` message (main is unprotected; default `GITHUB_TOKEN` with
     `contents: write` can push). Pages rebuilds and serves it ~a minute later. The commit
     only **adds** under `docs/updates/`; it never touches the existing site or CNAME config.
-- **Jekyll note**: legacy Pages runs Jekyll, which copies `.json` static files through
-  verbatim, so `docs/updates/**/latest.json` serves as-is. If we ever want to bypass Jekyll
-  entirely, add `docs/.nojekyll` — but only once we're sure no Jekyll-templated landing
-  site depends on it (currently `/docs` is empty).
+- **Jekyll**: not a concern. The landing site (PR #1) already ships `docs/.nojekyll`, so
+  Pages serves `/docs` as pure static files — `docs/updates/**/latest.json` is served
+  verbatim. The feed commit only **adds** under `docs/updates/`; it never touches the
+  existing landing site, `docs/CNAME`, or `docs/.nojekyll`. `.gitignore` does not exclude
+  the path.
 - **One-time**: add the two signing secrets. (Pages already enabled; no gh-pages branch.)
 
 ## Signing key (one-time, owner-held)
