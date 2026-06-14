@@ -12,6 +12,15 @@
   "plugins": {
     "shell": {
       "open": true
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERGQjE2RDEyNkM0M0FDNgpSV1RHT3NRbTBSYjdEV3dEczdEQlJrbkdCWjkra052L3NISU1yZmQ0QVloRkVWcjY2NUpZWjB1Ywo=",
+      "endpoints": [
+        "https://quark.tel/updates/stable/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   },
   "app": {
@@ -36,6 +45,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "publisher": "mcplummet",
     "homepage": "https://quark.tel",
     "license": "AGPL-3.0-or-later",
