@@ -25,6 +25,7 @@ export function applySetOptions(cfg: AppConfig, sets: SetOption[]): AppConfig {
     emoji: { ...cfg.emoji },
     home: { ...cfg.home },
     cache: { ...cfg.cache },
+    updater: { ...cfg.updater },
   };
 
   for (const { name, value } of sets) {
@@ -58,6 +59,9 @@ export function applySetOptions(cfg: AppConfig, sets: SetOption[]): AppConfig {
       // cache
       case "image_memory_mb":   if (typeof value === "number")  updated.cache.image_memory_mb = value; break;
       case "timeline_rooms":    if (typeof value === "number")  updated.cache.timeline_rooms = value; break;
+      // updater
+      case "update_channel": if (value === "stable" || value === "beta") updated.updater.channel = value; break;
+      case "auto_update":    if (typeof value === "boolean") updated.updater.auto_check = value; break;
       default:
         console.warn(`[quarkrc] unknown set option: "${name}"`);
     }

@@ -63,6 +63,13 @@ export interface CacheConfig {
   timeline_rooms: number;
 }
 
+export interface UpdaterConfig {
+  /** Release channel the in-app updater follows. */
+  channel: "stable" | "beta";
+  /** Check for an update automatically shortly after sync starts. */
+  auto_check: boolean;
+}
+
 export interface AppConfig {
   general: GeneralConfig;
   sync: SyncConfig;
@@ -71,6 +78,7 @@ export interface AppConfig {
   emoji: EmojiConfig;
   home: HomeConfig;
   cache: CacheConfig;
+  updater: UpdaterConfig;
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -81,6 +89,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   emoji: { shortcode_autocomplete: true, autocomplete_min_chars: 2 },
   home: { dm_limit: 12 },
   cache: { image_memory_mb: 150, timeline_rooms: 30 },
+  updater: { channel: "stable", auto_check: true },
 };
 
 export async function getAppConfig(): Promise<AppConfig> {

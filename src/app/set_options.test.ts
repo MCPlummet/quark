@@ -82,3 +82,26 @@ describe("applySetOptions", () => {
     expect(applySetOptions(cfg, [])).toEqual(cfg);
   });
 });
+
+describe("applySetOptions — updater", () => {
+  it("sets the update channel to beta", () => {
+    const out = applySetOptions(DEFAULT_APP_CONFIG, [{ name: "update_channel", value: "beta" }]);
+    expect(out.updater.channel).toBe("beta");
+  });
+
+  it("ignores an invalid channel value", () => {
+    const out = applySetOptions(DEFAULT_APP_CONFIG, [{ name: "update_channel", value: "nightly" }]);
+    expect(out.updater.channel).toBe("stable");
+  });
+
+  it("toggles auto_update", () => {
+    const out = applySetOptions(DEFAULT_APP_CONFIG, [{ name: "auto_update", value: false }]);
+    expect(out.updater.auto_check).toBe(false);
+  });
+
+  it("preserves the updater section when other options change", () => {
+    const base = { ...DEFAULT_APP_CONFIG, updater: { channel: "beta" as const, auto_check: false } };
+    const out = applySetOptions(base, [{ name: "theme", value: "amber" }]);
+    expect(out.updater).toEqual({ channel: "beta", auto_check: false });
+  });
+});
