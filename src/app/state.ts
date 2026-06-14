@@ -1,6 +1,7 @@
 // Application state manager — single source of truth for Quark's runtime state
 
 import type { RoomInfo, TimelineEvent } from "../ipc/types.js";
+import type { UpdateInfo } from "../ipc/index.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,8 @@ export interface AppStateSnapshot {
   showReadReceipts: boolean;
   /** Active text-selection target, or null if not in text-select mode. */
   textSelectMode: TextSelectMode;
+  /** Metadata for an available update, or null when none/up to date. */
+  updateAvailable: UpdateInfo | null;
 }
 
 export type StateChangeKey = keyof AppStateSnapshot;
@@ -92,6 +95,7 @@ class AppStateManager {
     vimMode: true,
     showReadReceipts: true,
     textSelectMode: null,
+    updateAvailable: null,
   };
 
   private _listeners: Map<string, Set<StateChangeListener>> = new Map();

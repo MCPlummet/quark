@@ -12,6 +12,8 @@ import { initNotificationRouting } from "./app/notification_routing.js";
 import { startSync } from "./app/sync.js";
 import { showError } from "./ui/NotificationToast.js";
 import { setForceMock } from "./ipc/invoke.js";
+import { maybeCheckForUpdates, rememberDismissed } from "./app/update_check.js";
+import { updateInstall } from "./ipc/updater.js";
 import { showMainLayout } from "./ui/App.js";
 
 // ── Debug mode ────────────────────────────────────────────────────────────────
@@ -42,6 +44,28 @@ const components = mountApp(appEl);
 
 // Register components with the action dispatcher
 setComponents(components);
+
+// ── Auto-update wiring ────────────────────────────────────────────────────────
+components.updateBanner.onInstall(() => {
+  void updateInstall().catch((e) => {
+    showError(`Update failed: ${e instanceof Error ? e.message : String(e)}`);
+  });
+});
+components.updateBanner.onDismiss((version) => rememberDismissed(version));
+
+// Reflect download progress on the banner using the same tauriListen shim as
+// sync.ts — gracefully falls back when running outside Tauri (browser dev mode).
+void (async () => {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen<{ chunk_length: number; content_length: number | null }>(
+      "quark://update/progress",
+      (e) => components.updateBanner.setProgress(e.payload.chunk_length, e.payload.content_length),
+    );
+  } catch {
+    /* not running under Tauri (browser dev) — no progress events */
+  }
+})();
 
 // Wire panel navigation (must happen before any keyboard setup)
 setupPanelNav(components);
@@ -82,6 +106,8 @@ if (!DEBUG_MODE) {
       // Nudge unverified sessions to verify. Delayed so the first key-query has
       // a chance to populate the other-device list and cross-signing status.
       setTimeout(() => void maybePromptSessionVerification(), 2500);
+      // Background update check — deferred so it doesn't compete with first sync.
+      setTimeout(() => void maybeCheckForUpdates(components), 4000);
     }
   });
 }
@@ -103,6 +129,8 @@ components.loginScreen.onLogin(async (homeserver, username, password) => {
     // Nudge the user to verify this new session against another device. Delayed
     // so the homeserver's device list / cross-signing status can settle first.
     setTimeout(() => void maybePromptSessionVerification(), 2500);
+    // Background update check — deferred so it doesn't compete with first sync.
+    setTimeout(() => void maybeCheckForUpdates(components), 4000);
   }
 });
 

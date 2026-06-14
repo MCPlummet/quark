@@ -36,6 +36,7 @@ import { DebugViewer } from "./DebugViewer.js";
 import { RevisionHistoryDialog } from "./RevisionHistoryDialog.js";
 import { ContextMenu } from "./ContextMenu.js";
 import { MobileTopBar } from "./MobileTopBar.js";
+import { UpdateBanner } from "./UpdateBanner.js";
 import { initMobile, isMobile, openDrawer, closeDrawer, toggleDrawer, onMobileChange, onDrawerChange } from "../app/mobile.js";
 import { setupTouchGestures } from "../app/touch.js";
 import { AppState } from "../app/state.js";
@@ -94,6 +95,7 @@ export interface AppComponents {
 
   // Status
   statusBar: StatusBar;
+  updateBanner: UpdateBanner;
 
   // Typing indicator element (below compose box)
   typingIndicator: HTMLElement;
@@ -120,6 +122,7 @@ export function mountApp(container: HTMLElement): AppComponents {
   const replyPreview = new ReplyPreview();
   const input = new Input();
   const statusBar = new StatusBar();
+  const updateBanner = new UpdateBanner();
   const commandBar = new CommandBar();
   const threadView = new ThreadView();
   const memberList = new MemberList();
@@ -300,6 +303,9 @@ export function mountApp(container: HTMLElement): AppComponents {
   // ── Status bar (fixed bottom-right, floats over content) ─────────────────
   container.appendChild(statusBar.getElement());
 
+  // Update banner (fixed top-center, floats over content; hidden until offered)
+  container.appendChild(updateBanner.getElement());
+
   // ── Overlays (appended to body so they float above everything) ───────────
   document.body.appendChild(emojiPicker.getElement());
   document.body.appendChild(gifPicker.getElement());
@@ -332,6 +338,7 @@ export function mountApp(container: HTMLElement): AppComponents {
     replyPreview,
     input,
     statusBar,
+    updateBanner,
     commandBar,
     threadView,
     memberList,
