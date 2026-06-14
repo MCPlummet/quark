@@ -11,6 +11,7 @@ export class UpdateBanner {
   private _installBtn: HTMLButtonElement;
   private _dismissBtn: HTMLButtonElement;
   private _version: string | null = null;
+  private _received = 0;
   private _onInstall: (() => void) | null = null;
   private _onDismiss: ((version: string) => void) | null = null;
 
@@ -67,6 +68,7 @@ export class UpdateBanner {
   /** Reveal the banner for an available update. */
   show(info: UpdateInfo): void {
     this._version = info.version;
+    this._received = 0;
     this._text.textContent = `Update available — v${info.version}`;
     this._progress.textContent = "";
     this._installBtn.disabled = false;
@@ -77,14 +79,30 @@ export class UpdateBanner {
     this._el.classList.remove("update-banner--visible");
   }
 
-  /** Reflect download progress; `null` total shows an indeterminate state. */
-  setProgress(downloaded: number, total: number | null): void {
+  /**
+   * Reflect download progress. `chunkLength` is the size of the chunk just
+   * received; it's accumulated into a running total so the percentage climbs
+   * 0→100. A `null`/0 total shows an indeterminate state.
+   */
+  setProgress(chunkLength: number, total: number | null): void {
     this._installBtn.disabled = true;
+    this._received += chunkLength;
     if (total && total > 0) {
-      const pct = Math.min(100, Math.round((downloaded / total) * 100));
+      const pct = Math.min(100, Math.round((this._received / total) * 100));
       this._progress.textContent = `Downloading… ${pct}%`;
     } else {
       this._progress.textContent = "Downloading…";
     }
+  }
+
+  /**
+   * Restore the offer state after a failed download so the user can retry:
+   * clears the progress text and re-enables the install button. The banner
+   * stays visible (the update is still available).
+   */
+  resetAfterError(): void {
+    this._received = 0;
+    this._progress.textContent = "";
+    this._installBtn.disabled = false;
   }
 }

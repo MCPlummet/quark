@@ -48,6 +48,7 @@ setComponents(components);
 // ── Auto-update wiring ────────────────────────────────────────────────────────
 components.updateBanner.onInstall(() => {
   void updateInstall().catch((e) => {
+    components.updateBanner.resetAfterError();
     showError(`Update failed: ${e instanceof Error ? e.message : String(e)}`);
   });
 });
