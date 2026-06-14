@@ -120,9 +120,11 @@ commands following the existing `commands.rs → ipc/index.ts → ipc/mock.ts` c
   - `install(app)`: takes the stashed `Update`, runs `download_and_install` emitting
     `update://progress` Tauri events, then `app.restart()`.
   - Managed state `UpdaterState { pending: tokio::Mutex<Option<Update>> }`.
-- **`commands.rs`**: `update_check`, `update_install`, `update_get_prefs`,
-  `update_set_channel`, `update_set_auto_check`. Registered in `lib.rs`. Plugin init
-  `tauri_plugin_updater::Builder::new().build()`.
+- **`commands.rs`**: just **two** new commands — `update_check` (reads the channel from
+  managed `AppConfig`) and `update_install`. The channel + `auto_check` prefs ride the
+  **existing** `get_app_config`/`set_app_config` (same path every other setting uses), so no
+  dedicated prefs commands are needed. Registered in `lib.rs`; plugin init
+  `tauri_plugin_updater::Builder::new().build()` (desktop-gated).
 - **Config**: new `[updater]` section on `config::app_config::AppConfig`:
   - `channel: UpdateChannel` (default `stable`)
   - `auto_check: bool` (default `true`)
