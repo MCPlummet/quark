@@ -654,6 +654,13 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       return null;
     }
 
+    // ─── Updater ──────────────────────────────────────────────────────────
+    case "update_check":
+      // Mock dev mode is always "up to date".
+      return null;
+    case "update_install":
+      return undefined;
+
     default:
       console.warn(`[mock] unhandled command: ${cmd}`, args);
       return null;

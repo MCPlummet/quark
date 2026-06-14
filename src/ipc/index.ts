@@ -127,3 +127,7 @@ export { loadTheme, listCustomThemes, parseQuarkrc } from "./config.js";
 export type { CustomThemeEntry } from "./config.js";
 export { getAppConfig, setAppConfig, DEFAULT_APP_CONFIG } from "./app_config.js";
 export type { AppConfig, GeneralConfig, SyncConfig, MediaConfig, GifConfig, GifRating, EmojiConfig, CacheConfig } from "./app_config.js";
+
+// ─── Updates ──────────────────────────────────────────────────────────────────
+export { updateCheck, updateInstall } from "./updater.js";
+export type { UpdateChannel, UpdateInfo, UpdateProgress } from "./updater.js";
