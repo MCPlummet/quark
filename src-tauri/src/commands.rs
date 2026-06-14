@@ -1952,6 +1952,48 @@ pub async fn set_app_config(
     Ok(())
 }
 
+/// Check the user's configured channel for an available update. Returns
+/// metadata when one exists (the `Update` itself is stashed in `UpdaterState`
+/// for `update_install`), `None` when up to date. Desktop-only.
+#[tauri::command]
+pub async fn update_check(
+    app: AppHandle,
+    config_state: State<'_, Mutex<AppConfig>>,
+    updater_state: State<'_, crate::updater::UpdaterState>,
+) -> Result<Option<crate::updater::UpdateInfo>, String> {
+    let channel = {
+        let guard = config_state.lock().map_err(|_| "App config lock poisoned")?;
+        guard.updater.channel
+    };
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        crate::updater::check(&app, channel, &updater_state).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (&app, channel, &updater_state);
+        Err("auto-update is desktop-only".into())
+    }
+}
+
+/// Download + install the pending update (from the last `update_check`), then
+/// relaunch the app. Desktop-only.
+#[tauri::command]
+pub async fn update_install(
+    app: AppHandle,
+    updater_state: State<'_, crate::updater::UpdaterState>,
+) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        crate::updater::install(&app, &updater_state).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (&app, &updater_state);
+        Err("auto-update is desktop-only".into())
+    }
+}
+
 // ─── Config Commands ──────────────────────────────────────────────────────────
 
 /// Load a theme file and return it as a JSON value.

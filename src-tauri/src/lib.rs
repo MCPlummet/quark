@@ -100,6 +100,11 @@ pub fn run() {
     #[cfg(target_os = "android")]
     let builder = builder.plugin(mobile_sync::init());
 
+    // Desktop auto-updater (AppImage / macOS .app / Windows NSIS). Endpoints are
+    // set per-channel at runtime in updater.rs; the config endpoint is a fallback.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
     builder
         .manage(MatrixState(Mutex::new(None)))
         .manage(SyncState {
@@ -117,6 +122,7 @@ pub fn run() {
         .manage(matrix::rooms::RecencyState::default())
         .manage(matrix::rooms::LastEventCache::default())
         .manage(notify::NotificationRegistry::default())
+        .manage(updater::UpdaterState::default())
         .invoke_handler(tauri::generate_handler![
             // Auth
             commands::login,
@@ -224,6 +230,9 @@ pub fn run() {
             // App Config
             commands::get_app_config,
             commands::set_app_config,
+            // Updater
+            commands::update_check,
+            commands::update_install,
             // Config
             commands::load_theme,
             commands::list_custom_themes,
