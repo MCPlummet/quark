@@ -34,6 +34,7 @@ import {
   openDebugViewerForEvent,
 } from "./dialogs.js";
 import { startVerification, setupCrossSigning } from "./crypto.js";
+import { runUpdateCheck } from "../update_check.js";
 
 /**
  * Execute a parsed : command.
@@ -167,6 +168,12 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
 
     case "version": {
       showToast(`Quark v${packageJson.version}`, "info");
+      break;
+    }
+
+    case "update": {
+      showToast("Checking for updates…", "info");
+      await runUpdateCheck(getComponents(), true);
       break;
     }
 

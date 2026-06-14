@@ -38,6 +38,7 @@ const KNOWN_COMMANDS: string[] = [
   "spacesettings",
   "debug",
   "version",
+  "update",
 ];
 
 /**
