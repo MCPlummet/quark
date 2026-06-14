@@ -318,6 +318,28 @@ export class SettingsDialog extends DialogBase {
     section.appendChild(makeDispatchBtn("[verify a session]", "Verify one of your sessions", "verify-session"));
     section.appendChild(makeDispatchBtn("[set up cross-signing]", "Set up cross-signing", "setup-cross-signing"));
 
+    section.appendChild(this._makeSectionTitle("Updates"));
+
+    section.appendChild(this._makeSelectRow(
+      "Release channel",
+      draft.updater.channel,
+      [
+        ["stable", "Stable"],
+        ["beta", "Beta (early releases)"],
+      ],
+      (v) => {
+        if (v === "stable" || v === "beta") {
+          draft = { ...draft, updater: { ...draft.updater, channel: v } };
+        }
+      },
+    ));
+
+    section.appendChild(this._makeCheckbox(
+      "Check for updates automatically",
+      draft.updater.auto_check,
+      (v) => { draft = { ...draft, updater: { ...draft.updater, auto_check: v } }; },
+    ));
+
     const actions = document.createElement("div");
     actions.className = "settings-dialog__section settings-dialog__actions";
     actions.appendChild(this._makeSaveButton(async () => {
