@@ -135,6 +135,25 @@ pub struct CacheConfig {
     pub timeline_rooms: u32,
 }
 
+/// Desktop auto-update release channel. Serialized lowercase ("stable"/"beta")
+/// so it reads naturally in config.toml and matches the feed path segment.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    Stable,
+    Beta,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpdaterConfig {
+    /// Which release channel the in-app updater follows.
+    #[serde(default = "default_channel")]
+    pub channel: UpdateChannel,
+    /// Check for an update automatically a few seconds after sync starts.
+    #[serde(default = "bool_true")]
+    pub auto_check: bool,
+}
+
 // ─── Root config ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -153,6 +172,8 @@ pub struct AppConfig {
     pub home: HomeConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub updater: UpdaterConfig,
 }
 
 // ─── Default impls ────────────────────────────────────────────────────────────
@@ -171,6 +192,7 @@ fn default_autocomplete_min_chars() -> u32 { 2 }
 fn default_home_dm_limit() -> u32 { 12 }
 fn default_image_memory_mb() -> u64 { 150 }
 fn default_timeline_rooms() -> u32 { 30 }
+fn default_channel() -> UpdateChannel { UpdateChannel::Stable }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
@@ -221,6 +243,12 @@ impl Default for CacheConfig {
     }
 }
 
+impl Default for UpdaterConfig {
+    fn default() -> Self {
+        Self { channel: UpdateChannel::Stable, auto_check: true }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -231,6 +259,7 @@ impl Default for AppConfig {
             emoji: EmojiConfig::default(),
             home: HomeConfig::default(),
             cache: CacheConfig::default(),
+            updater: UpdaterConfig::default(),
         }
     }
 }
@@ -285,4 +314,39 @@ pub fn save_app_config_to(path: &std::path::Path, config: &AppConfig) -> Result<
         .map_err(|e| format!("Failed to write config.toml: {e}"))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod updater_config_tests {
+    use super::*;
+
+    #[test]
+    fn updater_defaults_are_stable_and_auto() {
+        let c = UpdaterConfig::default();
+        assert_eq!(c.channel, UpdateChannel::Stable);
+        assert!(c.auto_check);
+    }
+
+    #[test]
+    fn app_config_includes_updater_default() {
+        let c = AppConfig::default();
+        assert_eq!(c.updater.channel, UpdateChannel::Stable);
+        assert!(c.updater.auto_check);
+    }
+
+    #[test]
+    fn missing_updater_section_falls_back_to_default() {
+        let cfg: AppConfig = toml::from_str("[general]\ntheme = \"phosphor\"\n").unwrap();
+        assert_eq!(cfg.updater.channel, UpdateChannel::Stable);
+        assert!(cfg.updater.auto_check);
+    }
+
+    #[test]
+    fn channel_round_trips_lowercase() {
+        let c = UpdaterConfig { channel: UpdateChannel::Beta, auto_check: false };
+        let toml = toml::to_string(&c).unwrap();
+        assert!(toml.contains("channel = \"beta\""), "got: {toml}");
+        let back: UpdaterConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(back, c);
+    }
 }
