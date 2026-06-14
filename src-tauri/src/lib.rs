@@ -11,6 +11,7 @@ pub mod notifications;
 pub mod notify;
 pub mod search_index;
 pub mod secrets;
+pub mod updater;
 
 use matrix::client::{MatrixState, PaginationLock, SearchState, SyncState, TimelineTokens};
 use media_cache::MediaCache;

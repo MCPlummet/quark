@@ -64,6 +64,7 @@ rusqlite = { version = "0.32", features = ["bundled-sqlcipher"] }
 # Desktop-only — mobile has no equivalent and the save command stubs out there.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+tauri-plugin-updater = "2"
 
 # Windows: native-tls uses SChannel (no OpenSSL), but SQLCipher's libcrypto still
 # needs one. Vendor OpenSSL for the Windows target (build-time Perl + NASM on the
