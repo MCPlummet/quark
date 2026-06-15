@@ -542,6 +542,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         emoji: { shortcode_autocomplete: true, autocomplete_min_chars: 2 },
         home: { dm_limit: 12 },
         cache: { image_memory_mb: 150, timeline_rooms: 30 },
+        updater: { channel: "stable", auto_check: true },
       };
     case "get_event_cache_size":
       return 487654321;
