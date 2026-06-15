@@ -218,6 +218,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Minisign keys for updater-artifact signatures (.sig). Required now
+          # that bundle.createUpdaterArtifacts is true — a tag build FAILS here
+          # without them. macOS notarisation is a separate, optional concern.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           tagName: ${{ needs.create-release.outputs.tag }}
@@ -417,11 +422,94 @@ jobs:
           TAG: ${{ needs.create-release.outputs.tag }}
         run: gh release upload "$TAG" "quark-${TAG}-android.apk" --repo "$GITHUB_REPOSITORY" --clobber
 
+  # ─── Assemble + publish the per-channel update feed ─────────────────────────
+  # Reads the signed updater artifacts' .sig files from the (draft) release,
+  # builds latest.json per the Tauri static-manifest schema, and commits it to
+  # docs/updates/<channel>/ on main (served by Pages at quark.tel). A final tag
+  # (v1.2.3) updates BOTH stable and beta; a pre-release (v1.2.3-beta.N) updates
+  # beta only. Commit carries [skip ci] so it doesn't bounce ci.yml. Push-only
+  # gate (see the workflow_dispatch note at the top) so a manual Flatpak rerun
+  # doesn't try to republish the feed.
+  publish-update-feed:
+    name: Publish update feed
+    if: ${{ github.event_name == 'push' }}
+    needs: [create-release, build-tauri]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble per-channel latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          if [[ "$TAG" == *-beta.* ]]; then CHANNELS=(beta); else CHANNELS=(stable beta); fi
+
+          workdir="$(mktemp -d)"
+          # Pull only the small signature files from the draft release.
+          gh release download "$TAG" --repo "$REPO" --dir "$workdir" --pattern '*.sig'
+
+          assets="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name')"
+          pick() { printf '%s\n' "$assets" | grep -E "$1" | head -n1; }
+          APPIMAGE="$(pick '\.AppImage$')"
+          MACAPP="$(pick '\.app\.tar\.gz$')"
+          NSIS="$(pick '\-setup\.exe$')"
+
+          for f in "$APPIMAGE" "$MACAPP" "$NSIS"; do
+            if [[ -z "$f" || ! -f "$workdir/${f}.sig" ]]; then
+              echo "ERROR: missing artifact or signature for '$f' — is TAURI_SIGNING_PRIVATE_KEY set?" >&2
+              exit 1
+            fi
+          done
+
+          base="https://github.com/${REPO}/releases/download/${TAG}"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg lin_url "$base/$APPIMAGE"  --arg lin_sig "$(cat "$workdir/${APPIMAGE}.sig")" \
+            --arg mac_url "$base/$MACAPP"    --arg mac_sig "$(cat "$workdir/${MACAPP}.sig")" \
+            --arg win_url "$base/$NSIS"      --arg win_sig "$(cat "$workdir/${NSIS}.sig")" \
+            '{
+               version: $version,
+               pub_date: $date,
+               platforms: {
+                 "linux-x86_64":   { signature: $lin_sig, url: $lin_url },
+                 "darwin-aarch64": { signature: $mac_sig, url: $mac_url },
+                 "windows-x86_64": { signature: $win_sig, url: $win_url }
+               }
+             }' > /tmp/latest.json
+
+          for ch in "${CHANNELS[@]}"; do
+            mkdir -p "docs/updates/$ch"
+            cp /tmp/latest.json "docs/updates/$ch/latest.json"
+          done
+
+      - name: Commit feed to main
+        env:
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/updates
+          if git diff --cached --quiet; then
+            echo "no feed changes to commit"
+            exit 0
+          fi
+          git commit -m "chore(updates): publish ${TAG} update feed [skip ci]"
+          git push origin main
+
   # ─── publish the release (flip draft → published) ──────────────────────────
   publish-release:
     name: Publish release
     if: ${{ github.event_name == 'push' }}
-    needs: [create-release, build-tauri, build-flatpak, build-android]
+    needs: [create-release, build-tauri, build-flatpak, build-android, publish-update-feed]
     runs-on: ubuntu-22.04
     steps:
       - name: Mark release as published
