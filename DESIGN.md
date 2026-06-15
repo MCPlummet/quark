@@ -489,9 +489,47 @@ dm_limit = 12                 # chats shown on the Home canvas
 image_memory_mb = 150         # in-memory cap for decoded message images
 timeline_rooms = 30           # rooms kept in memory for instant re-open
 
+[updater]
+channel = "stable"            # stable | beta — which release channel to follow
+auto_check = true             # check for an update shortly after sync starts
+
 # Keybindings are configured in ~/.config/quark/quarkrc (see Keybinding Configuration)
 # NOT in this file — quarkrc uses vimrc-style syntax for full flexibility
 ```
+
+---
+
+## Auto-update
+
+Desktop builds update themselves in-app over two release channels:
+
+- **stable** — final tags only (`vX.Y.Z`).
+- **beta** — early releases (`vX.Y.Z-beta.N`) *and* every stable release.
+
+A release feeds the channels by tag shape: a final tag (`v1.2.3`) publishes to **both** stable and beta; a pre-release (`v1.2.3-beta.4`) publishes to **beta only**. Each channel is a static manifest served from the project site:
+
+```
+https://quark.tel/updates/stable/latest.json
+https://quark.tel/updates/beta/latest.json
+```
+
+The manifest follows Tauri's static-update schema (`version`, `pub_date`, and a `platforms` map of `{ signature, url }` keyed by target triple). Update payloads are signed with a minisign key; the public key is embedded in the app, so a tampered or unsigned bundle is rejected.
+
+### UX — notify and confirm
+
+Quark never installs silently. When `auto_check` is on, it checks the configured channel a few seconds after sync starts; `:update` runs the same check on demand. If an update is available, a non-modal banner offers **Install & restart** (downloads, installs, and relaunches) or **Later** (dismisses — the same version won't re-nag until you run `:update` again). A failed download leaves the offer in place so it can be retried.
+
+### Configuration
+
+The `[updater]` section (above) holds the prefs; both are also editable live:
+
+- `:set update_channel=stable|beta`
+- `:set auto_update=true|false`
+- Settings → General → **Updates** (channel dropdown + auto-check toggle).
+
+### Platform scope
+
+In-app update covers the **AppImage** (Linux x86_64), the **`.app`** (macOS Apple-Silicon / `aarch64` only), and the **NSIS `-setup.exe`** (Windows x86_64). `.deb`/`.rpm`/Flatpak/Android builds update through their own package channels, not this updater. macOS auto-update is best-effort until Apple notarization is configured (Gatekeeper may still warn on a freshly downloaded build).
 
 ---
 
