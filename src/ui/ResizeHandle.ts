@@ -53,9 +53,13 @@ export function attachResizeHandle(
     e.preventDefault();
     dragging = true;
     startX = e.clientX;
-    // Read current value from the CSS variable
-    const current = getComputedStyle(document.documentElement).getPropertyValue(cssVar).trim();
-    startWidth = parseInt(current, 10) || panel.offsetWidth;
+    // Use the panel's actual rendered width as the drag-start baseline. The panel
+    // stretches to fill the grid track sized by `cssVar`, so its offsetWidth equals
+    // the variable's value. Reading the variable back via getComputedStyle is
+    // fragile (it can resolve to an empty/unparseable string — notably under
+    // WebKitGTK — yielding a wrong baseline that snaps the panel to its min width
+    // on the first drag).
+    startWidth = panel.offsetWidth;
     handle.classList.add("resize-handle--dragging");
     document.body.style.cursor = "ew-resize";
     document.body.style.userSelect = "none";
