@@ -17,6 +17,7 @@
 import { AppState } from "../state.js";
 import { registerAnimatedUrl } from "../animated_urls.js";
 import { markdownToHtml } from "../markdown.js";
+import { BUILTIN_EMOJI } from "../../data/unicode-emoji.js";
 
 import {
   getThumbnail,
@@ -432,6 +433,46 @@ export function roomMemberToEntry(m: RoomMember): MemberEntry {
  */
 export function _buildFormattedBodyWithEmoji(body: string): string | undefined {
   return markdownToHtml(body, { resolveEmoji: (shortcode) => _shortcodeToMxc.get(shortcode) });
+}
+
+/** Lazily-built map of built-in Unicode emoji shortcode (and aliases) → glyph. */
+let _shortcodeToGlyph: Map<string, string> | null = null;
+function shortcodeToGlyph(): Map<string, string> {
+  if (!_shortcodeToGlyph) {
+    _shortcodeToGlyph = new Map();
+    // BUILTIN_EMOJI carries the Unicode glyph in `key`; custom emoji never appear
+    // in it. The primary shortcode is listed before its aliases, so a plain set
+    // (first-wins not required — all entries for a shortcode map to one glyph).
+    for (const e of BUILTIN_EMOJI) _shortcodeToGlyph.set(e.shortcode, e.key);
+  }
+  return _shortcodeToGlyph;
+}
+
+const SHORTCODE_RE = /:([a-zA-Z0-9_+-]+):/g;
+
+/**
+ * Replace built-in Unicode emoji shortcodes (e.g. `:smile:`) with their glyph.
+ * Unknown shortcodes are left untouched. Custom (MSC2545) shortcodes take
+ * precedence over a colliding built-in name — they're left in place here and
+ * resolved separately into `<img data-mx-emoticon>` in the formatted body, so a
+ * room's custom `:party:` wins over the Unicode 🎉.
+ */
+export function replaceUnicodeEmojiShortcodes(text: string): string {
+  return text.replace(SHORTCODE_RE, (full, shortcode: string) => {
+    if (_shortcodeToMxc.has(shortcode)) return full; // custom emoji wins
+    return shortcodeToGlyph().get(shortcode) ?? full;
+  });
+}
+
+/**
+ * Prepare a compose-box string for sending: Unicode emoji shortcodes become
+ * glyphs in the plain body, and the formatted body resolves custom-emoji
+ * shortcodes to `<img data-mx-emoticon>` (plus inline markdown). `formattedBody`
+ * is `undefined` when the result has no formatting and no custom emoji.
+ */
+export function prepareOutgoingBody(raw: string): { body: string; formattedBody: string | undefined } {
+  const body = replaceUnicodeEmojiShortcodes(raw);
+  return { body, formattedBody: _buildFormattedBodyWithEmoji(body) };
 }
 
 /**

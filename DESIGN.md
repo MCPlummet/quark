@@ -460,6 +460,13 @@ Themes reload on file save (watched via `notify` crate / filesystem events passe
 theme = "phosphor"
 notifications = true
 confirm_redact = true
+send_key_behavior = "auto"    # auto | enter | newline — what the Enter key does
+                              #   auto:    send on desktop, newline on mobile
+                              #   enter:   always send (Shift+Enter inserts a newline)
+                              #   newline: always newline (send via button / Ctrl·Cmd+Enter)
+                              # A dedicated send button appears on mobile, or whenever
+                              # Enter won't send. Also: `:set send_key_behavior=…` and
+                              # Settings → General → Input.
 
 [sync]
 sliding_sync = true           # use Sliding Sync (MSC4186)

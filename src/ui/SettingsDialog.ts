@@ -218,6 +218,21 @@ export class SettingsDialog extends DialogBase {
       (v) => { draft = { ...draft, general: { ...draft.general, vim_mode: v } }; },
     ));
 
+    section.appendChild(this._makeSelectRow(
+      "Enter key",
+      draft.general.send_key_behavior,
+      [
+        ["auto", "Automatic (sends on desktop, newline on mobile)"],
+        ["enter", "Sends the message (Shift+Enter for a newline)"],
+        ["newline", "Inserts a newline (send button / Ctrl+Enter)"],
+      ],
+      (v) => {
+        if (v === "auto" || v === "enter" || v === "newline") {
+          draft = { ...draft, general: { ...draft.general, send_key_behavior: v } };
+        }
+      },
+    ));
+
     section.appendChild(this._makeSectionTitle("Appearance"));
 
     section.appendChild(this._makeSelectRow(
@@ -347,6 +362,7 @@ export class SettingsDialog extends DialogBase {
       // Apply runtime-visible changes immediately (the vim-mode state listener
       // drives editor behaviour; read-receipt visibility re-seeds/clears here).
       AppState.set("vimMode", draft.general.vim_mode);
+      AppState.set("sendKeyBehavior", draft.general.send_key_behavior);
       const receiptsChanged = draft.general.show_read_receipts !== cfg.general.show_read_receipts;
       AppState.set("showReadReceipts", draft.general.show_read_receipts);
       if (receiptsChanged) void applyReadReceiptVisibility();

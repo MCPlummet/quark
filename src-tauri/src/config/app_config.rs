@@ -7,6 +7,21 @@ use serde::{Deserialize, Serialize};
 
 // ─── Section structs ─────────────────────────────────────────────────────────
 
+/// What the Enter key does in the compose box. Serialized lowercase so it reads
+/// naturally in config.toml.
+///   - `auto`    — platform default: Enter sends on desktop, inserts a newline on
+///                 mobile (where a dedicated send button is shown instead).
+///   - `enter`   — Enter always sends (Shift+Enter inserts a newline).
+///   - `newline` — Enter always inserts a newline; send via the button or
+///                 Ctrl/Cmd+Enter.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SendKeyBehavior {
+    Auto,
+    Enter,
+    Newline,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GeneralConfig {
     /// Name of the active theme (built-in slug or path).
@@ -37,6 +52,9 @@ pub struct GeneralConfig {
     /// or the user opts out ("Never ask").
     #[serde(default = "bool_true")]
     pub prompt_session_verification: bool,
+    /// What the Enter key does in the compose box (see [`SendKeyBehavior`]).
+    #[serde(default = "default_send_key_behavior")]
+    pub send_key_behavior: SendKeyBehavior,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -181,6 +199,7 @@ pub struct AppConfig {
 fn default_theme_name() -> String { "phosphor".to_string() }
 fn default_icon_radius() -> String { "50%".to_string() }
 fn bool_true() -> bool { true }
+fn default_send_key_behavior() -> SendKeyBehavior { SendKeyBehavior::Auto }
 fn default_timeline_limit() -> u32 { 50 }
 fn default_max_image_width() -> u32 { 600 }
 fn default_max_image_height() -> u32 { 400 }
@@ -196,7 +215,7 @@ fn default_channel() -> UpdateChannel { UpdateChannel::Stable }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
-        Self { theme: default_theme_name(), notifications: true, confirm_redact: true, icon_radius: default_icon_radius(), vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true }
+        Self { theme: default_theme_name(), notifications: true, confirm_redact: true, icon_radius: default_icon_radius(), vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true, send_key_behavior: SendKeyBehavior::Auto }
     }
 }
 
@@ -348,5 +367,30 @@ mod updater_config_tests {
         assert!(toml.contains("channel = \"beta\""), "got: {toml}");
         let back: UpdaterConfig = toml::from_str(&toml).unwrap();
         assert_eq!(back, c);
+    }
+}
+
+#[cfg(test)]
+mod send_key_behavior_tests {
+    use super::*;
+
+    #[test]
+    fn general_default_send_key_behavior_is_auto() {
+        assert_eq!(GeneralConfig::default().send_key_behavior, SendKeyBehavior::Auto);
+    }
+
+    #[test]
+    fn missing_field_falls_back_to_auto() {
+        // A config written before this field existed must still load.
+        let cfg: AppConfig = toml::from_str("[general]\ntheme = \"phosphor\"\n").unwrap();
+        assert_eq!(cfg.general.send_key_behavior, SendKeyBehavior::Auto);
+    }
+
+    #[test]
+    fn round_trips_lowercase() {
+        let toml = toml::Value::try_from(SendKeyBehavior::Newline).unwrap();
+        assert_eq!(toml.as_str(), Some("newline"));
+        let back: SendKeyBehavior = toml.try_into().unwrap();
+        assert_eq!(back, SendKeyBehavior::Newline);
     }
 }

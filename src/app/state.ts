@@ -2,6 +2,7 @@
 
 import type { RoomInfo, TimelineEvent } from "../ipc/types.js";
 import type { UpdateInfo } from "../ipc/index.js";
+import type { SendKeyBehavior } from "../ipc/app_config.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,8 @@ export interface AppStateSnapshot {
   homeViewActive: boolean;
   /** When false, vim modal editing is disabled — the app stays in Insert mode. */
   vimMode: boolean;
+  /** What the Enter key does in the compose box (mirrors general.send_key_behavior). */
+  sendKeyBehavior: SendKeyBehavior;
   /** When false, other users' read-receipt avatars are not rendered in the timeline. */
   showReadReceipts: boolean;
   /** Active text-selection target, or null if not in text-select mode. */
@@ -93,6 +96,7 @@ class AppStateManager {
     memberListVisible: false,
     homeViewActive: false,
     vimMode: true,
+    sendKeyBehavior: "auto",
     showReadReceipts: true,
     textSelectMode: null,
     updateAvailable: null,

@@ -64,6 +64,9 @@ import type { ParsedRc } from "../ipc/types.js";
 import { getAppConfig, setAppConfig } from "../ipc/app_config.js";
 import type { KeyContext } from "../vim/keybindings.js";
 import { BUILTIN_EMOJI } from "../data/unicode-emoji.js";
+import { _shortcodeToMxc } from "./actions/context.js";
+import { onMobileChange } from "./mobile.js";
+import { effectiveSendOnEnter, shouldShowSendButton } from "./send_behavior.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { filterShortcodes, type ShortcodeEntry } from "../ui/ShortcodePreview.js";
 import { filterMembers, type MentionEntry } from "../ui/MentionPreview.js";
@@ -361,6 +364,12 @@ async function refreshCustomEmoji(): Promise<void> {
         };
         _customEmoji.push(customEntry);
         if (entry.url.startsWith("mxc://")) {
+          // Record the shortcode → mxc mapping so sendMessage() can resolve custom
+          // emoji into <img data-mx-emoticon> even when the emoji picker was never
+          // opened for this room (previously the map was only populated lazily on
+          // picker/reaction-picker open, so a plain `:shortcode:` send was sent
+          // raw). This runs on every room change.
+          _shortcodeToMxc.set(entry.shortcode, entry.url);
           // Capture by object reference to avoid stale-index bugs if the room
           // switches (and _customEmoji is rebuilt) before the download finishes.
           const captured = customEntry;
@@ -629,6 +638,26 @@ function handleTextSelectKeydown(e: KeyboardEvent, components: AppComponents): b
 
 // ── Insert mode keyboard handlers ─────────────────────────────────────────────
 
+/**
+ * Submit the compose box: commit an in-progress edit, or send a new message.
+ * Shared by the Enter key and the dedicated send button (#4).
+ */
+function submitComposeBox(components: AppComponents): void {
+  const { input, shortcodePreview } = components;
+  shortcodePreview.hide();
+  const body = input.getValue().trim();
+  if (!body) return;
+  const editingId = AppState.get("editingEventId");
+  if (editingId) {
+    AppState.set("editingEventId", null);
+    components.replyPreview.hide();
+    input.setValue("");
+    void editMessage(editingId, body);
+  } else {
+    void sendMessage(body);
+  }
+}
+
 function handleInsertKeydown(e: KeyboardEvent, components: AppComponents): void {
   const { input, shortcodePreview, mentionPreview } = components;
 
@@ -676,21 +705,19 @@ function handleInsertKeydown(e: KeyboardEvent, components: AppComponents): void 
     }
   }
 
-  // Enter → send message, reply, or commit an inline edit
-  if (e.key === "Enter" && !e.shiftKey) {
+  // Enter → send message, reply, or commit an inline edit. Ctrl/Cmd+Enter always
+  // sends (a send affordance when Enter inserts a newline). A bare Enter sends
+  // only when the send-key behavior says so (see app/send_behavior.ts); otherwise
+  // it falls through so the textarea inserts a newline.
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
-    shortcodePreview.hide();
-    const body = input.getValue().trim();
-    if (body) {
-      const editingId = AppState.get("editingEventId");
-      if (editingId) {
-        AppState.set("editingEventId", null);
-        components.replyPreview.hide();
-        input.setValue("");
-        void editMessage(editingId, body);
-      } else {
-        void sendMessage(body);
-      }
+    submitComposeBox(components);
+    return;
+  }
+  if (e.key === "Enter" && !e.shiftKey) {
+    if (effectiveSendOnEnter()) {
+      e.preventDefault();
+      submitComposeBox(components);
     }
     return;
   }
@@ -777,7 +804,7 @@ export function setupKeyboard(components: AppComponents): void {
 
   registerDefaultBindings();
 
-  // Load vim mode preference from persisted config
+  // Load vim mode + send-key preferences from persisted config
   void getAppConfig().then((cfg) => {
     AppState.set("vimMode", cfg.general.vim_mode);
     // Apply immediately — the state listener won't fire if the value matches the default
@@ -786,7 +813,9 @@ export function setupKeyboard(components: AppComponents): void {
       modeManager.transition(Mode.Insert);
       input.focus();
     }
-  }).catch(() => { /* use default (true) */ });
+    AppState.set("sendKeyBehavior", cfg.general.send_key_behavior);
+    input.setSendButtonVisible(shouldShowSendButton());
+  }).catch(() => { /* use defaults */ });
 
   // React to vim mode toggling at runtime (e.g. from Settings)
   AppState.on("vimMode", (_key, enabled) => {
@@ -799,6 +828,12 @@ export function setupKeyboard(components: AppComponents): void {
     }
     input.setVimMode(enabled);
   });
+
+  // The dedicated send button submits the compose box (#4); its visibility tracks
+  // the send-key behavior and the platform (mobile vs desktop).
+  input.onSendClick(() => submitComposeBox(components));
+  AppState.on("sendKeyBehavior", () => input.setSendButtonVisible(shouldShowSendButton()));
+  onMobileChange(() => input.setSendButtonVisible(shouldShowSendButton()));
 
   // Member count in the header toggles the member list sidebar
   roomHeader.setMemberCountClickHandler(() => toggleMemberList());

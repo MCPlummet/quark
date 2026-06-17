@@ -30,6 +30,8 @@ export class Input {
   private _onEmojiClick: (() => void) | null = null;
   private _onGifClick: (() => void) | null = null;
   private _onAttachClick: (() => void) | null = null;
+  private _onSendClick: (() => void) | null = null;
+  private _sendBtnEl: HTMLButtonElement;
   private _onImagePaste: ((blob: Blob) => void) | null = null;
   private _onFilePick: ((file: File) => void) | null = null;
   private _onFocusEnterInsert: (() => void) | null = null;
@@ -213,6 +215,23 @@ export class Input {
     attachBtn.addEventListener("click", () => this._onAttachClick?.());
     actionsEl.appendChild(attachBtn);
 
+    // Dedicated send button (#4). Hidden by default; shown on mobile or when the
+    // send-key behavior means Enter won't send (see app/send_behavior.ts).
+    const sendBtn2 = document.createElement("button");
+    sendBtn2.type = "button";
+    sendBtn2.className = "input-bar__action-btn input-bar__send-btn";
+    sendBtn2.setAttribute("title", "Send message");
+    sendBtn2.setAttribute("aria-label", "Send message");
+    sendBtn2.setAttribute("tabindex", "-1");
+    sendBtn2.textContent = "➤";
+    sendBtn2.style.display = "none";
+    // Don't steal focus from the field on press — keeps the soft keyboard open on
+    // mobile and the caret in place after sending.
+    sendBtn2.addEventListener("mousedown", (e) => e.preventDefault());
+    sendBtn2.addEventListener("click", () => this._onSendClick?.());
+    actionsEl.appendChild(sendBtn2);
+    this._sendBtnEl = sendBtn2;
+
     this._composeBoxEl.appendChild(actionsEl);
 
     inputBar.appendChild(this._composeBoxEl);
@@ -271,6 +290,16 @@ export class Input {
   /** Register a callback for the attach file button. */
   onAttachClick(handler: () => void): void {
     this._onAttachClick = handler;
+  }
+
+  /** Register a callback for the dedicated send button (#4). */
+  onSendClick(handler: () => void): void {
+    this._onSendClick = handler;
+  }
+
+  /** Show or hide the dedicated send button. */
+  setSendButtonVisible(visible: boolean): void {
+    this._sendBtnEl.style.display = visible ? "" : "none";
   }
 
   /** Register a callback invoked when the user picks a file via the attach button. */

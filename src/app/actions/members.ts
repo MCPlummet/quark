@@ -6,21 +6,29 @@ import { isMobile, closeDrawer } from "../mobile.js";
 import { getComponents } from "./context.js";
 
 /**
- * Toggle the member list sidebar visibility.
+ * Set the member list sidebar visibility explicitly. Drives the layout class and
+ * the AppState flag; used by the @-toggle, the top-bar button, and the mobile
+ * swipe gesture (#8), so they all share one source of truth.
  */
-export function toggleMemberList(): void {
+export function setMemberListVisible(visible: boolean): void {
   const { mainLayout } = getComponents();
-  const current = AppState.get("memberListVisible");
-  const next = !current;
-  AppState.set("memberListVisible", next);
+  if (AppState.get("memberListVisible") === visible) return;
+  AppState.set("memberListVisible", visible);
 
-  if (!next && AppState.get("activePanel") === "members") {
+  if (!visible && AppState.get("activePanel") === "members") {
     AppState.set("activePanel", "timeline");
   }
 
-  mainLayout.classList.toggle("quark-layout--member-list-open", next);
+  mainLayout.classList.toggle("quark-layout--member-list-open", visible);
 
   // Mobile is one-overlay-at-a-time: opening the member-list pulls focus
   // away from the drawer.
-  if (next && isMobile()) closeDrawer();
+  if (visible && isMobile()) closeDrawer();
+}
+
+/**
+ * Toggle the member list sidebar visibility.
+ */
+export function toggleMemberList(): void {
+  setMemberListVisible(!AppState.get("memberListVisible"));
 }

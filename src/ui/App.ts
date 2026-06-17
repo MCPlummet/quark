@@ -38,9 +38,10 @@ import { ContextMenu } from "./ContextMenu.js";
 import { MobileTopBar } from "./MobileTopBar.js";
 import { UpdateBanner } from "./UpdateBanner.js";
 import { initMobile, isMobile, openDrawer, closeDrawer, toggleDrawer, onMobileChange, onDrawerChange } from "../app/mobile.js";
+import { shouldShowSendButton } from "../app/send_behavior.js";
 import { setupTouchGestures } from "../app/touch.js";
 import { AppState } from "../app/state.js";
-import { toggleMemberList, closeThread } from "../app/actions.js";
+import { toggleMemberList, closeThread, openProfileForUser } from "../app/actions.js";
 
 // ── AppComponents ─────────────────────────────────────────────────────────────
 
@@ -222,6 +223,9 @@ export function mountApp(container: HTMLElement): AppComponents {
   // Now that mobile state is known, re-apply the compose field's soft-keyboard
   // assist attributes (constructor ran before initMobile with the desktop default).
   input.applyTextAssist();
+  // Set the dedicated send button's initial visibility from the platform + default
+  // send-key behavior; setupKeyboard refines it once persisted config loads (#4).
+  input.setSendButtonVisible(shouldShowSendButton());
   setupTouchGestures(mainLayout, {
     scrollEl: roomList.getScrollElement(),
     // The quick-nav palette (Ctrl+K on desktop) is unreachable by touch. Pulling
@@ -248,6 +252,9 @@ export function mountApp(container: HTMLElement): AppComponents {
   memberList.getHeaderElement().addEventListener("click", () => {
     if (isMobile() && AppState.get("memberListVisible")) toggleMemberList();
   });
+  // Clicking/tapping a member opens their profile dialog — the same entry point
+  // used by clicking a sender in the timeline.
+  memberList.onSelect((member) => void openProfileForUser(member.userId));
   // mobileTopBar.onMembersClick is wired from main.ts (needs the action layer).
   // Close the drawer automatically after a room is selected (tap-and-go flow).
   // Subscribe to currentRoomId rather than RoomList.onSelect — main.ts already

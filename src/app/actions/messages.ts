@@ -18,7 +18,8 @@ import {
   _ownSentEventIds,
   _memberAvatarMxc,
   _avatarDataUrl,
-  _buildFormattedBodyWithEmoji,
+  replaceUnicodeEmojiShortcodes,
+  prepareOutgoingBody,
   _downloadInlineEmoji,
 } from "./context.js";
 import { sendThreadReply } from "./threads.js";
@@ -36,6 +37,12 @@ export async function sendMessage(body: string): Promise<void> {
     await sendThreadReply(body, threadRootId, roomId);
     return;
   }
+
+  // Resolve emoji up front: Unicode shortcodes (:smile: → 😄) in the plain body,
+  // custom (MSC2545) shortcodes into <img> in the formatted body. Doing it here
+  // means the optimistic bubble and the fly-in clones already show the glyph.
+  const prepared = prepareOutgoingBody(body);
+  body = prepared.body;
 
   const { timeline, input, replyPreview } = getComponents();
   const replyToEventId = AppState.get("replyToEventId");
@@ -59,10 +66,9 @@ export async function sendMessage(body: string): Promise<void> {
   const ownAvatarMxc = ownUserId ? _memberAvatarMxc.get(ownUserId) : undefined;
   const ownAvatarUrl = (ownAvatarMxc && _avatarDataUrl.get(ownAvatarMxc)) ?? undefined;
 
-  // Build the formatted body before constructing the optimistic message so the
-  // inline custom emoji (<img data-mx-emoticon>) are rendered immediately in the
-  // timeline rather than appearing as plain `:shortcode:` text until the sync echo.
-  const formattedBody = _buildFormattedBodyWithEmoji(body);
+  // Formatted body (custom-emoji <img> + inline markdown) built above, rendered
+  // immediately in the optimistic message rather than waiting for the sync echo.
+  const formattedBody = prepared.formattedBody;
 
   const optimisticMsg: MessageData = {
     id: `optimistic-${Date.now()}`,
@@ -343,13 +349,19 @@ export async function editMessage(eventId: string, newBody: string): Promise<voi
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
+  // Convert Unicode emoji shortcodes (:smile: → 😄) in the edited text. Custom
+  // (MSC2545) emoji are left as :shortcodes: here: the optimistic update writes
+  // the body as plain text and the sync echo is suppressed, so a custom-emoji
+  // <img> would have no chance to resolve and would render broken.
+  const body = replaceUnicodeEmojiShortcodes(newBody);
+
   try {
-    const editEventId = await ipcEditMessage(roomId, eventId, newBody);
+    const editEventId = await ipcEditMessage(roomId, eventId, body);
     // Suppress the sync echo so it doesn't double-apply the update.
     _ownSentEventIds.add(editEventId);
     // Optimistically update the DOM immediately without waiting for sync.
     const { timeline } = getComponents();
-    timeline.updateMessageBody(eventId, newBody);
+    timeline.updateMessageBody(eventId, body);
     showSuccess("Message edited");
   } catch (err) {
     showError(`Failed to edit: ${err instanceof Error ? err.message : String(err)}`);

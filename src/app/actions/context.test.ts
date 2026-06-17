@@ -6,6 +6,8 @@ import {
   _resolveReactionImage,
   roomInfoToEntry,
   _buildFormattedBodyWithEmoji,
+  replaceUnicodeEmojiShortcodes,
+  prepareOutgoingBody,
   consumeOwnSentEvent,
   resolveDisplayName,
   timelineEventToMessage,
@@ -202,6 +204,61 @@ describe("_buildFormattedBodyWithEmoji", () => {
     const html = _buildFormattedBodyWithEmoji(":unknown: :known:");
     expect(html).toContain(":unknown:");
     expect(html).toContain("data-mx-emoticon");
+  });
+});
+
+describe("replaceUnicodeEmojiShortcodes", () => {
+  it("replaces a built-in Unicode shortcode with its glyph", () => {
+    expect(replaceUnicodeEmojiShortcodes("hi :grinning:!")).toBe("hi 😀!");
+  });
+
+  it("replaces multiple shortcodes in one string", () => {
+    expect(replaceUnicodeEmojiShortcodes(":grinning: :grinning:")).toBe("😀 😀");
+  });
+
+  it("leaves unknown shortcodes untouched", () => {
+    expect(replaceUnicodeEmojiShortcodes("nope :definitely_not_real_xyz:")).toBe(
+      "nope :definitely_not_real_xyz:",
+    );
+  });
+
+  it("leaves custom-emoji shortcodes untouched (resolved separately as images)", () => {
+    // A custom shortcode is, by construction, not in the built-in Unicode table.
+    _shortcodeToMxc.set("mycustompog", "mxc://emoji/pog");
+    expect(replaceUnicodeEmojiShortcodes("gg :mycustompog:")).toBe("gg :mycustompog:");
+  });
+});
+
+describe("prepareOutgoingBody", () => {
+  it("converts a Unicode shortcode to a glyph in the plain body, no formatted body", () => {
+    expect(prepareOutgoingBody("hi :grinning:")).toEqual({
+      body: "hi 😀",
+      formattedBody: undefined,
+    });
+  });
+
+  it("keeps a custom shortcode in the plain body and resolves it to an image in the formatted body", () => {
+    _shortcodeToMxc.set("party", "mxc://emoji/party");
+    const { body, formattedBody } = prepareOutgoingBody("yay :party:");
+    expect(body).toBe("yay :party:");
+    expect(formattedBody).toBe(
+      'yay <img data-mx-emoticon src="mxc://emoji/party" alt=":party:" title=":party:">',
+    );
+  });
+
+  it("handles Unicode and custom emoji together", () => {
+    _shortcodeToMxc.set("party", "mxc://emoji/party");
+    const { body, formattedBody } = prepareOutgoingBody(":grinning: :party:");
+    expect(body).toBe("😀 :party:");
+    expect(formattedBody).toBe(
+      '😀 <img data-mx-emoticon src="mxc://emoji/party" alt=":party:" title=":party:">',
+    );
+  });
+
+  it("preserves inline markdown alongside a Unicode glyph", () => {
+    const { body, formattedBody } = prepareOutgoingBody("**bold** :grinning:");
+    expect(body).toBe("**bold** 😀");
+    expect(formattedBody).toBe("<strong>bold</strong> 😀");
   });
 });
 
