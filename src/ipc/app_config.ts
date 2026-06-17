@@ -18,7 +18,14 @@ export interface GeneralConfig {
   /** Prompt to verify a new/unverified session on startup (until verified or the
    *  user picks "Never ask"). */
   prompt_session_verification: boolean;
+  /** What the Enter key does in the compose box:
+   *  - "auto":    Enter sends on desktop; inserts a newline on mobile (send button).
+   *  - "enter":   Enter always sends (Shift+Enter for a newline).
+   *  - "newline": Enter always inserts a newline; send via the button / Ctrl·Cmd+Enter. */
+  send_key_behavior: SendKeyBehavior;
 }
+
+export type SendKeyBehavior = "auto" | "enter" | "newline";
 
 export interface SyncConfig {
   sliding_sync: boolean;
@@ -82,7 +89,7 @@ export interface AppConfig {
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
-  general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true },
+  general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true, send_key_behavior: "auto" },
   sync: { sliding_sync: true, timeline_limit: 50 },
   media: { auto_load_images: true, inline_video: true, max_image_width: 600, max_image_height: 400, sticker_max_size: 256, cache_size_mb: 500 },
   gif: { provider: "tenor", api_key: "", rating: "pg", cache_results: true },

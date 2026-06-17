@@ -2840,6 +2840,22 @@ span.reaction__emoji {
   border-color: var(--accent-secondary);
 }
 
+/* Dedicated send button (#4) — a primary action, so it stays fully opaque and
+   takes the accent colour rather than the dimmed icon treatment. Shown on mobile
+   or when the send-key behavior means Enter won't send (see app/send_behavior.ts). */
+.input-bar__send-btn {
+  opacity: 1;
+  color: var(--accent-primary);
+  border-color: var(--border-color);
+  font-size: 15px;
+}
+
+.input-bar__send-btn:hover {
+  color: var(--bg);
+  background-color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
 /* ── Send animations ─────────────────────────────────────────────────────── */
 
 /* Compose box border fades out when text flies into an existing bubble */

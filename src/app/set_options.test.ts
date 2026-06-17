@@ -43,6 +43,15 @@ describe("applySetOptions", () => {
     expect(out.home.dm_limit).toBe(7);
   });
 
+  it("applies send_key_behavior only for valid enum values", () => {
+    const out = applySetOptions(baseConfig(), [{ name: "send_key_behavior", value: "newline" }]);
+    expect(out.general.send_key_behavior).toBe("newline");
+
+    const cfg = baseConfig();
+    const unchanged = applySetOptions(cfg, [{ name: "send_key_behavior", value: "bogus" }]);
+    expect(unchanged.general.send_key_behavior).toBe(cfg.general.send_key_behavior);
+  });
+
   it("ignores a value of the wrong type (leaves the field untouched)", () => {
     const cfg = baseConfig();
     const out = applySetOptions(cfg, [
