@@ -14,7 +14,7 @@ import {
   getComponents,
   _ownSentEventIds,
   resolveDisplayName,
-  _buildFormattedBodyWithEmoji,
+  prepareOutgoingBody,
   _downloadMessageImages,
 } from "./context.js";
 
@@ -88,6 +88,12 @@ export async function sendThreadReply(body: string, threadRootId: string, roomId
   const ownUserId = AppState.get("ownUserId");
   const ownName = AppState.get("ownDisplayName") ?? ownUserId ?? "me";
 
+  // Resolve emoji before composing the optimistic reply (see sendMessage): Unicode
+  // shortcodes become glyphs in the plain body, custom emoji become inline images
+  // in the formatted body.
+  const prepared = prepareOutgoingBody(body);
+  body = prepared.body;
+
   const optimisticId = `local-thread-${Date.now()}`;
   const optimisticMsg = {
     id: optimisticId,
@@ -153,7 +159,7 @@ export async function sendThreadReply(body: string, threadRootId: string, roomId
 
   input.animateSent();
 
-  const threadFormattedBody = _buildFormattedBodyWithEmoji(body);
+  const threadFormattedBody = prepared.formattedBody;
 
   try {
     const eventId = await sendThreadReplyIpc(roomId, threadRootId, body, threadFormattedBody);

@@ -64,6 +64,7 @@ import type { ParsedRc } from "../ipc/types.js";
 import { getAppConfig, setAppConfig } from "../ipc/app_config.js";
 import type { KeyContext } from "../vim/keybindings.js";
 import { BUILTIN_EMOJI } from "../data/unicode-emoji.js";
+import { _shortcodeToMxc } from "./actions/context.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { filterShortcodes, type ShortcodeEntry } from "../ui/ShortcodePreview.js";
 import { filterMembers, type MentionEntry } from "../ui/MentionPreview.js";
@@ -361,6 +362,12 @@ async function refreshCustomEmoji(): Promise<void> {
         };
         _customEmoji.push(customEntry);
         if (entry.url.startsWith("mxc://")) {
+          // Record the shortcode → mxc mapping so sendMessage() can resolve custom
+          // emoji into <img data-mx-emoticon> even when the emoji picker was never
+          // opened for this room (previously the map was only populated lazily on
+          // picker/reaction-picker open, so a plain `:shortcode:` send was sent
+          // raw). This runs on every room change.
+          _shortcodeToMxc.set(entry.shortcode, entry.url);
           // Capture by object reference to avoid stale-index bugs if the room
           // switches (and _customEmoji is rebuilt) before the download finishes.
           const captured = customEntry;
