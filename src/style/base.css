@@ -6735,7 +6735,10 @@ body.quark-mobile .message__link {
 /* Own profile card (fixed left) */
 
 .home-view__profile {
-  flex: 0 0 260px;
+  /* Match the room-list width so the profile panel's right edge lines up with
+     the room sidebar (in normal layout) and the status bar in the bottom-left,
+     which spans space-strip + room-list. */
+  flex: 0 0 var(--room-list-width);
   display: flex;
   flex-direction: column;
   align-items: center;
