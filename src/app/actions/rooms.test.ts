@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { applyLocalRoomMeta } from "./rooms.js";
+import { applyLocalRoomMeta, pickSpaceTargetRoom } from "./rooms.js";
 import { setComponents } from "./context.js";
 import { AppState } from "../state.js";
 import type { AppComponents } from "../../ui/App.js";
@@ -60,5 +60,29 @@ describe("applyLocalRoomMeta", () => {
     AppState.set("currentRoomId", "!a:x");
     applyLocalRoomMeta("!b:x", { name: "New name" });
     expect(roomHeader.setRoom).not.toHaveBeenCalled();
+  });
+});
+
+// pickSpaceTargetRoom decides which room a space switch should load into the
+// timeline: the space's remembered last-active chat when it's still listed,
+// otherwise the first room, so the timeline never lingers on a foreign room (#11).
+describe("pickSpaceTargetRoom", () => {
+  const list = ["!a:x", "!b:x", "!c:x"];
+
+  it("restores the remembered room when it is still in the space's list", () => {
+    expect(pickSpaceTargetRoom(list, "!b:x")).toBe("!b:x");
+  });
+
+  it("falls back to the first room when the remembered room is gone", () => {
+    expect(pickSpaceTargetRoom(list, "!gone:x")).toBe("!a:x");
+  });
+
+  it("opens the first room when nothing is remembered", () => {
+    expect(pickSpaceTargetRoom(list, undefined)).toBe("!a:x");
+  });
+
+  it("returns null for an empty space", () => {
+    expect(pickSpaceTargetRoom([], "!b:x")).toBeNull();
+    expect(pickSpaceTargetRoom([], undefined)).toBeNull();
   });
 });

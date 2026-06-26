@@ -256,9 +256,11 @@ function wireHomeViewOnce(): void {
 
   homeView.setHandlers({
     onOpenRoom: (roomId) => {
-      // Land in the DMs list context (the natural "back" target), then open.
+      // Land in the DMs list context (the natural "back" target), then open the
+      // tapped room — skipRoomRestore so selectSpace doesn't open a different DM
+      // first (which would mark it read before we land on the right one). (#11)
       exitHomeView();
-      void selectSpace("__dms__").then(() => selectRoom(roomId));
+      void selectSpace("__dms__", { skipRoomRestore: true }).then(() => selectRoom(roomId));
     },
     onSaveStatus: (status) => {
       void setPresenceStatus(status)

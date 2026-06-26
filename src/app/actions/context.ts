@@ -193,6 +193,10 @@ export const _roomAvatarDataUrl = new Map<string, string>();
 export const _dmRoomByUser = new Map<string, string>();
 /** roomId → DM partner userId, reverse of _dmRoomByUser */
 export const _dmUserByRoom = new Map<string, string>();
+/** spaceId → the room last opened while that space was active, so switching
+ *  away and back restores the space's own chat instead of leaving a foreign
+ *  room in the timeline (#11). Session-only — not persisted across restarts. */
+export const _lastRoomBySpace = new Map<string, string>();
 
 // ── Emoji / reaction caches ────────────────────────────────────────────────────
 

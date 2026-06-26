@@ -41,6 +41,7 @@ import {
   _roomAvatarDataUrl,
   _dmRoomByUser,
   _dmUserByRoom,
+  _lastRoomBySpace,
   _mediaToBlobUrl,
   roomInfoToEntry,
   roomMemberToEntry,
@@ -161,7 +162,10 @@ export function appendRoomTimelineCache(roomId: string, event: TimelineEvent): v
 /**
  * Select a room: fetch timeline, update header, mark read.
  */
-export async function selectRoom(roomId: string): Promise<void> {
+export async function selectRoom(
+  roomId: string,
+  opts: { keepPanelFocus?: boolean } = {},
+): Promise<void> {
   const { roomList, roomHeader, timeline, memberList, statusBar, typingIndicator } = getComponents();
   const prevRoom = AppState.get("currentRoomId");
 
@@ -170,7 +174,13 @@ export async function selectRoom(roomId: string): Promise<void> {
   exitHomeView();
 
   AppState.set("currentRoomId", roomId);
-  AppState.set("activePanel", "timeline");
+  // Remember this room as the active space's chat so switching away and back
+  // restores it instead of leaving a foreign room in the timeline (#11).
+  const activeSpace = AppState.get("currentSpaceId");
+  if (activeSpace) _lastRoomBySpace.set(activeSpace, roomId);
+  // Skip the focus shift when a space switch is loading this room into the
+  // timeline in the background — focus must stay on the room list there. (#11)
+  if (!opts.keepPanelFocus) AppState.set("activePanel", "timeline");
   // On mobile, picking a room dismisses the room-list drawer — including when the
   // tapped room is already the active one. AppState.set skips no-op changes, so the
   // currentRoomId listener in App.ts that normally closes the drawer won't fire for
@@ -808,9 +818,31 @@ export async function reloadCurrentRoomTimeline(): Promise<void> {
 }
 
 /**
- * Select a space: fetch children, filter room list.
+ * Decide which room a space switch should load into the timeline. Restores the
+ * space's remembered last-active chat when it's still listed; otherwise opens
+ * the first room, or null for an empty space. (#11)
  */
-export async function selectSpace(spaceId: string): Promise<void> {
+export function pickSpaceTargetRoom(
+  orderedRoomIds: string[],
+  rememberedRoomId: string | undefined
+): string | null {
+  if (rememberedRoomId && orderedRoomIds.includes(rememberedRoomId)) {
+    return rememberedRoomId;
+  }
+  return orderedRoomIds[0] ?? null;
+}
+
+/**
+ * Select a space: fetch children, filter room list, and load the space's chat.
+ *
+ * Pass `skipRoomRestore` when the caller will open a specific room itself
+ * (e.g. tapping a DM in the Home canvas), so we don't redundantly load — and
+ * mark read — a different room first. (#11)
+ */
+export async function selectSpace(
+  spaceId: string,
+  opts: { skipRoomRestore?: boolean } = {},
+): Promise<void> {
   const { spaceStrip, roomList } = getComponents();
   AppState.set("currentSpaceId", spaceId);
   spaceStrip.setActiveSpace(spaceId);
@@ -823,68 +855,113 @@ export async function selectSpace(spaceId: string): Promise<void> {
   }
   exitHomeView();
 
+  // Room IDs shown for this space, in display order — used to restore the
+  // space's last-active chat (or open its first room) into the timeline (#11).
+  let orderedIds: string[] = [];
+
   const pseudo = getPseudoSpace(spaceId);
   if (pseudo) {
     const allRooms = AppState.get("roomListCache");
     const spaceRoomIds = new Set(AppState.get("spaceRoomIds"));
     const filtered = sortByRecency(allRooms.filter((r) => pseudo.filter(r, spaceRoomIds)));
     roomList.setRooms(filtered.map(roomInfoToEntry));
-    AppState.focusPanel("roomlist");
+    orderedIds = filtered.map((r) => r.room_id);
+  } else {
+    try {
+      const children = await getSpaceChildren(spaceId);
+      // The backend already sorts by m.space.child order field (then alphabetically).
+      const cache = AppState.get("roomListCache");
+      const cacheById = new Map(cache.map((r) => [r.room_id, r]));
+
+      // Check if there are any subspaces — if so, render as categories
+      const subspaces = children.filter((c) => c.is_space);
+      const topRooms = children.filter((c) => !c.is_space);
+
+      if (subspaces.length > 0) {
+        // Build sections: top-level rooms first (unlabeled), then each subspace as a category
+        const sections: RoomSection[] = [];
+
+        // Top-level rooms (not in any subspace) — unlabeled section
+        const topEntries = topRooms.flatMap((c) => {
+          const r = cacheById.get(c.room_id);
+          return r ? [roomInfoToEntry(r)] : [];
+        });
+        if (topEntries.length > 0) {
+          sections.push({ label: "", rooms: topEntries });
+        }
+
+        // Each subspace becomes a labeled category
+        await Promise.all(subspaces.map(async (sub) => {
+          try {
+            const subChildren = await getSpaceChildren(sub.room_id);
+            const subRooms = subChildren
+              .filter((c) => !c.is_space)
+              .flatMap((c) => {
+                const r = cacheById.get(c.room_id);
+                return r ? [roomInfoToEntry(r)] : [];
+              });
+            sections.push({ label: sub.name ?? sub.room_id, rooms: subRooms, spaceId: sub.room_id });
+          } catch {
+            // Skip subspace on error
+          }
+        }));
+
+        roomList.setSections(sections);
+        orderedIds = sections.flatMap((s) => s.rooms.map((e) => e.id));
+      } else {
+        const ordered = topRooms.flatMap((c) => {
+          const r = cacheById.get(c.room_id);
+          return r ? [roomInfoToEntry(r)] : [];
+        });
+        roomList.setRooms(ordered);
+        orderedIds = ordered.map((e) => e.id);
+      }
+    } catch (err) {
+      showError(`Failed to load space: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+  }
+
+  // Selecting a space is a "browse rooms" action: focus the room list, then load
+  // the space's own chat into the timeline WITHOUT stealing that focus, so it
+  // never lingers on a room from the space we just left. (#11)
+  //
+  // Desktop only: on mobile the space strip and room list share one drawer with
+  // a tap-and-go flow (selecting a *room* closes the drawer), so auto-opening a
+  // room here would slam the drawer shut mid-browse. Mobile keeps tap-and-go.
+  AppState.focusPanel("roomlist");
+  if (!opts.skipRoomRestore && !isMobile()) {
+    await restoreSpaceRoom(spaceId, orderedIds);
+  }
+}
+
+/**
+ * After a space switch, load that space's remembered chat (or its first room)
+ * into the timeline, or clear the timeline when the space has no rooms. (#11)
+ */
+async function restoreSpaceRoom(spaceId: string, orderedRoomIds: string[]): Promise<void> {
+  const target = pickSpaceTargetRoom(orderedRoomIds, _lastRoomBySpace.get(spaceId));
+  if (!target) {
+    clearActiveRoom();
     return;
   }
-
-  try {
-    const children = await getSpaceChildren(spaceId);
-    // The backend already sorts by m.space.child order field (then alphabetically).
-    const cache = AppState.get("roomListCache");
-    const cacheById = new Map(cache.map((r) => [r.room_id, r]));
-
-    // Check if there are any subspaces — if so, render as categories
-    const subspaces = children.filter((c) => c.is_space);
-    const topRooms = children.filter((c) => !c.is_space);
-
-    if (subspaces.length > 0) {
-      // Build sections: top-level rooms first (unlabeled), then each subspace as a category
-      const sections: RoomSection[] = [];
-
-      // Top-level rooms (not in any subspace) — unlabeled section
-      const topEntries = topRooms.flatMap((c) => {
-        const r = cacheById.get(c.room_id);
-        return r ? [roomInfoToEntry(r)] : [];
-      });
-      if (topEntries.length > 0) {
-        sections.push({ label: "", rooms: topEntries });
-      }
-
-      // Each subspace becomes a labeled category
-      await Promise.all(subspaces.map(async (sub) => {
-        try {
-          const subChildren = await getSpaceChildren(sub.room_id);
-          const subRooms = subChildren
-            .filter((c) => !c.is_space)
-            .flatMap((c) => {
-              const r = cacheById.get(c.room_id);
-              return r ? [roomInfoToEntry(r)] : [];
-            });
-          sections.push({ label: sub.name ?? sub.room_id, rooms: subRooms, spaceId: sub.room_id });
-        } catch {
-          // Skip subspace on error
-        }
-      }));
-
-      roomList.setSections(sections);
-    } else {
-      const ordered = topRooms.flatMap((c) => {
-        const r = cacheById.get(c.room_id);
-        return r ? [roomInfoToEntry(r)] : [];
-      });
-      roomList.setRooms(ordered);
-    }
-
-    AppState.focusPanel("roomlist");
-  } catch (err) {
-    showError(`Failed to load space: ${err instanceof Error ? err.message : String(err)}`);
+  // Already showing the target (e.g. re-selecting the current space) — nothing to do.
+  if (target !== AppState.get("currentRoomId")) {
+    await selectRoom(target, { keepPanelFocus: true });
   }
+}
+
+/**
+ * Reset the timeline (and header) to a no-room state so a previously open room
+ * can't linger after it's no longer reachable (e.g. an empty space). (#11)
+ */
+function clearActiveRoom(): void {
+  if (AppState.get("currentRoomId") === null) return;
+  AppState.set("currentRoomId", null);
+  AppState.set("currentTimeline", []);
+  const { timeline, roomHeader } = getComponents();
+  timeline.setMessages([]);
+  roomHeader.setRoom(""); // blank default state — same as the header's initial render
 }
 
 /**

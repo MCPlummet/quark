@@ -106,6 +106,9 @@ The room list has a two-column layout inspired by Cinny:
 - Spaces display their avatar/icon; this is the only place icons appear in the room list
 - `j/k` (or rebound keys) to navigate spaces, `Enter` to select
 - Selecting a space filters the room list to show only that space's children
+- Each space remembers its own last-active chat: switching to a space loads that
+  chat into the timeline (or its first room on first visit), so the timeline
+  never lingers on a room from the space you just left. Memory is session-only.
 
 **Right column — Room list (text only, no icons):**
 - Rooms listed by name in a **fixed, deterministic order** (not sorted by activity):
