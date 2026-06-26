@@ -1,8 +1,10 @@
-/* Landing-page progressive enhancement. Two independent pieces:
+/* Landing-page progressive enhancement. Three independent pieces:
    1. Relabel the download button for the visitor's OS.
-   2. Lazy-launch the live demo (the real frontend in ?debug mock mode).
-   Both degrade gracefully with JS off: the download button points at the
-   latest release, and the demo "open in new tab" link still works. */
+   2. Show the latest released version, fetched from the update feed.
+   3. Lazy-launch the live demo (the real frontend in ?debug mock mode).
+   All degrade gracefully with JS off: the download button points at the
+   latest release, the version labels keep their hardcoded fallback text, and
+   the demo "open in new tab" link still works. */
 (function () {
   "use strict";
 
@@ -31,7 +33,29 @@
     }
   })();
 
-  /* ---------- 2. Lazy live demo ---------- */
+  /* ---------- 2. Latest released version ---------- */
+  (function () {
+    var els = [
+      document.getElementById("hero-version"),
+      document.getElementById("dl-version")
+    ].filter(Boolean);
+    if (!els.length) return;
+
+    // The release workflow republishes the stable update feed (same origin) on
+    // every tag, so its `version` is always the latest actual release. Read it
+    // here rather than hardcoding — the text in the HTML is the no-JS /
+    // fetch-failed fallback, so a stale or offline feed degrades silently.
+    fetch("updates/stable/latest.json", { cache: "no-cache" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data || !data.version) return;
+        var v = "v" + data.version;
+        els.forEach(function (el) { el.textContent = v; });
+      })
+      .catch(function () {});
+  })();
+
+  /* ---------- 3. Lazy live demo ---------- */
   (function () {
     var stage = document.getElementById("demo-stage");
     var launch = document.getElementById("demo-launch");
