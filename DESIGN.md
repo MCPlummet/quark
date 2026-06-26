@@ -156,6 +156,14 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Picker        | `/`           | Search within picker          |
 | Picker        | `Tab`         | Switch emoji ↔ sticker ↔ GIF  |
 
+**Compose box ↔ timeline:** with a draft in the compose box, `Esc` drops into
+Normal-mode editing of the draft (vim motions/operators on the text). The
+compose box then behaves like the message just below the timeline — pressing the
+up key (`k`) on the draft's first line moves focus up into the timeline, and the
+down key (`j`) past the last message drops back into the draft (caret at the
+top). `i` resumes editing. An empty compose box is left untouched by `j` at the
+bottom of the timeline; press `i` to start composing.
+
 ### Keybinding Configuration (quarkrc)
 
 Keybindings are configured via `~/.config/quark/quarkrc`, using a vimrc-inspired syntax. This file is sourced on startup and on `:source` command.

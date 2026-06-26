@@ -125,6 +125,21 @@ describe("AppState panel-nav delegation", () => {
       AppState.close();
     }).not.toThrow();
   });
+
+  // #15 — navDown reports whether the active panel actually moved so the
+  // caller can hand focus to the compose box at the timeline's bottom edge.
+  it("navDown/navUp return whether the active panel reported movement", () => {
+    AppState.registerPanelNav("timeline", { navDown: () => true, navUp: () => false });
+    AppState.set("activePanel", "timeline");
+    expect(AppState.navDown()).toBe(true);
+    expect(AppState.navUp()).toBe(false);
+  });
+
+  it("navDown returns false when the panel callback reports nothing", () => {
+    AppState.registerPanelNav("roomlist", { navDown: () => {}, navUp: () => {} });
+    AppState.set("activePanel", "roomlist");
+    expect(AppState.navDown()).toBe(false);
+  });
 });
 
 describe("AppState user caches", () => {

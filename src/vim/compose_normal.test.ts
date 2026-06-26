@@ -160,4 +160,31 @@ describe("ComposeNormalEditor", () => {
     place("hi", 0);
     expect(ed.handleKey("v", field).consumed).toBe(false);
   });
+
+  // #15 — the compose box behaves like the bottom-most message: pressing k on
+  // the first line leaves the box upward (into the timeline) rather than being
+  // silently swallowed.
+  it("k on the first line signals exit-up and leaves the caret put (#15)", () => {
+    place("hello", 2);
+    const res = ed.handleKey("k", field);
+    expect(res.consumed).toBe(true);
+    expect(res.exitUp).toBe(true);
+    expect(cursor()).toBe(2);
+  });
+
+  it("k on a lower line moves up instead of exiting (#15)", () => {
+    place("one\ntwo", 5); // caret on the second line
+    const res = ed.handleKey("k", field);
+    expect(res.consumed).toBe(true);
+    expect(res.exitUp).toBeFalsy();
+    expect(cursor()).toBe(1); // moved up to the first line, same column
+  });
+
+  it("dk on the first line still deletes the line (no exit-up) (#15)", () => {
+    place("hello", 2);
+    ed.handleKey("d", field);
+    const res = ed.handleKey("k", field);
+    expect(res.exitUp).toBeFalsy();
+    expect(field.value).toBe("");
+  });
 });

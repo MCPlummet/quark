@@ -184,11 +184,16 @@ export interface ComposeKeyResult {
   consumed: boolean;
   /** Caller should transition to Insert mode (operators like c, and i/a/o/…). */
   enterInsert?: boolean;
+  /** Caller should leave the compose box upward — `k` pressed on the first
+   *  line, where the caret can't rise any further. The compose box reads as the
+   *  bottom-most "message", so this hands focus up to the timeline (#15). */
+  exitUp?: boolean;
 }
 
 const NOT_CONSUMED: ComposeKeyResult = { consumed: false };
 const CONSUMED: ComposeKeyResult = { consumed: true };
 const INSERT: ComposeKeyResult = { consumed: true, enterInsert: true };
+const EXIT_UP: ComposeKeyResult = { consumed: true, exitUp: true };
 
 /**
  * Drives vim Normal-mode editing of a compose textarea. Holds the pending
@@ -284,6 +289,13 @@ export class ComposeNormalEditor {
         this.applyOperator(field, op, operatorSpan(text, pos, key, total), pos);
         this.reset();
         return op === "c" ? INSERT : CONSUMED;
+      }
+      // Bare `k` on the first line can't move the caret up any further, so it
+      // leaves the compose box upward into the timeline rather than being
+      // silently swallowed (#15). Any pending count is discarded.
+      if (key === "k" && lineStart(text, pos) === 0) {
+        this.reset();
+        return EXIT_UP;
       }
       this.setCursor(field, motionCursor(text, pos, key, total));
       this.count = "";

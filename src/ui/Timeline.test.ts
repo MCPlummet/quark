@@ -298,4 +298,30 @@ describe("Timeline", () => {
       expect(timeline.searchLoaded("zzz-nomatch")).toHaveLength(0);
     });
   });
+
+  // #15 — selection navigation must report when it hits a boundary so the
+  // keyboard layer can hand focus to the compose box (which sits just below
+  // the bottom-most message).
+  describe("selection navigation boundaries (#15)", () => {
+    it("selectNext returns true while it moves and false at the last message", () => {
+      timeline.setMessages([makeMsg({ id: "e1" }), makeMsg({ id: "e2" })]);
+      expect(timeline.selectNext()).toBe(true); // nothing selected → lands on the last
+      expect(timeline.selectedMessageId).toBe("e2");
+      expect(timeline.selectNext()).toBe(false); // already at the bottom — boundary
+    });
+
+    it("selectPrev returns false at the first message", () => {
+      timeline.setMessages([makeMsg({ id: "e1" }), makeMsg({ id: "e2" })]);
+      timeline.selectFirst();
+      expect(timeline.selectedMessageId).toBe("e1");
+      expect(timeline.selectPrev()).toBe(false);
+    });
+
+    it("selectLast reports whether a message was selected", () => {
+      timeline.setMessages([]);
+      expect(timeline.selectLast()).toBe(false);
+      timeline.setMessages([makeMsg({ id: "e1" })]);
+      expect(timeline.selectLast()).toBe(true);
+    });
+  });
 });

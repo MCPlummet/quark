@@ -60,8 +60,11 @@ export type StateChangeListener<K extends StateChangeKey = StateChangeKey> = (
 // ── Panel nav callback registry ──────────────────────────────────────────────
 
 interface PanelNavCallbacks {
-  navDown: () => void;
-  navUp: () => void;
+  /** Move selection down. May return true if it moved / false at the bottom
+   *  boundary, so the caller can hand focus to a vertical neighbour (#15). */
+  navDown: () => void | boolean;
+  /** Move selection up. May return true if it moved / false at the top. */
+  navUp: () => void | boolean;
   jumpTop?: () => void;
   jumpBottom?: () => void;
   /** Activate the currently focused item (Enter/o). No-op if absent. */
@@ -159,12 +162,15 @@ class AppStateManager {
     this._panelNavCallbacks.set(panel, callbacks);
   }
 
-  navDown(): void {
-    this._panelNavCallbacks.get(this._state.activePanel)?.navDown();
+  /** Returns true if the active panel reported it moved its selection. Panels
+   *  that don't report movement (return void) yield false — callers only act on
+   *  the result for panels known to report (the timeline). */
+  navDown(): boolean {
+    return this._panelNavCallbacks.get(this._state.activePanel)?.navDown() === true;
   }
 
-  navUp(): void {
-    this._panelNavCallbacks.get(this._state.activePanel)?.navUp();
+  navUp(): boolean {
+    return this._panelNavCallbacks.get(this._state.activePanel)?.navUp() === true;
   }
 
   jumpTop(): void {

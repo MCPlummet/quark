@@ -145,9 +145,16 @@ function dispatchAction(action: string, components: AppComponents): void {
       break;
 
     // ── Navigation — routed through panel registry ─────────────────────
-    case "nav-down":
-      AppState.navDown();
+    case "nav-down": {
+      // When nav-down can't advance the timeline selection any further, fall
+      // through into the compose box (#15) — it behaves like the message below
+      // the last one.
+      const movedWithinPanel = AppState.navDown();
+      if (!movedWithinPanel && AppState.get("activePanel") === "timeline") {
+        enterComposeFromTimeline(components);
+      }
       break;
+    }
 
     case "nav-up":
       AppState.navUp();
@@ -521,7 +528,12 @@ function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents)
   e.preventDefault();
   e.stopPropagation();
 
-  if (res.enterInsert) {
+  if (res.exitUp) {
+    // `k` on the first line: leave the compose box upward into the timeline.
+    // Falls back to staying put (and re-priming the block) when there's no
+    // message to land on (#15).
+    if (!exitComposeToTimeline(components)) composeEditor.primeBlock(field);
+  } else if (res.enterInsert) {
     exitTextSelect();
     composeEditor.reset();
     modeManager.transition(Mode.Insert);
@@ -530,6 +542,41 @@ function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents)
     composeEditor.primeBlock(field);
   }
   return true;
+}
+
+/**
+ * Leave the compose box upward into the timeline (#15). The compose box reads
+ * as the bottom-most message, so this drops compose text-select and lands the
+ * selection on the last timeline message. Returns false (and changes nothing)
+ * when the timeline has no message to move to, so the caller can stay put.
+ */
+function exitComposeToTimeline(components: AppComponents): boolean {
+  const { input, timeline } = components;
+  if (!timeline.selectLast()) return false; // nothing to land on — stay in compose
+  exitTextSelect();
+  composeEditor.reset();
+  input.blur(); // focus has left the compose box; keys now drive the timeline
+  AppState.set("activePanel", "timeline");
+  return true;
+}
+
+/**
+ * Enter the compose box from the timeline's bottom edge (#15). Triggered when
+ * `nav-down` can't move the timeline selection any further and the compose box
+ * holds a draft: focus the field in compose-Normal mode with the caret at the
+ * top so a subsequent `k` returns to the timeline. No-op on an empty draft, so
+ * plain timeline navigation in an empty room is unaffected — `i` still composes.
+ */
+function enterComposeFromTimeline(components: AppComponents): void {
+  const { input, timeline } = components;
+  if (modeManager.current !== Mode.Normal) return;
+  if (input.getValue().length === 0) return;
+  timeline.clearSelection();
+  input.focus();
+  const field = input.getFieldElement();
+  field.setSelectionRange(0, 0); // entered from above — caret at the top
+  enterComposeTextSelect(field);
+  composeEditor.reset();
 }
 
 /**

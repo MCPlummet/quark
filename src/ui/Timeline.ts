@@ -2101,26 +2101,40 @@ export class Timeline {
     return this._messages.find((m) => m.id === eventId)?.body ?? null;
   }
 
-  /** Move selection down. Navigates thread replies when a thread is open. */
-  selectNext(): void {
-    if (this._inlineThreadRootId !== null) { this.threadSelectNext(); return; }
-    if (this._messages.length === 0) return;
+  /**
+   * Move selection down. Navigates thread replies when a thread is open.
+   * Returns true if the selection moved, false when it was already on the
+   * bottom-most message — a boundary the caller uses to hand focus to the
+   * compose box, which sits just below the timeline (#15).
+   */
+  selectNext(): boolean {
+    if (this._inlineThreadRootId !== null) { this.threadSelectNext(); return true; }
+    if (this._messages.length === 0) return false;
     if (this._selectedIndex < 0 || this._selectedIndex >= this._messages.length) {
       this._setSelected(this._messages.length - 1);
+      return true;
     } else if (this._selectedIndex < this._messages.length - 1) {
       this._setSelected(this._selectedIndex + 1);
+      return true;
     }
+    return false;
   }
 
-  /** Move selection up. Navigates thread replies when a thread is open. */
-  selectPrev(): void {
-    if (this._inlineThreadRootId !== null) { this.threadSelectPrev(); return; }
-    if (this._messages.length === 0) return;
+  /**
+   * Move selection up. Navigates thread replies when a thread is open.
+   * Returns true if the selection moved, false at the first message.
+   */
+  selectPrev(): boolean {
+    if (this._inlineThreadRootId !== null) { this.threadSelectPrev(); return true; }
+    if (this._messages.length === 0) return false;
     if (this._selectedIndex < 0 || this._selectedIndex >= this._messages.length) {
       this._setSelected(this._messages.length - 1);
+      return true;
     } else if (this._selectedIndex > 0) {
       this._setSelected(this._selectedIndex - 1);
+      return true;
     }
+    return false;
   }
 
   /** Jump to first. Goes to first thread reply when a thread is open. */
@@ -2130,12 +2144,16 @@ export class Timeline {
     this._setSelected(0);
   }
 
-  /** Jump to last. Goes to last thread reply when a thread is open. */
-  selectLast(): void {
-    if (this._inlineThreadRootId !== null) { this.threadSelectLast(); return; }
-    if (this._messages.length === 0) return;
+  /**
+   * Jump to last. Goes to last thread reply when a thread is open.
+   * Returns true if a message was selected, false when the timeline is empty.
+   */
+  selectLast(): boolean {
+    if (this._inlineThreadRootId !== null) { this.threadSelectLast(); return true; }
+    if (this._messages.length === 0) return false;
     this._setSelected(this._messages.length - 1);
     this._scrollToBottom();
+    return true;
   }
 
   /** Clear selection (clears thread selection when a thread is open). */
