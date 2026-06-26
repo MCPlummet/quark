@@ -1,7 +1,7 @@
 {
   "name": "quark",
   "private": true,
-  "version": "0.15.2",
+  "version": "0.15.3",
   "description": "A terminal-aesthetic Matrix client with vim-style navigation",
   "author": "mcplummet",
   "license": "AGPL-3.0-or-later",
