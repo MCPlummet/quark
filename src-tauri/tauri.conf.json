@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicoverbruggen/tauri-schema/main/tauri.conf.json",
   "productName": "Quark",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "identifier": "tel.quark.app",
   "build": {
     "frontendDist": "../dist",
