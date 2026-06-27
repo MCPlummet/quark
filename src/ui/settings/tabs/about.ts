@@ -29,31 +29,50 @@ export const aboutTab: SettingsTab = {
       // Render the section synchronously with defaults so the UI is immediately
       // interactive, then patch the controls to reflect the loaded config.
       let draft = structuredClone(DEFAULT_APP_CONFIG);
+      // Track whether the user has made a change during the async load window.
+      // If they have, we must not overwrite their edits when the config resolves.
+      let userEdited = false;
 
       const channelRow = controls.selectRow(
         "Release channel",
         draft.updater.channel,
         [["stable", "Stable"], ["beta", "Beta (early releases)"]],
-        (v) => { if (v === "stable" || v === "beta") draft = { ...draft, updater: { ...draft.updater, channel: v } }; },
+        (v) => {
+          if (v === "stable" || v === "beta") {
+            draft = { ...draft, updater: { ...draft.updater, channel: v } };
+            userEdited = true;
+          }
+        },
       );
       content.appendChild(channelRow);
 
       const autoCheckRow = controls.checkbox(
         "Check for updates automatically",
         draft.updater.auto_check,
-        (v) => { draft = { ...draft, updater: { ...draft.updater, auto_check: v } }; },
+        (v) => {
+          draft = { ...draft, updater: { ...draft.updater, auto_check: v } };
+          userEdited = true;
+        },
       );
       content.appendChild(autoCheckRow);
 
-      content.appendChild(controls.saveButton(() => setAppConfig(draft)));
+      // Save only the updater section back into the full current config so we
+      // never overwrite other sections (general, sync, media, …) with defaults.
+      content.appendChild(controls.saveButton(async () => {
+        const current = await getAppConfig();
+        await setAppConfig({ ...current, updater: draft.updater });
+      }));
 
-      // Load actual persisted config and sync the draft + controls.
+      // Load actual persisted config and sync the draft + controls, but only
+      // if the user hasn't already made edits during this async window.
       void getAppConfig().then((cfg) => {
-        draft = structuredClone(cfg);
-        const sel = channelRow.querySelector("select") as HTMLSelectElement | null;
-        if (sel) sel.value = cfg.updater.channel;
-        const cb = autoCheckRow.querySelector("input") as HTMLInputElement | null;
-        if (cb) cb.checked = cfg.updater.auto_check;
+        if (!userEdited) {
+          draft = { ...draft, updater: structuredClone(cfg.updater) };
+          const sel = channelRow.querySelector("select") as HTMLSelectElement | null;
+          if (sel) sel.value = cfg.updater.channel;
+          const cb = autoCheckRow.querySelector("input") as HTMLInputElement | null;
+          if (cb) cb.checked = cfg.updater.auto_check;
+        }
       });
     }
   },
