@@ -4461,6 +4461,7 @@ body.quark-mobile .profile-edit-dialog__panel {
   overflow-y: auto;
   min-height: 0;
   padding: 0;
+  max-width: 100%;
 }
 
 .settings-dialog__section {
@@ -4485,6 +4486,8 @@ body.quark-mobile .profile-edit-dialog__panel {
   align-items: center;
   gap: 10px;
   padding: 3px 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .settings-dialog__row--quiet-hours {
@@ -4494,6 +4497,18 @@ body.quark-mobile .profile-edit-dialog__panel {
 .settings-dialog__row--theme {
   justify-content: space-between;
   padding: 4px 0;
+}
+
+/* Prevent long <select> option text from pushing the row wider than the
+ * viewport on mobile. The input[type="text"] selector excludes quiet-hours
+ * time inputs (type="time") so those rows are unaffected. */
+.settings-dialog__row select,
+.settings-dialog__row input[type="text"] {
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .settings-dialog__label {
