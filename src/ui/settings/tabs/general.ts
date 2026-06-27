@@ -144,28 +144,6 @@ export const generalTab: SettingsTab = {
     section.appendChild(controls.dispatchButton("[verify a session]", "Verify one of your sessions", dispatchAndClose("verify-session")));
     section.appendChild(controls.dispatchButton("[set up cross-signing]", "Set up cross-signing", dispatchAndClose("setup-cross-signing")));
 
-    section.appendChild(controls.sectionTitle("Updates"));
-
-    section.appendChild(controls.selectRow(
-      "Release channel",
-      draft.updater.channel,
-      [
-        ["stable", "Stable"],
-        ["beta", "Beta (early releases)"],
-      ],
-      (v) => {
-        if (v === "stable" || v === "beta") {
-          draft = { ...draft, updater: { ...draft.updater, channel: v } };
-        }
-      },
-    ));
-
-    section.appendChild(controls.checkbox(
-      "Check for updates automatically",
-      draft.updater.auto_check,
-      (v) => { draft = { ...draft, updater: { ...draft.updater, auto_check: v } }; },
-    ));
-
     const actions = document.createElement("div");
     actions.className = "settings-dialog__section settings-dialog__actions";
     actions.appendChild(controls.saveButton(async () => {

@@ -11,9 +11,10 @@ import { gifTab } from "./tabs/gif.js";
 import { emojiTab } from "./tabs/emoji.js";
 import { notificationsTab } from "./tabs/notifications.js";
 import { themesTab } from "./tabs/themes.js";
+import { aboutTab } from "./tabs/about.js";
 
 export const SETTINGS_TABS: SettingsTab[] = [
-  generalTab, mediaTab, gifTab, emojiTab, notificationsTab, themesTab,
+  generalTab, mediaTab, gifTab, emojiTab, notificationsTab, themesTab, aboutTab,
 ];
 
 export function visibleTabs(tabs: SettingsTab[], isMobile: boolean): SettingsTab[] {
