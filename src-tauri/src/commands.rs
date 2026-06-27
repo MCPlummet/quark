@@ -6,7 +6,7 @@ use crate::{
     gif::GifResult,
     matrix::{
         client::{MatrixState, OwnProfile, SyncState},
-        crypto::{CrossSigningInfo, SasInfo, VerificationStatus},
+        crypto::{CrossSigningInfo, KeyBackupStatus, SasInfo, VerificationStatus},
         emoji::EmojiPack,
         media::MediaDownload,
         reactions::ReactionGroup,
@@ -1520,6 +1520,32 @@ pub async fn bootstrap_cross_signing(
 ) -> Result<(), String> {
     let client = get_client(&state)?;
     crate::matrix::crypto::bootstrap_cross_signing(&client, password).await
+}
+
+#[tauri::command]
+pub async fn reset_cross_signing(
+    state: State<'_, MatrixState>,
+    password: Option<String>,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::crypto::reset_cross_signing(&client, password).await
+}
+
+#[tauri::command]
+pub async fn get_key_backup_status(
+    state: State<'_, MatrixState>,
+) -> Result<KeyBackupStatus, String> {
+    let client = get_client(&state)?;
+    crate::matrix::crypto::get_key_backup_status(&client).await
+}
+
+#[tauri::command]
+pub async fn request_user_verification(
+    state: State<'_, MatrixState>,
+    user_id: String,
+) -> Result<String, String> {
+    let client = get_client(&state)?;
+    crate::matrix::crypto::request_user_verification(&client, &user_id).await
 }
 
 #[tauri::command]

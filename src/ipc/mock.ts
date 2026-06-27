@@ -525,6 +525,14 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       };
     }
 
+    case "reset_cross_signing":
+      if (args?.password) return null;
+      throw "UIAA_REQUIRED";
+    case "get_key_backup_status":
+      return { enabled: true, exists_on_server: true };
+    case "request_user_verification":
+      return "mock-flow-id";
+
     case "get_pinned_events":
       return [
         { event_id: "$pin1:matrix.org", sender: "@alice:matrix.org", body: "Check out the new release notes!", formatted_body: null, timestamp: Date.now() - 24 * 60 * 60_000, encrypted: false },

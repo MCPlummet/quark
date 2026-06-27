@@ -244,6 +244,14 @@ export interface CrossSigningInfo {
 }
 
 /**
+ * Key backup status — matches matrix::crypto::KeyBackupStatus.
+ */
+export interface KeyBackupStatus {
+  enabled: boolean;
+  exists_on_server: boolean;
+}
+
+/**
  * SAS emoji verification info — matches matrix::crypto::SasInfo.
  * `emoji` is a list of [symbol, description] pairs (up to 7).
  * Available only after key exchange; poll get_sas_info until present.

@@ -1,9 +1,9 @@
 // Crypto / verification IPC calls
 
 import { invoke } from "./invoke.js";
-import type { CrossSigningInfo, SasInfo, VerificationStatus } from "./types.js";
+import type { CrossSigningInfo, KeyBackupStatus, SasInfo, VerificationStatus } from "./types.js";
 
-export type { CrossSigningInfo, SasInfo, VerificationStatus };
+export type { CrossSigningInfo, KeyBackupStatus, SasInfo, VerificationStatus };
 
 /** Get the verification status of the local device. */
 export async function getVerificationStatus(): Promise<VerificationStatus> {
@@ -96,6 +96,30 @@ export async function getSasInfo(
   flowId: string,
 ): Promise<SasInfo | null> {
   return invoke<SasInfo | null>("get_sas_info", { userId, flowId });
+}
+
+/**
+ * Reset the local cross-signing identity, rotating all three keys.
+ *
+ * Pass the user's password if the server requires UIAA. If the server needs a
+ * password but none is supplied, throws an error with message "UIAA_REQUIRED"
+ * — the caller should prompt for a password and retry.
+ */
+export async function resetCrossSigning(password?: string): Promise<void> {
+  return invoke<void>("reset_cross_signing", { password: password ?? null });
+}
+
+/** Get the current key backup status (read-only). */
+export async function getKeyBackupStatus(): Promise<KeyBackupStatus> {
+  return invoke<KeyBackupStatus>("get_key_backup_status");
+}
+
+/**
+ * Request an interactive verification with another user.
+ * Returns the flow ID of the resulting VerificationRequest.
+ */
+export async function requestUserVerification(userId: string): Promise<string> {
+  return invoke<string>("request_user_verification", { userId });
 }
 
 /**
