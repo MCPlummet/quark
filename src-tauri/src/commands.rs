@@ -1539,6 +1539,26 @@ pub async fn list_sessions(
     crate::matrix::devices::list_sessions(&client).await
 }
 
+#[tauri::command]
+pub async fn rename_device(
+    state: State<'_, MatrixState>,
+    device_id: String,
+    name: String,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::devices::rename_device(&client, &device_id, &name).await
+}
+
+#[tauri::command]
+pub async fn delete_devices(
+    state: State<'_, MatrixState>,
+    device_ids: Vec<String>,
+    password: Option<String>,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::devices::delete_devices(&client, device_ids, password).await
+}
+
 /// Decide whether the post-login "verify this session" prompt should be shown,
 /// logging the reason at INFO so the decision is visible in the app log.
 ///

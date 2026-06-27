@@ -497,6 +497,12 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         { device_id: "MOCKDEVICE", display_name: "Quark on Linux", last_seen_ts: null, last_seen_ip: null, is_current: true, is_verified: true, is_cross_signed: true, trust_level: "cross-signed" },
         { device_id: "PHONE123", display_name: "Element Android", last_seen_ts: Date.now() - 3 * 24 * 60 * 60_000, last_seen_ip: "203.0.113.42", is_current: false, is_verified: false, is_cross_signed: false, trust_level: "unverified" },
       ];
+    case "rename_device":
+      return null;
+    case "delete_devices":
+      // Simulate UIAA: throw sentinel when no password supplied, succeed when password provided.
+      if (args?.password) return null;
+      throw "UIAA_REQUIRED";
     case "start_sas_verification":
       return "mock-flow-id-" + Date.now();
     case "accept_verification_request":

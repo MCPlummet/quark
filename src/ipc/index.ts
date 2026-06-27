@@ -130,7 +130,7 @@ export { getAppConfig, setAppConfig, DEFAULT_APP_CONFIG } from "./app_config.js"
 export type { AppConfig, GeneralConfig, SyncConfig, MediaConfig, GifConfig, GifRating, EmojiConfig, CacheConfig, UpdaterConfig } from "./app_config.js";
 
 // ─── Devices / Sessions ───────────────────────────────────────────────────────
-export { listSessions } from "./devices.js";
+export { listSessions, renameDevice, deleteDevices } from "./devices.js";
 
 // ─── Updates ──────────────────────────────────────────────────────────────────
 export { updateCheck, updateInstall } from "./updater.js";

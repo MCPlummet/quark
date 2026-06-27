@@ -1,4 +1,7 @@
-use matrix_sdk::Client;
+use matrix_sdk::{
+    ruma::{api::client::uiaa, OwnedDeviceId},
+    Client,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::matrix::crypto;
@@ -90,6 +93,55 @@ pub async fn list_sessions(client: &Client) -> Result<Vec<SessionInfo>, String> 
     Ok(merge_sessions(account_devices, trust, &current_device_id))
 }
 
+/// Rename the display name of a device owned by the current user.
+pub async fn rename_device(client: &Client, device_id: &str, name: &str) -> Result<(), String> {
+    let owned: OwnedDeviceId = device_id.into();
+    client
+        .rename_device(&owned, name)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("Failed to rename device: {e}"))
+}
+
+/// Delete one or more devices, handling UIAA (password re-auth) if the server requires it.
+///
+/// Returns `Err("UIAA_REQUIRED")` when the server demands a password but none was supplied —
+/// the caller should prompt the user and retry with the password.
+pub async fn delete_devices(
+    client: &Client,
+    device_ids: Vec<String>,
+    password: Option<String>,
+) -> Result<(), String> {
+    let owned: Vec<OwnedDeviceId> = device_ids.iter().map(|s| s.as_str().into()).collect();
+
+    match client.delete_devices(&owned, None).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let Some(uiaa_info) = e.as_uiaa_response() else {
+                return Err(format!("Failed to delete devices: {e}"));
+            };
+
+            // Server requires UIAA.
+            let Some(pwd) = password else {
+                return Err("UIAA_REQUIRED".to_string());
+            };
+
+            let user_id = client.user_id().ok_or("Not logged in")?;
+            let mut pw = uiaa::Password::new(
+                uiaa::UserIdentifier::UserIdOrLocalpart(user_id.localpart().to_owned()),
+                pwd,
+            );
+            pw.session = uiaa_info.session.clone();
+
+            client
+                .delete_devices(&owned, Some(uiaa::AuthData::Password(pw)))
+                .await
+                .map(|_| ())
+                .map_err(|e2| format!("Failed to delete devices (with auth): {e2}"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +179,6 @@ mod tests {
         let out = merge_sessions(acct, vec![], "A");
         assert_eq!(out[0].trust_level, "unverified");
         assert!(!out[0].is_current);
+        assert!(!out[0].is_verified && !out[0].is_cross_signed);
     }
 }

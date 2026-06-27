@@ -198,6 +198,8 @@ pub fn run() {
             commands::bootstrap_cross_signing,
             commands::get_user_devices,
             commands::list_sessions,
+            commands::rename_device,
+            commands::delete_devices,
             commands::verification_prompt_target,
             commands::log_verification_prompt_choice,
             commands::start_sas_verification,
