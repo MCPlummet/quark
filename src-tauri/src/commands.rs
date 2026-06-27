@@ -1531,6 +1531,14 @@ pub async fn get_user_devices(
     crate::matrix::crypto::get_user_verification_statuses(&client, &user_id).await
 }
 
+#[tauri::command]
+pub async fn list_sessions(
+    state: State<'_, MatrixState>,
+) -> Result<Vec<crate::matrix::devices::SessionInfo>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::devices::list_sessions(&client).await
+}
+
 /// Decide whether the post-login "verify this session" prompt should be shown,
 /// logging the reason at INFO so the decision is visible in the app log.
 ///
