@@ -65,6 +65,7 @@ mod imp {
     /// other's session and forces a re-sync. Tagging each entry with its data
     /// dir binds the keyring secret to the store it actually belongs to. (A hash
     /// rather than the raw path keeps the home directory out of the keyring UI.)
+    #[cfg(not(target_os = "ios"))]
     fn dir_tag(data_dir: &Path) -> String {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for b in data_dir.to_string_lossy().as_bytes() {
@@ -72,6 +73,19 @@ mod imp {
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         }
         format!("{hash:016x}")
+    }
+
+    /// iOS keeps the app data dir under a per-install randomized container UUID
+    /// (`/var/mobile/Containers/Data/Application/<UUID>/…`), so the path changes
+    /// on every reinstall. Hashing it would mint a brand-new keyring account each
+    /// time and orphan the session that's still sitting in the Keychain — Keychain
+    /// entries survive app reinstalls, so the login *should* persist. The
+    /// multi-install disambiguation the hash provides on desktop is moot here:
+    /// there's only ever one Quark install per device and the Keychain is already
+    /// app-scoped. A constant tag keeps the account name stable across reinstalls.
+    #[cfg(target_os = "ios")]
+    fn dir_tag(_data_dir: &Path) -> String {
+        "ios".to_string()
     }
 
     fn store_key_account(data_dir: &Path) -> String {

@@ -26,6 +26,15 @@ Quark's version string lives in **six** places. The project guidance (CLAUDE.md,
 
 This timing supersedes any "bump whenever shipping a feature or fix" phrasing — the per-commit reading caused the drift, so we bump per-merge instead. (CLAUDE.md's Versioning section is aligned with this.)
 
+### Don't re-bump a version that hasn't shipped yet
+
+Before bumping, check whether the **current** in-tree version has actually been released. A version ships when CI tags its release commit `vX.Y.Z` (`release.yml` runs on `v*` tags). If the current version was never tagged, it's still **unreleased** — your new changes can ride that pending version, and bumping again just mints a number that never ships.
+
+- The version in `package.json` is `0.15.3` but there's no `v0.15.3` tag, and your branch is **another patch fix** → **don't bump.** `0.15.3` already covers patch-level work; it just hasn't gone out yet.
+- Same situation, but your branch adds a **feature** while the pending `0.15.3` is only a patch ahead of the last release → **do bump**, to `minor` (`0.16.0`). You're *escalating the SemVer tier* of the unreleased version, not stacking a redundant increment.
+
+The script enforces this: it aborts a redundant bump of an unreleased version (one whose tier doesn't exceed what the pending version already advanced past the last release) and tells you why. It relies on release tags being present locally, so `git fetch --tags` first if you're unsure. To bump anyway, re-run with `ALLOW_UNSHIPPED_BUMP=1`.
+
 ## SemVer rule (from CLAUDE.md)
 
 - **Feature** — new user-visible behaviour → bump **minor** (`0.4.1 → 0.5.0`)
@@ -52,10 +61,11 @@ bash .claude/skills/version-bump/bump.sh 1.0.0      # explicit version
 
 The script:
 1. Reads the current version from `package.json` (the source of truth).
-2. **Aborts if the five files don't already agree** — printing which one drifted, so you reconcile an existing mismatch rather than burying it.
+2. **Aborts if the six files don't already agree** — printing which one drifted, so you reconcile an existing mismatch rather than burying it.
 3. Computes the new version (or takes the explicit one).
-4. Rewrites all five with scoped substitutions (dependency versions in Cargo.toml/Cargo.lock are left alone).
-5. Verifies each file now reports the new version and prints the changed lines.
+4. **Aborts a redundant bump of an unreleased version** — if the current version has no `vX.Y.Z` release tag and the requested bump wouldn't escalate its SemVer tier (see ["Don't re-bump a version that hasn't shipped yet"](#dont-re-bump-a-version-that-hasnt-shipped-yet)). Override with `ALLOW_UNSHIPPED_BUMP=1`.
+5. Rewrites all six with scoped substitutions (dependency versions in Cargo.toml/Cargo.lock are left alone).
+6. Verifies each file now reports the new version and prints the changed lines.
 
 It only edits the working tree — it does **not** commit, tag, or push. Review `git diff`, then commit as usual.
 
@@ -64,5 +74,6 @@ It only edits the working tree — it does **not** commit, tag, or push. Review 
 - **Don't hand-edit just one file.** That's the exact drift this skill exists to prevent. Always go through the script.
 - **Cargo.lock**: the script updates only the `quark` entry. A later `cargo build` will reproduce the same change, so either order is fine.
 - **`reconcile to 'X' before bumping`**: the script found the files disagreeing. Set them all to the intended current version first (run the script with that explicit `X.Y.Z`, or fix by hand), then bump.
-- The script needs `perl` and `awk` (both available in the project's nix dev shell and on the host).
+- **`current version X has NOT shipped yet`**: the current version has no release tag and you're stacking a same-tier bump on top of it. Usually the right move is *not* to bump — let your changes ride the pending version. Only override (`ALLOW_UNSHIPPED_BUMP=1`) if you genuinely need a fresh version number anyway.
+- The script needs `perl`, `awk`, and `git` (`git` is used only to read release tags for the unshipped-version check; outside a git repo that check is skipped). It runs on bash 3.2 (macOS system bash) as well as the nix dev shell's bash 5.
 - It does not touch `DESIGN.md` changelog entries or git tags — handle those separately if your release flow needs them.

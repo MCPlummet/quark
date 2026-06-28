@@ -37,6 +37,36 @@ PLIST="src-tauri/gen/apple/quark_iOS/Info.plist"
 
 die() { echo "version-bump: $*" >&2; exit 1; }
 
+# ── "Has the current version shipped?" helpers ──────────────────────────────
+# A version ships when CI tags its release commit `vX.Y.Z` (release.yml runs on
+# `v*` tags). If the in-tree version was never tagged it is still UNRELEASED:
+# further same-tier changes can ride it, and bumping again just mints a version
+# that never ships. We bump an unreleased version only to ESCALATE its SemVer
+# tier (e.g. the pending version is a patch but this branch adds a feature).
+tier_rank() { case "$1" in major) echo 3 ;; minor) echo 2 ;; patch) echo 1 ;; *) echo 0 ;; esac; }
+tier_name() { case "$1" in 3) echo major ;; 2) echo minor ;; 1) echo patch ;; *) echo none ;; esac; }
+
+current_shipped() { git rev-parse -q --verify "refs/tags/v$CURRENT" >/dev/null 2>&1; }
+
+# Highest released version (ignores -beta/-rc pre-release tags).
+last_shipped() {
+  git tag -l 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
+    | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
+}
+
+# Tier by which CURRENT already advanced beyond the last shipped release.
+# (No releases at all ⇒ max tier: any bump is redundant pre-first-ship.)
+advanced_tier() {
+  local last="$1" lM lm lp
+  [[ -z "$last" ]] && { echo 3; return; }
+  IFS=. read -r lM lm lp <<<"$last"
+  if   [[ "$MAJ" -ne "$lM" ]]; then echo 3
+  elif [[ "$MIN" -ne "$lm" ]]; then echo 2
+  elif [[ "$PAT" -ne "$lp" ]]; then echo 1
+  else echo 0; fi
+}
+
 # ── Read the current version from each file (package.json is the source of truth) ──
 read_pkg()   { grep -m1 '"version"' "$PKG_JSON"   | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'; }
 read_tauri() { grep -m1 '"version"' "$TAURI_CONF" | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'; }
@@ -53,18 +83,15 @@ CURRENT="$(read_pkg)"
 [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "could not parse current version from $PKG_JSON (got '$CURRENT')"
 
 # ── All five must already agree, or we'd be papering over an existing drift ──
-declare -A FOUND=(
-  [$PKG_JSON]="$(read_pkg)"
-  [$TAURI_CONF]="$(read_tauri)"
-  [$CARGO_TOML]="$(read_cargo)"
-  [$CARGO_LOCK]="$(read_lock)"
-  [$README]="$(read_readme)"
-  [$PLIST]="$(read_plist)"
-)
+# Parallel indexed arrays (not an associative map): macOS ships bash 3.2, which
+# has no `declare -A`. Indexed arrays + `${!arr[@]}` work there and in the nix
+# dev shell's bash 5 alike, so the drift check actually runs on both.
+FILES=("$PKG_JSON" "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK" "$README" "$PLIST")
+FOUND=("$(read_pkg)" "$(read_tauri)" "$(read_cargo)" "$(read_lock)" "$(read_readme)" "$(read_plist)")
 drift=0
-for f in "${!FOUND[@]}"; do
-  if [[ "${FOUND[$f]}" != "$CURRENT" ]]; then
-    echo "  out of sync: $f has '${FOUND[$f]}' (expected '$CURRENT')" >&2
+for i in "${!FILES[@]}"; do
+  if [[ "${FOUND[$i]}" != "$CURRENT" ]]; then
+    echo "  out of sync: ${FILES[$i]} has '${FOUND[$i]}' (expected '$CURRENT')" >&2
     drift=1
   fi
 done
@@ -83,6 +110,34 @@ case "$arg" in
   *) die "usage: bump.sh <major|minor|patch|X.Y.Z>" ;;
 esac
 [[ "$NEW" != "$CURRENT" ]] || die "new version equals current ($CURRENT); nothing to do."
+
+# ── Don't re-bump an unreleased version for same-tier changes ───────────────
+# Skip the check outside a git repo (can't tell what shipped) or when overridden.
+if git rev-parse --git-dir >/dev/null 2>&1 && [[ "${ALLOW_UNSHIPPED_BUMP:-0}" != "1" ]]; then
+  if ! current_shipped; then
+    LAST="$(last_shipped)"
+    ADV="$(advanced_tier "$LAST")"
+    REQ="$(tier_rank "$arg")"   # 0 for an explicit X.Y.Z — never blocked
+    if [[ "$REQ" -ne 0 && "$REQ" -le "$ADV" ]]; then
+      {
+        echo "version-bump: current version $CURRENT has NOT shipped yet —"
+        if [[ -n "$LAST" ]]; then
+          echo "  last released: v$LAST  (and $CURRENT is already a $(tier_name "$ADV")-level bump ahead of it)"
+        else
+          echo "  no release tags found — nothing has shipped yet, so $CURRENT will be the first release"
+        fi
+        echo "  Another '$arg' bump would mint a version that never ships. Additional"
+        echo "  ${arg}-level changes can ride the pending $CURRENT release — no bump needed."
+        echo "  Bump only to ESCALATE the tier (e.g. the branch adds a feature and the"
+        echo "  pending version is just a patch: run 'minor')."
+        echo
+        echo "  If you expected v$CURRENT to be tagged, run 'git fetch --tags' and retry."
+        echo "  To bump anyway, re-run with ALLOW_UNSHIPPED_BUMP=1."
+      } >&2
+      exit 1
+    fi
+  fi
+fi
 
 echo "version-bump: $CURRENT -> $NEW"
 
