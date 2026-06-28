@@ -198,7 +198,6 @@ pub fn run() {
             commands::bootstrap_cross_signing,
             commands::reset_cross_signing,
             commands::get_key_backup_status,
-            commands::request_user_verification,
             commands::get_user_devices,
             commands::list_sessions,
             commands::rename_device,

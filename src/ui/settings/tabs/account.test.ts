@@ -14,9 +14,14 @@ vi.mock("../../../ipc/index.js", () => ({
   getKeyBackupStatus: vi.fn(async () => ({ enabled: true, exists_on_server: true })),
 }));
 
+vi.mock("../../../app/actions/crypto.js", () => ({
+  startVerification: vi.fn(async () => {}),
+}));
+
 import { accountTab } from "./account.js";
 import { makeControls } from "../controls.js";
 import * as ipc from "../../../ipc/index.js";
+import * as cryptoActions from "../../../app/actions/crypto.js";
 
 async function tick(): Promise<void> {
   await new Promise<void>((r) => setTimeout(r, 0));
@@ -53,6 +58,45 @@ describe("accountTab", () => {
     const el = await render();
     expect(el.textContent).toMatch(/backup/i);
     expect(el.textContent).toMatch(/server/i);
+  });
+
+  it("calls startVerification with the typed user id when [verify] is clicked", async () => {
+    const closeSpy = vi.fn();
+    const content = document.createElement("div");
+    document.body.appendChild(content);
+    await accountTab.build({ content, controls: makeControls(), isMobile: false, close: closeSpy, dispatch: vi.fn() });
+    await tick();
+
+    const verifyInput = content.querySelector<HTMLInputElement>("input[placeholder='@user:server']");
+    expect(verifyInput).toBeTruthy();
+
+    verifyInput!.value = "@bob:example.org";
+    verifyInput!.dispatchEvent(new Event("input"));
+
+    const verifyBtn = btn(content, "[verify]");
+    expect(verifyBtn).toBeTruthy();
+    verifyBtn!.click();
+    await tick();
+
+    expect(cryptoActions.startVerification).toHaveBeenCalledWith("@bob:example.org");
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it("does NOT call startVerification when the user id is invalid (no @)", async () => {
+    const content = document.createElement("div");
+    document.body.appendChild(content);
+    await accountTab.build({ content, controls: makeControls(), isMobile: false, close: vi.fn(), dispatch: vi.fn() });
+    await tick();
+
+    const verifyInput = content.querySelector<HTMLInputElement>("input[placeholder='@user:server']");
+    verifyInput!.value = "notavalidid";
+    verifyInput!.dispatchEvent(new Event("input"));
+
+    const verifyBtn = btn(content, "[verify]");
+    verifyBtn!.click();
+    await tick();
+
+    expect(cryptoActions.startVerification).not.toHaveBeenCalled();
   });
 
   it("removing an other session opens a confirm dialog, then runs the UIAA password flow", async () => {

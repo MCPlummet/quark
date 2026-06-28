@@ -23,6 +23,7 @@ import { ConfirmDialog } from "../../ConfirmDialog.js";
 import type { ConfirmOpts } from "../../ConfirmDialog.js";
 import { PasswordPromptDialog } from "../../PasswordPromptDialog.js";
 import { showSuccess, showError } from "../../NotificationToast.js";
+import { startVerification } from "../../../app/actions/crypto.js";
 import type { SettingsTab } from "../types.js";
 
 function msgOf(e: unknown): string {
@@ -260,6 +261,28 @@ export const accountTab: SettingsTab = {
         "[reset cross-signing]",
         "Reset cross-signing",
         () => void resetCrossSigningFlow(),
+      ));
+
+      // ── Verify another user ──────────────────────────────────────────────
+      let verifyUserId = "";
+      security.appendChild(controls.textRow(
+        "Verify user",
+        "",
+        "@user:server",
+        (v) => { verifyUserId = v; },
+      ));
+      security.appendChild(controls.dispatchButton(
+        "[verify]",
+        "Verify another user",
+        () => {
+          const id = verifyUserId.trim();
+          if (!id || !id.startsWith("@")) {
+            showError("Enter a user ID like @user:server");
+            return;
+          }
+          ctx.close();
+          void startVerification(id);
+        },
       ));
       content.appendChild(security);
 

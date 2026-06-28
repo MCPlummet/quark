@@ -1539,14 +1539,6 @@ pub async fn get_key_backup_status(
     crate::matrix::crypto::get_key_backup_status(&client).await
 }
 
-#[tauri::command]
-pub async fn request_user_verification(
-    state: State<'_, MatrixState>,
-    user_id: String,
-) -> Result<String, String> {
-    let client = get_client(&state)?;
-    crate::matrix::crypto::request_user_verification(&client, &user_id).await
-}
 
 #[tauri::command]
 pub async fn get_user_devices(

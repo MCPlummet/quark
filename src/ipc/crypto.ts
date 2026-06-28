@@ -115,14 +115,6 @@ export async function getKeyBackupStatus(): Promise<KeyBackupStatus> {
 }
 
 /**
- * Request an interactive verification with another user.
- * Returns the flow ID of the resulting VerificationRequest.
- */
-export async function requestUserVerification(userId: string): Promise<string> {
-  return invoke<string>("request_user_verification", { userId });
-}
-
-/**
  * Decide whether to show the post-login "verify this session" prompt. Returns
  * the own user ID to verify against when the prompt should appear, or null to
  * skip (the backend logs the skip reason at INFO). Matches the Rust

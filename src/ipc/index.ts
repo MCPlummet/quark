@@ -87,7 +87,6 @@ export {
   bootstrapCrossSigning,
   resetCrossSigning,
   getKeyBackupStatus,
-  requestUserVerification,
   getUserDevices,
   startSasVerification,
   acceptVerificationRequest,

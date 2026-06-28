@@ -404,36 +404,6 @@ pub async fn reset_cross_signing(client: &Client, password: Option<String>) -> R
     Ok(())
 }
 
-/// Request an interactive verification with another user.
-///
-/// Sends a `m.key.verification.request` event to a DM with the target user
-/// (creating one if needed). Returns the flow ID of the resulting
-/// `VerificationRequest`.
-pub async fn request_user_verification(
-    client: &Client,
-    user_id_str: &str,
-) -> Result<String, String> {
-    let user_id = UserId::parse(user_id_str).map_err(|e| format!("Invalid user ID: {e}"))?;
-
-    let identity = client
-        .encryption()
-        .get_user_identity(&user_id)
-        .await
-        .map_err(|e| format!("Failed to get user identity: {e}"))?
-        .ok_or_else(|| {
-            format!(
-                "No verifiable identity found for {user_id_str} (is the user known/tracked?)"
-            )
-        })?;
-
-    let request = identity
-        .request_verification()
-        .await
-        .map_err(|e| format!("Failed to request verification: {e}"))?;
-
-    Ok(request.flow_id().to_string())
-}
-
 /// Bootstrap cross-signing keys.
 ///
 /// First attempts without authentication. If the server requires UIAA and a
