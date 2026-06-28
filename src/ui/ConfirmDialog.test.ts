@@ -45,6 +45,16 @@ describe("ConfirmDialog", () => {
     expect(await p2).toBe(false);
   });
 
+  it("settles a pending promise when called again", async () => {
+    d = new ConfirmDialog();
+    document.body.appendChild(d.getElement());
+    const a = d.confirm({ title: "A", message: "first" });
+    const b = d.confirm({ title: "B", message: "second" });
+    (d.getElement().querySelector("[data-act='confirm']") as HTMLButtonElement).click();
+    expect(await a).toBe(false);
+    expect(await b).toBe(true);
+  });
+
   it("confirm button has danger class when opts.danger is true", async () => {
     d = new ConfirmDialog();
     document.body.appendChild(d.getElement());

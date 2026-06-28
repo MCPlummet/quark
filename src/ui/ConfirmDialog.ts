@@ -20,9 +20,6 @@ export class ConfirmDialog extends DialogBase {
   private _resolve: ((v: boolean) => void) | null = null;
   private _settled = false;
 
-  /** Body section rebuilt on every confirm() call. */
-  private _body: HTMLElement | null = null;
-
   constructor() {
     super({ prefix: "confirm-dialog", ariaLabel: "Confirm" });
   }
@@ -33,8 +30,10 @@ export class ConfirmDialog extends DialogBase {
    * button, Esc, or the backdrop).
    */
   confirm(opts: ConfirmOpts): Promise<boolean> {
-    this._rebuild(opts);
+    // Settle any pending promise from a previous call before overwriting _resolve.
+    if (this._resolve && !this._settled) this._settle(false);
     this._settled = false;
+    this._rebuild(opts);
 
     const p = new Promise<boolean>((res) => {
       this._resolve = res;
@@ -44,8 +43,6 @@ export class ConfirmDialog extends DialogBase {
   }
 
   private _rebuild(opts: ConfirmOpts): void {
-    // Remove previous body if any; keep header out of it (header is rebuilt too).
-    if (this._body) this._body.remove();
     // Clear everything and rebuild header fresh for the new title.
     this.content.innerHTML = "";
     this.header = null;
@@ -81,7 +78,6 @@ export class ConfirmDialog extends DialogBase {
 
     body.appendChild(actions);
     this.content.appendChild(body);
-    this._body = body;
   }
 
   private _settle(value: boolean): void {

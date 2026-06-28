@@ -30,8 +30,10 @@ export class PasswordPromptDialog extends DialogBase {
    * submit, or `null` if the user cancels (cancel button, Esc, backdrop).
    */
   prompt(opts: PasswordPromptOpts): Promise<string | null> {
-    this._rebuild(opts);
+    // Settle any pending promise from a previous call before overwriting _resolve.
+    if (this._resolve && !this._settled) this._settle(null);
     this._settled = false;
+    this._rebuild(opts);
 
     const p = new Promise<string | null>((res) => {
       this._resolve = res;

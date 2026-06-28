@@ -51,6 +51,18 @@ describe("PasswordPromptDialog", () => {
     await p2;
   });
 
+  it("settles a pending promise when called again", async () => {
+    d = new PasswordPromptDialog();
+    document.body.appendChild(d.getElement());
+    const a = d.prompt({ title: "A" });
+    const b = d.prompt({ title: "B" });
+    const input = d.getElement().querySelector("input[type=password]") as HTMLInputElement;
+    input.value = "typed";
+    (d.getElement().querySelector("[data-act='submit']") as HTMLButtonElement).click();
+    expect(await a).toBeNull();
+    expect(await b).toBe("typed");
+  });
+
   it("resolves the typed value when Enter pressed in the input", async () => {
     d = new PasswordPromptDialog();
     document.body.appendChild(d.getElement());
