@@ -15,6 +15,7 @@ import {
 } from "../../ipc/index.js";
 
 import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js";
+import { PasswordPromptDialog } from "../../ui/PasswordPromptDialog.js";
 
 import { getComponents } from "./context.js";
 
@@ -237,10 +238,27 @@ export async function setupCrossSigning(password?: string): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg === "UIAA_REQUIRED") {
-      showError(
-        "Server requires your password to set up cross-signing. " +
-        "Run:  :cross-sign <your-password>",
-      );
+      // The server needs the user's password (UIAA). Prompt for it and retry the
+      // bootstrap with the supplied password instead of asking them to re-run a
+      // `:cross-sign <password>` command.
+      const dlg = new PasswordPromptDialog();
+      document.body.appendChild(dlg.getElement());
+      let password: string | null;
+      try {
+        password = await dlg.prompt({
+          title: "Confirm your password",
+          message: "Your server requires your password to set up cross-signing.",
+        });
+      } finally {
+        dlg.getElement().remove();
+      }
+      if (!password) return;
+      try {
+        await bootstrapCrossSigning(password);
+        showSuccess("Cross-signing keys uploaded successfully. Your account is now set up for cross-signing.");
+      } catch (retryErr) {
+        showError(`Cross-signing setup failed: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`);
+      }
     } else {
       showError(`Cross-signing setup failed: ${msg}`);
     }

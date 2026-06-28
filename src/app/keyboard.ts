@@ -44,6 +44,7 @@ import {
   selectRoom,
   startVerification,
   setupCrossSigning,
+  logout,
 } from "./actions.js";
 import { AppState } from "./state.js";
 import {
@@ -324,6 +325,10 @@ function dispatchAction(action: string, components: AppComponents): void {
 
     case "setup-cross-signing":
       void setupCrossSigning();
+      break;
+
+    case "logout":
+      void logout();
       break;
 
     case "open-quick-nav":

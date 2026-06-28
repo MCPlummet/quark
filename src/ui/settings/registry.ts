@@ -6,6 +6,7 @@
 
 import type { SettingsTab } from "./types.js";
 import { generalTab } from "./tabs/general.js";
+import { accountTab } from "./tabs/account.js";
 import { mediaTab } from "./tabs/media.js";
 import { gifTab } from "./tabs/gif.js";
 import { emojiTab } from "./tabs/emoji.js";
@@ -14,7 +15,7 @@ import { themesTab } from "./tabs/themes.js";
 import { aboutTab } from "./tabs/about.js";
 
 export const SETTINGS_TABS: SettingsTab[] = [
-  generalTab, mediaTab, gifTab, emojiTab, notificationsTab, themesTab, aboutTab,
+  generalTab, accountTab, mediaTab, gifTab, emojiTab, notificationsTab, themesTab, aboutTab,
 ];
 
 export function visibleTabs(tabs: SettingsTab[], isMobile: boolean): SettingsTab[] {

@@ -114,11 +114,8 @@ export const generalTab: SettingsTab = {
       (v) => { draft = { ...draft, general: { ...draft.general, show_read_receipts: v } }; },
     ));
 
-    section.appendChild(controls.checkbox(
-      "Prompt to verify this session on startup (when unverified)",
-      draft.general.prompt_session_verification,
-      (v) => { draft = { ...draft, general: { ...draft.general, prompt_session_verification: v } }; },
-    ));
+    // (Session verification / cross-signing and the prompt-to-verify toggle now
+    // live in the Account tab.)
 
     // Help — the keybindings/help screen is otherwise only reachable via `?`
     // or `:help`, which mouse/touch users can't discover. Surface it here.
@@ -132,17 +129,6 @@ export const generalTab: SettingsTab = {
         ctx.dispatch("help");
       },
     ));
-
-    // Security — device verification and cross-signing are otherwise only
-    // reachable via `:verify` / `:cross-sign`, which non-vim users can't find.
-    section.appendChild(controls.sectionTitle("Security"));
-    const dispatchAndClose = (action: string) => () => {
-      // One overlay at a time: close settings before the flow takes over.
-      ctx.close();
-      ctx.dispatch(action);
-    };
-    section.appendChild(controls.dispatchButton("[verify a session]", "Verify one of your sessions", dispatchAndClose("verify-session")));
-    section.appendChild(controls.dispatchButton("[set up cross-signing]", "Set up cross-signing", dispatchAndClose("setup-cross-signing")));
 
     const actions = document.createElement("div");
     actions.className = "settings-dialog__section settings-dialog__actions";
