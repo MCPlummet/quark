@@ -133,7 +133,7 @@ export const mediaTab: SettingsTab = {
     // Actions row: save + clear buttons. Save also pushes the new in-memory caps
     // into the live caches so they apply without a restart.
     const actions = document.createElement("div");
-    actions.className = "settings-dialog__section settings-dialog__actions";
+    actions.className = "settings-dialog__actions";
     actions.appendChild(controls.saveButton(async () => {
       await setAppConfig(draft);
       applyCacheConfig(draft);
@@ -164,6 +164,6 @@ export const mediaTab: SettingsTab = {
       eventCacheBytes = updated;
     }));
 
-    section.appendChild(actions);
+    content.appendChild(actions);
   },
 };

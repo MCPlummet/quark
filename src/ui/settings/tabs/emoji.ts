@@ -41,8 +41,8 @@ export const emojiTab: SettingsTab = {
     ));
 
     const actions = document.createElement("div");
-    actions.className = "settings-dialog__section settings-dialog__actions";
+    actions.className = "settings-dialog__actions";
     actions.appendChild(controls.saveButton(() => setAppConfig(draft)));
-    section.appendChild(actions);
+    content.appendChild(actions);
   },
 };

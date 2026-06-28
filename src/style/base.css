@@ -4456,6 +4456,73 @@ body.quark-mobile .profile-edit-dialog__panel {
   background-color: var(--surface-subtle);
 }
 
+/* Back button shown only in the mobile detail view (rule below); hidden
+ * everywhere else, including desktop. */
+.settings-dialog__back {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--accent-primary);
+  cursor: pointer;
+  font-family: var(--font-family);
+  font-size: calc(var(--font-size) - 1px);
+  letter-spacing: 0.04em;
+  padding: 0 8px 0 0;
+  outline: none;
+}
+
+/* ── Vertical tab rail (main settings dialog only) ─────────────────────────────
+ * Scoped under `__body` so the shared room/space settings dialogs — which reuse
+ * `.settings-dialog__tabs`/`__tab`/`__content`/`__section` but have no `__body`
+ * — keep their horizontal tab bar. */
+.settings-dialog__body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-dialog__body .settings-dialog__tabs {
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 124px;
+  border-bottom: none;
+  border-right: var(--border-width) solid var(--border-color);
+  overflow-y: auto;
+}
+
+.settings-dialog__body .settings-dialog__tab {
+  width: 100%;
+  text-align: left;
+  white-space: nowrap;
+  border-right: none;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+/* Content owns the horizontal padding so tabs that wrap their rows in a
+ * `__section` (general, media…) and tabs that append rows directly (account,
+ * about) align at the same gutter. Sections/actions then add vertical rhythm
+ * and dividers only. */
+.settings-dialog__body .settings-dialog__content {
+  padding: 6px 14px;
+}
+
+.settings-dialog__body .settings-dialog__section {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.settings-dialog__body .settings-dialog__actions {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The actions bar carries its own top divider; drop the preceding section's
+ * bottom border so the two don't stack into a double line. */
+.settings-dialog__body .settings-dialog__section:has(+ .settings-dialog__actions) {
+  border-bottom: none;
+}
+
 .settings-dialog__content {
   flex: 1;
   overflow-y: auto;
@@ -4623,6 +4690,8 @@ body.quark-mobile .profile-edit-dialog__panel {
   display: flex;
   gap: 8px;
   padding: 8px 14px;
+  border-top: var(--border-width) solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .settings-dialog__btn {
@@ -6681,6 +6750,7 @@ body.quark-mobile .settings-dialog__panel {
   padding-right: env(safe-area-inset-right);
 }
 
+/* Room/space settings dialogs keep their horizontal, scrollable tab bar. */
 body.quark-mobile .settings-dialog__tabs {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -6694,6 +6764,46 @@ body.quark-mobile .settings-dialog__tabs::-webkit-scrollbar {
 body.quark-mobile .settings-dialog__tab {
   flex-shrink: 0;
   padding: 10px 14px;
+}
+
+/* ── Main settings dialog: two-screen mobile layout ───────────────────────────
+ * The `__body` collapses to a single pane. List view shows the (vertical) tab
+ * rail full-width and hides the content; the `--detail` modifier flips it to
+ * show one tab's content with a back button. All scoped under `__body` so the
+ * room/space dialogs above are unaffected. */
+body.quark-mobile .settings-dialog__body {
+  display: block;
+}
+
+body.quark-mobile .settings-dialog__body .settings-dialog__tabs {
+  flex-direction: column;
+  width: 100%;
+  border-right: none;
+  overflow-x: visible;
+}
+
+body.quark-mobile .settings-dialog__body .settings-dialog__tab {
+  width: 100%;
+  text-align: left;
+  white-space: nowrap;
+  border-right: none;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+body.quark-mobile .settings-dialog__body .settings-dialog__content {
+  display: none;
+}
+
+body.quark-mobile .settings-dialog__panel--detail .settings-dialog__tabs {
+  display: none;
+}
+
+body.quark-mobile .settings-dialog__panel--detail .settings-dialog__content {
+  display: block;
+}
+
+body.quark-mobile .settings-dialog__panel--detail .settings-dialog__back {
+  display: inline-block;
 }
 
 /* Bottom-sheet variant of the quick-react picker: docks to the bottom of the

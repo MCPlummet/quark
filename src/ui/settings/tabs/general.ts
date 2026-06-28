@@ -130,8 +130,10 @@ export const generalTab: SettingsTab = {
       },
     ));
 
+    // Save bar lives outside the content section so it aligns at the gutter
+    // (not double-indented) and reads as a footer to the pane.
     const actions = document.createElement("div");
-    actions.className = "settings-dialog__section settings-dialog__actions";
+    actions.className = "settings-dialog__actions";
     actions.appendChild(controls.saveButton(async () => {
       await setAppConfig(draft);
       // Apply runtime-visible changes immediately (the vim-mode state listener
@@ -142,6 +144,6 @@ export const generalTab: SettingsTab = {
       AppState.set("showReadReceipts", draft.general.show_read_receipts);
       if (receiptsChanged) void applyReadReceiptVisibility();
     }));
-    section.appendChild(actions);
+    content.appendChild(actions);
   },
 };

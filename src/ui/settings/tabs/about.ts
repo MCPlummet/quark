@@ -58,10 +58,13 @@ export const aboutTab: SettingsTab = {
 
       // Save only the updater section back into the full current config so we
       // never overwrite other sections (general, sync, media, …) with defaults.
-      content.appendChild(controls.saveButton(async () => {
+      const actions = document.createElement("div");
+      actions.className = "settings-dialog__actions";
+      actions.appendChild(controls.saveButton(async () => {
         const current = await getAppConfig();
         await setAppConfig({ ...current, updater: draft.updater });
       }));
+      content.appendChild(actions);
 
       // Load actual persisted config and sync the draft + controls, but only
       // if the user hasn't already made edits during this async window.

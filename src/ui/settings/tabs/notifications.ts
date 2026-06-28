@@ -94,7 +94,7 @@ export const notificationsTab: SettingsTab = {
           "Per-category sound & importance (Messages / Mentions) is configured in Android Settings → Notifications.";
         bgSection.appendChild(hint);
 
-        section.appendChild(bgSection);
+        content.appendChild(bgSection);
       }
     } catch {
       // Non-critical — the rest of the tab still works.
@@ -141,7 +141,7 @@ export const notificationsTab: SettingsTab = {
     qhSection.appendChild(qhRow);
 
     const footer = document.createElement("div");
-    footer.className = "settings-dialog__section settings-dialog__actions";
+    footer.className = "settings-dialog__actions";
 
     const saveBtn = controls.saveButton(async () => {
       let quiet_hours = null;
@@ -172,7 +172,7 @@ export const notificationsTab: SettingsTab = {
     });
     footer.appendChild(testBtn);
 
-    section.appendChild(qhSection);
-    section.appendChild(footer);
+    content.appendChild(qhSection);
+    content.appendChild(footer);
   },
 };
