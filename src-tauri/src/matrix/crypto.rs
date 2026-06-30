@@ -345,6 +345,65 @@ pub async fn get_cross_signing_status(client: &Client) -> Result<CrossSigningInf
     })
 }
 
+/// Key backup status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyBackupStatus {
+    pub enabled: bool,
+    pub exists_on_server: bool,
+}
+
+/// Get key backup status (read-only).
+pub async fn get_key_backup_status(client: &Client) -> Result<KeyBackupStatus, String> {
+    let backups = client.encryption().backups();
+    let enabled = backups.are_enabled().await;
+    let exists_on_server = backups.exists_on_server().await.unwrap_or(false);
+    Ok(KeyBackupStatus { enabled, exists_on_server })
+}
+
+/// Reset cross-signing identity.
+///
+/// Rotates the cross-signing keys. Requires UIAA (password) on most servers.
+/// Returns `Err("UIAA_REQUIRED")` when the server needs a password but none was
+/// supplied — the frontend should prompt the user and retry with a password.
+/// OIDC-based UIAA is not supported and returns an error.
+pub async fn reset_cross_signing(client: &Client, password: Option<String>) -> Result<(), String> {
+    use matrix_sdk::encryption::CrossSigningResetAuthType;
+
+    let Some(handle) = client
+        .encryption()
+        .reset_cross_signing()
+        .await
+        .map_err(|e| format!("Failed to start cross-signing reset: {e}"))?
+    else {
+        return Ok(());
+    };
+
+    match handle.auth_type() {
+        CrossSigningResetAuthType::Uiaa(uiaa_info) => {
+            let Some(pwd) = password else {
+                return Err("UIAA_REQUIRED".to_string());
+            };
+            let user_id = client.user_id().ok_or("Not logged in")?;
+            let mut pw = uiaa::Password::new(
+                uiaa::UserIdentifier::UserIdOrLocalpart(user_id.localpart().to_owned()),
+                pwd,
+            );
+            pw.session = uiaa_info.session.clone();
+            handle
+                .auth(Some(uiaa::AuthData::Password(pw)))
+                .await
+                .map_err(|e| format!("Failed to reset cross-signing: {e}"))?;
+        }
+        CrossSigningResetAuthType::Oidc(_) => {
+            return Err(
+                "Cross-signing reset via OIDC is not supported in this client".to_string(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Bootstrap cross-signing keys.
 ///
 /// First attempts without authentication. If the server requires UIAA and a
