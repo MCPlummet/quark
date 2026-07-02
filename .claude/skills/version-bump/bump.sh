@@ -50,8 +50,10 @@ current_shipped() { git rev-parse -q --verify "refs/tags/v$CURRENT" >/dev/null 2
 
 # Highest released version (ignores -beta/-rc pre-release tags).
 last_shipped() {
+  # grep exits 1 when no release tags exist; without `|| true` pipefail would
+  # kill the script here instead of reaching the "nothing has shipped" message.
   git tag -l 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' \
+    | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sed 's/^v//' \
     | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
 }
 
