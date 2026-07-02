@@ -59,6 +59,32 @@ See [DESIGN.md](DESIGN.md) for the authoritative spec and [CLAUDE.md](CLAUDE.md)
 
 A [Nix flake](flake.nix) is provided — `direnv allow` (or `nix develop`) drops you into a shell with everything installed.
 
+### Install with Nix
+
+The flake also builds Quark as a package (Linux):
+
+```bash
+nix run github:mcplummet/quark    # try it without installing
+nix profile install github:mcplummet/quark
+```
+
+Or consume it declaratively from a NixOS / home-manager flake:
+
+```nix
+{
+  inputs.quark = {
+    url = "github:mcplummet/quark";
+    inputs.nixpkgs.follows = "nixpkgs"; # optional, builds against your nixpkgs
+  };
+
+  # then either add the package directly…
+  environment.systemPackages = [ inputs.quark.packages.${pkgs.system}.default ];
+
+  # …or use the overlay and refer to pkgs.quark
+  nixpkgs.overlays = [ inputs.quark.overlays.default ];
+}
+```
+
 ### Run it
 
 ```bash
