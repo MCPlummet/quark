@@ -16,6 +16,10 @@
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
 
+        # The installable package (nix/package.nix). Built with nixpkgs'
+        # stock rustPlatform — rust-overlay is only for the dev shell.
+        quark = pkgs.callPackage ./nix/package.nix { };
+
         # Rust toolchain — stable + wasm target for Tauri bundler
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" "clippy" "rustfmt" ];
@@ -93,6 +97,11 @@
         buildInputs = tauriDeps;
       in
       {
+        packages = {
+          inherit quark;
+          default = quark;
+        };
+
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs buildInputs;
 
@@ -119,5 +128,12 @@
           '';
         };
       }
-    );
+    )
+    // {
+      # For host flakes that prefer `pkgs.quark` over
+      # `inputs.quark.packages.<system>.default`.
+      overlays.default = final: prev: {
+        quark = final.callPackage ./nix/package.nix { };
+      };
+    };
 }
