@@ -1741,4 +1741,29 @@ mod tests {
         assert!(hit_in_range(0, None));
         assert!(hit_in_range(cutoff, None));
     }
+
+    #[test]
+    fn test_build_image_body_msc2530_mapping() {
+        use super::build_image_body;
+        // With a caption: body carries the caption, filename the real name.
+        assert_eq!(
+            build_image_body("cat.png", Some("look at this")),
+            ("look at this".to_string(), Some("cat.png".to_string()))
+        );
+        // Caption is trimmed.
+        assert_eq!(
+            build_image_body("cat.png", Some("  hi  ")),
+            ("hi".to_string(), Some("cat.png".to_string()))
+        );
+        // No caption → body = filename, field omitted (pre-caption wire format).
+        assert_eq!(
+            build_image_body("cat.png", None),
+            ("cat.png".to_string(), None)
+        );
+        // Whitespace-only caption counts as no caption.
+        assert_eq!(
+            build_image_body("cat.png", Some("   ")),
+            ("cat.png".to_string(), None)
+        );
+    }
 }
