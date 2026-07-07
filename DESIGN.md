@@ -257,6 +257,38 @@ Scoped maps (`tmap`, `rmap`, `pmap`) take precedence over global `nmap` when tha
 :version                     Show the current app version
 ```
 
+### Settings Dialog
+
+Opened via `:settings` or the settings UI affordance. The dialog has eight tabs, rendered in this order:
+
+| Tab | Contents |
+|-----|----------|
+| **General** | Theme selector, notification toggles, send-key behaviour, read-receipt toggles, confirm-redact toggle |
+| **Account** | Devices & Verification — see below |
+| **Media** | Image auto-load, max dimensions, cache-size limit |
+| **GIF** | Provider (Tenor / Giphy / Klipy), API key, content rating |
+| **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
+| **Notifications** | Quiet-hours window, per-room mute list |
+| **Themes** | Theme picker and hot-reload path |
+| **About** | App version, Quark on GitHub link, Updates section (desktop only — see below) |
+
+The tab strip never scrolls horizontally; long option text is constrained within each tab's panel.
+
+#### Account tab — Devices & Verification
+
+- **Session list** — all devices registered on the account, each showing: display name, last-seen timestamp + IP address, and a trust badge (verified / unverified / unknown).
+- **Rename device** — edit the display name of your current device or any other session.
+- **Remove session** — delete another device; requires password re-authentication (UIAA).
+- **Verify another user** — enter a `@user:server` Matrix ID to initiate SAS emoji verification with that user's device.
+- **Reset cross-signing** — regenerates cross-signing keys; requires password re-authentication (UIAA).
+- **Key backup status** — read-only line showing whether backup is enabled and whether a backup exists on the server (`Backup: enabled/disabled · on server: yes/no`). Enabling or restoring key backup from the settings UI is not yet supported.
+- **Prompt to verify on startup** — toggle (moved here from General).
+- **Log out** — ends the current session and returns to the login screen.
+
+#### About tab
+
+Shows the running app version, a "Quark on GitHub" link (opens in the system browser), and the **Updates** section. The Updates section (release channel dropdown + auto-check toggle) is shown on **desktop only**; it is hidden on mobile, where in-app updates are not supported.
+
 ---
 
 ## Matrix Feature Support
@@ -561,7 +593,7 @@ The `[updater]` section (above) holds the prefs; both are also editable live:
 
 - `:set update_channel=stable|beta`
 - `:set auto_update=true|false`
-- Settings → General → **Updates** (channel dropdown + auto-check toggle).
+- Settings → About → **Updates** (channel dropdown + auto-check toggle; desktop only — hidden on mobile).
 
 ### Platform scope
 

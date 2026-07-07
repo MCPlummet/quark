@@ -6,7 +6,7 @@ use crate::{
     gif::GifResult,
     matrix::{
         client::{MatrixState, OwnProfile, SyncState},
-        crypto::{CrossSigningInfo, SasInfo, VerificationStatus},
+        crypto::{CrossSigningInfo, KeyBackupStatus, SasInfo, VerificationStatus},
         emoji::EmojiPack,
         media::MediaDownload,
         reactions::ReactionGroup,
@@ -1528,12 +1528,58 @@ pub async fn bootstrap_cross_signing(
 }
 
 #[tauri::command]
+pub async fn reset_cross_signing(
+    state: State<'_, MatrixState>,
+    password: Option<String>,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::crypto::reset_cross_signing(&client, password).await
+}
+
+#[tauri::command]
+pub async fn get_key_backup_status(
+    state: State<'_, MatrixState>,
+) -> Result<KeyBackupStatus, String> {
+    let client = get_client(&state)?;
+    crate::matrix::crypto::get_key_backup_status(&client).await
+}
+
+
+#[tauri::command]
 pub async fn get_user_devices(
     state: State<'_, MatrixState>,
     user_id: String,
 ) -> Result<Vec<VerificationStatus>, String> {
     let client = get_client(&state)?;
     crate::matrix::crypto::get_user_verification_statuses(&client, &user_id).await
+}
+
+#[tauri::command]
+pub async fn list_sessions(
+    state: State<'_, MatrixState>,
+) -> Result<Vec<crate::matrix::devices::SessionInfo>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::devices::list_sessions(&client).await
+}
+
+#[tauri::command]
+pub async fn rename_device(
+    state: State<'_, MatrixState>,
+    device_id: String,
+    name: String,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::devices::rename_device(&client, &device_id, &name).await
+}
+
+#[tauri::command]
+pub async fn delete_devices(
+    state: State<'_, MatrixState>,
+    device_ids: Vec<String>,
+    password: Option<String>,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::devices::delete_devices(&client, device_ids, password).await
 }
 
 /// Decide whether the post-login "verify this session" prompt should be shown,
