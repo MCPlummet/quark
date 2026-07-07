@@ -3,6 +3,7 @@
 // ─── Shared types ─────────────────────────────────────────────────────────────
 export type {
   SessionInfo,
+  DeviceSessionInfo,
   OwnProfile,
   RoomInfo,
   CreateRoomOptions,
@@ -14,6 +15,7 @@ export type {
   MediaDownload,
   VerificationStatus,
   CrossSigningInfo,
+  KeyBackupStatus,
   SasInfo,
   SpaceChild,
   ThreadRoot,
@@ -83,6 +85,8 @@ export {
   getVerificationStatus,
   getCrossSigningStatus,
   bootstrapCrossSigning,
+  resetCrossSigning,
+  getKeyBackupStatus,
   getUserDevices,
   startSasVerification,
   acceptVerificationRequest,
@@ -127,6 +131,9 @@ export { loadTheme, listCustomThemes, parseQuarkrc } from "./config.js";
 export type { CustomThemeEntry } from "./config.js";
 export { getAppConfig, setAppConfig, DEFAULT_APP_CONFIG } from "./app_config.js";
 export type { AppConfig, GeneralConfig, SyncConfig, MediaConfig, GifConfig, GifRating, EmojiConfig, CacheConfig, UpdaterConfig } from "./app_config.js";
+
+// ─── Devices / Sessions ───────────────────────────────────────────────────────
+export { listSessions, renameDevice, deleteDevices } from "./devices.js";
 
 // ─── Updates ──────────────────────────────────────────────────────────────────
 export { updateCheck, updateInstall } from "./updater.js";

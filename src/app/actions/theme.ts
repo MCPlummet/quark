@@ -6,7 +6,7 @@ import { loadTheme as ipcLoadTheme } from "../../ipc/index.js";
 import { applyTheme } from "../../theme/loader.js";
 import { BUILTIN_THEME_MAP } from "../../theme/builtins.js";
 import { getAppConfig } from "../../ipc/app_config.js";
-import { setCurrentThemeName } from "../../ui/SettingsDialog.js";
+import { setCurrentThemeName } from "../../ui/settings/tabs/themes.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 

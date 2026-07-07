@@ -492,6 +492,17 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         { user_id: args?.userId as string ?? "@alice:matrix.org", device_id: "ALICEPHONE", display_name: "Element iOS", is_verified: false, is_cross_signed: false, trust_level: "unverified" },
         { user_id: args?.userId as string ?? "@alice:matrix.org", device_id: "ALICEDESKTOP", display_name: null, is_verified: true, is_cross_signed: false, trust_level: "self-verified" },
       ];
+    case "list_sessions":
+      return [
+        { device_id: "MOCKDEVICE", display_name: "Quark on Linux", last_seen_ts: null, last_seen_ip: null, is_current: true, is_verified: true, is_cross_signed: true, trust_level: "cross-signed" },
+        { device_id: "PHONE123", display_name: "Element Android", last_seen_ts: Date.now() - 3 * 24 * 60 * 60_000, last_seen_ip: "203.0.113.42", is_current: false, is_verified: false, is_cross_signed: false, trust_level: "unverified" },
+      ];
+    case "rename_device":
+      return null;
+    case "delete_devices":
+      // Simulate UIAA: throw sentinel when no password supplied, succeed when password provided.
+      if (args?.password) return null;
+      throw "UIAA_REQUIRED";
     case "start_sas_verification":
       return "mock-flow-id-" + Date.now();
     case "accept_verification_request":
@@ -514,6 +525,11 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       };
     }
 
+    case "reset_cross_signing":
+      if (args?.password) return null;
+      throw "UIAA_REQUIRED";
+    case "get_key_backup_status":
+      return { enabled: true, exists_on_server: true };
     case "get_pinned_events":
       return [
         { event_id: "$pin1:matrix.org", sender: "@alice:matrix.org", body: "Check out the new release notes!", formatted_body: null, timestamp: Date.now() - 24 * 60 * 60_000, encrypted: false },

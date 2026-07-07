@@ -204,6 +204,20 @@ export interface MediaDownload {
   filename: string | null;
 }
 
+// ─── Devices / Sessions ───────────────────────────────────────────────────────
+
+/** A user session/device with merged trust status — matches matrix::devices::SessionInfo */
+export interface DeviceSessionInfo {
+  device_id: string;
+  display_name: string | null;
+  last_seen_ts: number | null;
+  last_seen_ip: string | null;
+  is_current: boolean;
+  is_verified: boolean;
+  is_cross_signed: boolean;
+  trust_level: string;
+}
+
 // ─── Crypto ───────────────────────────────────────────────────────────────────
 
 /** Verification status for a device — matches matrix::crypto::VerificationStatus */
@@ -227,6 +241,14 @@ export interface CrossSigningInfo {
   has_self_signing: boolean;
   has_user_signing: boolean;
   is_complete: boolean;
+}
+
+/**
+ * Key backup status — matches matrix::crypto::KeyBackupStatus.
+ */
+export interface KeyBackupStatus {
+  enabled: boolean;
+  exists_on_server: boolean;
 }
 
 /**
