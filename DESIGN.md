@@ -151,6 +151,8 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Insert        | `Ctrl-e`      | Open emoji/sticker picker     |
 | Insert        | `Ctrl-g`      | Open GIF search               |
 | Insert        | `Tab`         | Autocomplete :shortcode:      |
+| Insert        | `Enter`       | Send staged image (typed text = caption) |
+| Insert        | `Esc`         | Discard staged image (first press)       |
 | Picker        | `j/k/h/l`     | Navigate grid                 |
 | Picker        | `Enter`       | Select emoji/sticker/GIF      |
 | Picker        | `/`           | Search within picker          |
@@ -392,6 +394,22 @@ When the user types `:` followed by characters in insert mode, an inline autocom
 ### Media Handling
 - Authenticated media download via `/_matrix/client/v1/media/download/`
 - Inline image previews in timeline (configurable max dimensions)
+- **Image attachments & captions (MSC2530):** pasting an image — or picking one
+  via the attach button — stages it in a preview above the compose bar rather
+  than sending immediately. Enter (or the ➤ / preview Send button) sends it;
+  any text typed first becomes the caption, sent as a single `m.image` with
+  `body` = caption and `filename` = original name (no caption ⇒ `body` =
+  filename, `filename` omitted). The first `Esc` discards the staged image
+  (modal-close semantics — mode, reply, and edit state untouched); staging a
+  second image replaces the first, keeping the typed caption. An armed reply
+  attaches to the image send and clears on success; a failed send restores the
+  staged image and caption to the composer. Committing an inline edit takes
+  precedence — the staged image stays pending. Staged images persist across
+  room switches like text drafts and send to the room current at send time.
+  Videos and non-image files still upload immediately. Known limitation: with
+  a thread open, images post to the main timeline (no thread relation).
+- Hovering a message reveals the exact send time (HH:MM:SS) in the action bar;
+  its tooltip (and the header timestamps') shows the full localized date
 - Inline video playback — `m.video` plays inline and seekable: a loopback HTTP server (Range requests) on Linux/WebKitGTK, the asset protocol on macOS/Windows/iOS; graceful fallback to the external player on decode failure
 - Sticker rendering (larger than emoji, centered)
 - Image uploads with thumbnail generation

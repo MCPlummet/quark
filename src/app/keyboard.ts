@@ -34,7 +34,7 @@ import {
   openQuickReactPicker,
   setupReactionChipHandler,
   setupMessageActionHandlers,
-  handleImagePaste,
+  sendPendingImage,
   handleFilePick,
   setupStatusBar,
   editStatus,
@@ -47,6 +47,7 @@ import {
   logout,
 } from "./actions.js";
 import { AppState } from "./state.js";
+import { resolveComposeSubmit } from "./compose_submit.js";
 import {
   enterMessageTextSelect,
   enterComposeTextSelect,
@@ -691,22 +692,38 @@ function handleTextSelectKeydown(e: KeyboardEvent, components: AppComponents): b
 // ── Insert mode keyboard handlers ─────────────────────────────────────────────
 
 /**
- * Submit the compose box: commit an in-progress edit, or send a new message.
- * Shared by the Enter key and the dedicated send button (#4).
+ * Submit the compose box: commit an in-progress edit, send a staged image
+ * (typed text becomes its caption), or send a new message. Shared by the
+ * Enter key, the dedicated send button (#4), and the staged-image Send button.
  */
 function submitComposeBox(components: AppComponents): void {
   const { input, shortcodePreview } = components;
   shortcodePreview.hide();
-  const body = input.getValue().trim();
-  if (!body) return;
-  const editingId = AppState.get("editingEventId");
-  if (editingId) {
-    AppState.set("editingEventId", null);
-    components.replyPreview.hide();
-    input.setValue("");
-    void editMessage(editingId, body);
-  } else {
-    void sendMessage(body);
+  const plan = resolveComposeSubmit({
+    rawValue: input.getValue(),
+    editingEventId: AppState.get("editingEventId"),
+    hasPendingImage: input.hasPendingImage(),
+  });
+  switch (plan.kind) {
+    case "none":
+      return;
+    case "edit": {
+      const editingId = AppState.get("editingEventId")!;
+      AppState.set("editingEventId", null);
+      components.replyPreview.hide();
+      input.setValue("");
+      void editMessage(editingId, plan.body);
+      return;
+    }
+    case "image": {
+      const pending = input.takePendingImage();
+      if (!pending) return;
+      input.setValue("");
+      void sendPendingImage(pending.blob, pending.filename, plan.caption ?? undefined);
+      return;
+    }
+    case "text":
+      void sendMessage(plan.body);
   }
 }
 
@@ -1081,13 +1098,16 @@ export function setupKeyboard(components: AppComponents): void {
     input.openFilePicker();
   });
 
+  // Picked images stage in the same preview as pasted ones (Enter sends, typed
+  // text becomes the caption); everything else uploads immediately.
   input.onFilePick((file) => {
-    void handleFilePick(file);
-  });
-
-  // Wire image paste in compose field
-  input.onImagePaste((blob) => {
-    void handleImagePaste(blob);
+    if (file.type.startsWith("image/")) {
+      input.showImagePreview(file, file.name);
+      modeManager.transition(Mode.Insert);
+      input.focus();
+    } else {
+      void handleFilePick(file);
+    }
   });
 
   // Wire reaction chip clicks (bubbling custom events) → sendReaction
@@ -1281,6 +1301,13 @@ export function setupKeyboard(components: AppComponents): void {
     // Escape (or Ctrl+[) always resets to Normal (if not already) and clears sequences.
     // When vim mode is disabled, Escape just closes overlays — don't leave Insert mode.
     if (e.key === "Escape" || (e.ctrlKey && e.key === "[")) {
+      // A staged image is a lightweight modal: the first Escape only discards
+      // it — mode, text-select, and reply/edit state all stay untouched.
+      if (input.discardPendingImage()) {
+        e.preventDefault();
+        keymapManager.resetSequence();
+        return;
+      }
       if (AppState.get("vimMode")) {
         // If a text-select submode is active in Visual, drop the selection
         // first (back to Normal+text-select). A second Escape exits text-select

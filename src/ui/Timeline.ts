@@ -320,6 +320,28 @@ function formatTimestamp(isoString: string): string {
   }
 }
 
+/** Exact send time (HH:MM:SS) — shown in the hover action bar. */
+function formatTimestampWithSeconds(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    const h = date.getHours().toString().padStart(2, "0");
+    const m = date.getMinutes().toString().padStart(2, "0");
+    const s = date.getSeconds().toString().padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  } catch {
+    return "";
+  }
+}
+
+/** Full localized date + time, for `title` tooltips on timestamps. */
+function formatFullTimestamp(isoString: string): string {
+  try {
+    return new Date(isoString).toLocaleString();
+  } catch {
+    return isoString;
+  }
+}
+
 const TIME_SEPARATOR_GAP_MS = 30 * 60 * 1000; // 30 minutes
 
 interface TimeSeparator {
@@ -557,7 +579,7 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     const ts = document.createElement("span");
     ts.className = "message__timestamp";
     ts.textContent = formatTimestamp(msg.timestamp);
-    ts.setAttribute("title", msg.timestamp);
+    ts.setAttribute("title", formatFullTimestamp(msg.timestamp));
     header.appendChild(ts);
 
     row.appendChild(header);
@@ -708,6 +730,13 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     actions.className = "message__actions";
     actions.setAttribute("aria-hidden", "true");
 
+    // Exact send time, revealed with the actions on hover
+    const timeEl = document.createElement("span");
+    timeEl.className = "message__actions-time";
+    timeEl.textContent = formatTimestampWithSeconds(msg.timestamp);
+    timeEl.title = formatFullTimestamp(msg.timestamp);
+    actions.appendChild(timeEl);
+
     const reactBtn = document.createElement("button");
     reactBtn.className = "message__action-btn";
     reactBtn.textContent = "😀";
@@ -792,7 +821,7 @@ function buildMessageGroup(msgs: MessageData[]): HTMLElement {
   const ts = document.createElement("span");
   ts.className = "message-group__timestamp";
   ts.textContent = formatTimestamp(first.timestamp);
-  ts.setAttribute("title", first.timestamp);
+  ts.setAttribute("title", formatFullTimestamp(first.timestamp));
   label.appendChild(ts);
 
   group.appendChild(label);

@@ -24,15 +24,16 @@ export class Input {
   private _composeBoxEl: HTMLElement;
   private _pastePreviewEl: HTMLElement;
   private _pastePreviewImg: HTMLImageElement;
+  private _pastePreviewLabelEl: HTMLSpanElement;
   private _inputBarEl: HTMLElement;
-  private _pendingPasteBlob: Blob | null = null;
+  private _pendingImageBlob: Blob | null = null;
+  private _pendingImageName: string | null = null;
   private _currentMode: string = "Normal";
   private _onEmojiClick: (() => void) | null = null;
   private _onGifClick: (() => void) | null = null;
   private _onAttachClick: (() => void) | null = null;
   private _onSendClick: (() => void) | null = null;
   private _sendBtnEl: HTMLButtonElement;
-  private _onImagePaste: ((blob: Blob) => void) | null = null;
   private _onFilePick: ((file: File) => void) | null = null;
   private _onFocusEnterInsert: (() => void) | null = null;
   private _fileInputEl: HTMLInputElement | null = null;
@@ -56,23 +57,25 @@ export class Input {
     this._pastePreviewImg.alt = "Pasted image";
     this._pastePreviewEl.appendChild(this._pastePreviewImg);
 
-    const previewLabel = document.createElement("span");
-    previewLabel.className = "paste-preview__label";
-    previewLabel.textContent = "Send image?";
-    this._pastePreviewEl.appendChild(previewLabel);
+    this._pastePreviewLabelEl = document.createElement("span");
+    this._pastePreviewLabelEl.className = "paste-preview__label";
+    this._pastePreviewLabelEl.textContent = "Send image?";
+    this._pastePreviewEl.appendChild(this._pastePreviewLabelEl);
 
+    // Send routes through the same submit path as the ➤ button so the typed
+    // caption / edit precedence logic applies regardless of affordance.
     const sendBtn = document.createElement("button");
     sendBtn.type = "button";
     sendBtn.className = "paste-preview__btn paste-preview__btn--send";
     sendBtn.textContent = "Send";
-    sendBtn.addEventListener("click", () => this._confirmPaste());
+    sendBtn.addEventListener("click", () => this._onSendClick?.());
     this._pastePreviewEl.appendChild(sendBtn);
 
     const cancelBtn = document.createElement("button");
     cancelBtn.type = "button";
     cancelBtn.className = "paste-preview__btn paste-preview__btn--cancel";
     cancelBtn.textContent = "Cancel";
-    cancelBtn.addEventListener("click", () => this._cancelPaste());
+    cancelBtn.addEventListener("click", () => this.discardPendingImage());
     this._pastePreviewEl.appendChild(cancelBtn);
 
     this._el.appendChild(this._pastePreviewEl);
@@ -122,7 +125,6 @@ export class Input {
     // On Linux/Wayland, WebKit2GTK text inputs may not expose image data
     // in clipboardData at all, so we also fall back to navigator.clipboard.read().
     this._fieldEl.addEventListener("paste", (e) => {
-      if (!this._onImagePaste) return;
       // Standard path: items
       const items = e.clipboardData?.items;
       if (items) {
@@ -131,7 +133,7 @@ export class Input {
             const blob = item.getAsFile();
             if (blob) {
               e.preventDefault();
-              this._showPastePreview(blob);
+              this.showImagePreview(blob);
               return;
             }
           }
@@ -143,7 +145,7 @@ export class Input {
         for (const file of Array.from(files)) {
           if (file.type.startsWith("image/")) {
             e.preventDefault();
-            this._showPastePreview(file);
+            this.showImagePreview(file);
             return;
           }
         }
@@ -155,7 +157,7 @@ export class Input {
           for (const ci of clipItems) {
             for (const type of ci.types) {
               if (type.startsWith("image/")) {
-                void ci.getType(type).then((blob) => this._showPastePreview(blob));
+                void ci.getType(type).then((blob) => this.showImagePreview(blob));
                 return;
               }
             }
@@ -312,11 +314,6 @@ export class Input {
     this._fileInputEl?.click();
   }
 
-  /** Register a callback invoked when an image is pasted into the compose field. */
-  onImagePaste(handler: (blob: Blob) => void): void {
-    this._onImagePaste = handler;
-  }
-
   /** Returns the inner input-bar div (used for scrollbar sync padding). */
   getInputBarElement(): HTMLElement {
     return this._inputBarEl;
@@ -418,7 +415,7 @@ export class Input {
     // When vim is disabled, keep the indicator invisible (still occupies space)
     if (!this._vimMode) {
       this._modeEl.style.visibility = "hidden";
-      this._fieldEl.placeholder = "…";
+      this._refreshPlaceholder();
       return;
     }
 
@@ -436,14 +433,9 @@ export class Input {
     const cls = MODE_CSS_CLASS[label];
     if (cls) this._modeEl.classList.add(cls);
 
-    if (label === "Command") {
-      this._fieldEl.placeholder = "command…";
+    this._refreshPlaceholder();
+    if (label === "Command" || label === "Insert") {
       this._fieldEl.focus();
-    } else if (label === "Insert") {
-      this._fieldEl.placeholder = "…";
-      this._fieldEl.focus();
-    } else {
-      this._fieldEl.placeholder = "…";
     }
   }
 
@@ -460,29 +452,85 @@ export class Input {
     this._fieldEl.addEventListener("input", () => handler(this._fieldEl.value));
   }
 
-  // ── Private ─────────────────────────────────────────────────────────────────
+  // ── Pending image (paste / attach staging) ─────────────────────────────────
 
-  private _showPastePreview(blob: Blob): void {
-    this._pendingPasteBlob = blob;
+  /**
+   * Stage an image for sending: show the preview above the compose bar and
+   * hold the blob until a submit consumes it (`takePendingImage`) or the user
+   * discards it. A second call while one is staged replaces it; any typed
+   * caption in the field is left alone.
+   */
+  showImagePreview(blob: Blob, filename?: string): void {
+    // Replacing a staged image before its object URL loaded would leak it.
+    this._revokePreviewUrl();
+    this._pendingImageBlob = blob;
+    this._pendingImageName = filename ?? null;
     const url = URL.createObjectURL(blob);
     this._pastePreviewImg.src = url;
-    // Clean up the old object URL when the image loads
-    this._pastePreviewImg.onload = () => URL.revokeObjectURL(url);
+    // Clean up the object URL when the image loads
+    this._pastePreviewImg.onload = () => {
+      this._pastePreviewImg.onload = null;
+      URL.revokeObjectURL(url);
+    };
+    const name = filename ? `Send ${filename}?` : "Send image?";
+    this._pastePreviewLabelEl.textContent = isMobile()
+      ? name
+      : `${name} — Enter to send · Esc to cancel`;
     this._pastePreviewEl.style.display = "flex";
+    this._refreshPlaceholder();
   }
 
-  private _confirmPaste(): void {
-    const blob = this._pendingPasteBlob;
-    if (blob) {
-      this._onImagePaste?.(blob);
-    }
-    this._cancelPaste();
+  /** Whether an image is staged and waiting to be sent. */
+  hasPendingImage(): boolean {
+    return this._pendingImageBlob !== null;
   }
 
-  private _cancelPaste(): void {
-    this._pendingPasteBlob = null;
+  /** Atomically take the staged image (clearing the preview), or null if none. */
+  takePendingImage(): { blob: Blob; filename: string | null } | null {
+    const blob = this._pendingImageBlob;
+    if (!blob) return null;
+    const filename = this._pendingImageName;
+    this._clearPendingImage();
+    return { blob, filename };
+  }
+
+  /** Discard the staged image. Returns true if there was one to discard. */
+  discardPendingImage(): boolean {
+    if (!this._pendingImageBlob) return false;
+    this._clearPendingImage();
+    return true;
+  }
+
+  // ── Private ─────────────────────────────────────────────────────────────────
+
+  private _clearPendingImage(): void {
+    this._pendingImageBlob = null;
+    this._pendingImageName = null;
+    this._revokePreviewUrl();
     this._pastePreviewImg.src = "";
     this._pastePreviewEl.style.display = "none";
+    this._refreshPlaceholder();
   }
 
+  /** Revoke a preview object URL whose `onload` hasn't fired yet. */
+  private _revokePreviewUrl(): void {
+    if (this._pastePreviewImg.onload && this._pastePreviewImg.src) {
+      URL.revokeObjectURL(this._pastePreviewImg.src);
+      this._pastePreviewImg.onload = null;
+    }
+  }
+
+  /**
+   * The placeholder doubles as the staged-image hint: Command mode keeps its
+   * prompt, otherwise a pending image invites a caption.
+   */
+  private _refreshPlaceholder(): void {
+    if (this._vimMode && this._currentMode === "Command") {
+      this._fieldEl.placeholder = "command…";
+    } else if (this.hasPendingImage()) {
+      this._fieldEl.placeholder = "Add a caption…";
+    } else {
+      this._fieldEl.placeholder = "…";
+    }
+  }
 }

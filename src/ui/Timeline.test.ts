@@ -57,8 +57,17 @@ describe("Timeline", () => {
       // The timestamp is formatted as HH:MM in local time; just verify it's non-empty
       // and has the expected HH:MM shape (two digits, colon, two digits).
       expect(ts?.textContent).toMatch(/^\d{2}:\d{2}$/);
-      // The title attribute holds the original ISO string for full datetime
-      expect(ts?.getAttribute("title")).toBe("2024-06-15T12:34:00Z");
+      // The title attribute holds the full localized datetime (non-empty).
+      expect(ts?.getAttribute("title")).toBeTruthy();
+    });
+
+    it("shows the exact send time (HH:MM:SS) in the hover action bar", () => {
+      timeline.setMessages([makeMsg({ timestamp: "2024-06-15T12:34:56Z" })]);
+
+      const timeEl = timeline.getElement().querySelector(".message__actions-time");
+      expect(timeEl?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+      // Tooltip carries the full localized datetime.
+      expect(timeEl?.getAttribute("title")).toBeTruthy();
     });
 
     it("adds own-sender class when isOwn is true", () => {

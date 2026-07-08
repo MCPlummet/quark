@@ -240,15 +240,25 @@ export async function openMediaExternally(
 
 /**
  * Upload base64-encoded image bytes and send as an m.image event.
- * Used for clipboard paste.
+ * Used for clipboard paste and picked images. `caption` becomes the MSC2530
+ * caption (event body); `replyToEventId` sends the image as a reply.
  */
 export async function sendPastedImage(
   roomId: string,
   dataBase64: string,
   mimeType: string,
   filename: string,
+  caption?: string,
+  replyToEventId?: string,
 ): Promise<string> {
-  return invoke<string>("send_pasted_image", { roomId, dataBase64, mimeType, filename });
+  return invoke<string>("send_pasted_image", {
+    roomId,
+    dataBase64,
+    mimeType,
+    filename,
+    caption: caption ?? null,
+    replyToEventId: replyToEventId ?? null,
+  });
 }
 
 // ─── URL Preview ─────────────────────────────────────────────────────────────

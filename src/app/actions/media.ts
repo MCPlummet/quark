@@ -21,7 +21,7 @@ import { showProgressToast, showError, showSuccess } from "../../ui/Notification
 
 import { getComponents } from "./context.js";
 import { openQuickReactPicker } from "./reactions.js";
-import { startReply } from "./messages.js";
+import { startReply, cancelReply } from "./messages.js";
 import { openThread } from "./threads.js";
 import { openProfileForUser } from "./profile.js";
 
@@ -44,62 +44,75 @@ function platformOnce(): Promise<string> {
   return _platform;
 }
 
+/** Encode a blob's bytes as base64 for the media IPC commands. */
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
 /**
- * Handle a pasted image from the clipboard.
- * Uploads to the homeserver and sends as an m.image event.
+ * Send a staged image (pasted or picked) as an m.image event, with an optional
+ * MSC2530 caption. If a reply is armed it sends as that reply and clears the
+ * reply state on success. On failure the staged image (and caption) are
+ * restored to the composer so nothing the user prepared is lost.
  */
-export async function handleImagePaste(blob: Blob): Promise<void> {
+export async function sendPendingImage(
+  blob: Blob,
+  filename: string | null,
+  caption?: string,
+): Promise<void> {
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
-  try {
-    // Convert blob to base64
-    const arrayBuffer = await blob.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    let binary = "";
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const dataBase64 = btoa(binary);
+  const ext = blob.type.split("/")[1] ?? "png";
+  const name = filename ?? `pasted-image-${Date.now()}.${ext}`;
+  const cap = caption?.trim() || undefined;
+  const replyToEventId = AppState.get("replyToEventId") ?? undefined;
 
-    const ext = blob.type.split("/")[1] ?? "png";
-    const filename = `pasted-image-${Date.now()}.${ext}`;
+  const restore = () => {
+    const { input } = getComponents();
+    input.showImagePreview(blob, filename ?? undefined);
+    // Don't clobber anything typed since the send started.
+    if (cap && input.getValue().trim().length === 0) input.setValue(cap);
+  };
+
+  try {
+    const dataBase64 = await blobToBase64(blob);
 
     const progress = showProgressToast("Uploading image…");
     try {
-      await sendPastedImage(roomId, dataBase64, blob.type, filename);
+      await sendPastedImage(roomId, dataBase64, blob.type, name, cap, replyToEventId);
       progress.succeed("Image sent");
+      if (replyToEventId) cancelReply();
     } catch (err) {
       progress.fail(`Failed to send image: ${err instanceof Error ? err.message : String(err)}`);
+      restore();
     }
   } catch (err) {
     showError(`Failed to send image: ${err instanceof Error ? err.message : String(err)}`);
+    restore();
   }
 }
 
 /**
- * Handle a file selected from the file picker.
- * Images are sent as m.image; everything else as m.file.
+ * Handle a non-image file selected from the file picker: videos are sent as
+ * m.video, everything else as m.file. (Picked images stage in the composer
+ * preview instead — see the onFilePick wiring in keyboard.ts.)
  */
 export async function handleFilePick(file: File): Promise<void> {
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
   try {
-    const arrayBuffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    const dataBase64 = btoa(binary);
+    const dataBase64 = await blobToBase64(file);
 
-    const isImage = file.type.startsWith("image/");
     const isVideo = file.type.startsWith("video/");
-    const noun = isImage ? "image" : isVideo ? "video" : "file";
-    const progress = showProgressToast(`Uploading ${isImage ? "image" : file.name}…`);
+    const noun = isVideo ? "video" : "file";
+    const progress = showProgressToast(`Uploading ${file.name}…`);
     try {
-      if (isImage) {
-        await sendPastedImage(roomId, dataBase64, file.type, file.name);
-      } else if (isVideo) {
+      if (isVideo) {
         // Send as m.video (not m.file) so it renders as a playable embed. Probe
         // dimensions/duration up front so the timeline can reserve the right
         // aspect ratio before the video is downloaded.

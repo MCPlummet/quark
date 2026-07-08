@@ -1408,6 +1408,16 @@ body {
   display: flex;
 }
 
+.message__actions-time {
+  font-size: 11px;
+  color: var(--msg-timestamp);
+  padding-right: 6px;
+  margin-right: 2px;
+  border-right: 1px solid var(--border-color);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
 .message__action-btn {
   background: none;
   border: none;

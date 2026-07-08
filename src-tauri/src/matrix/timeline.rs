@@ -1097,15 +1097,29 @@ pub async fn edit_message(
     Ok(response_event_id)
 }
 
-/// Send an image (m.image) event to a room.
+/// MSC2530 body mapping for outgoing images: with a caption, the event body is
+/// the caption and `filename` carries the real name; without one, the body is
+/// the filename and the field is omitted — matching the pre-caption wire format,
+/// which ruma's `caption()` reader treats as captionless.
+fn build_image_body(filename: &str, caption: Option<&str>) -> (String, Option<String>) {
+    match caption.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(c) => (c.to_string(), Some(filename.to_string())),
+        None => (filename.to_string(), None),
+    }
+}
+
+/// Send an image (m.image) event to a room, with an optional MSC2530 caption,
+/// optionally as a reply.
 pub async fn send_image(
     client: &Client,
     room_id: &str,
-    body: &str,
+    filename: &str,
+    caption: Option<&str>,
     mxc_url: &str,
     mime_type: &str,
     width: Option<u64>,
     height: Option<u64>,
+    in_reply_to: Option<&str>,
 ) -> Result<String, String> {
     use matrix_sdk::ruma::{
         events::room::{
@@ -1128,10 +1142,20 @@ pub async fn send_image(
     img_info.width = width.and_then(|w| UInt::try_from(w).ok());
     img_info.height = height.and_then(|h| UInt::try_from(h).ok());
 
-    let mut img_content = ImageMessageEventContent::new(body.to_string(), source);
+    let (body, filename_field) = build_image_body(filename, caption);
+    let mut img_content = ImageMessageEventContent::new(body, source);
     img_content.info = Some(Box::new(img_info));
+    img_content.filename = filename_field;
 
-    let msg_content = RoomMessageEventContent::new(MessageType::Image(img_content));
+    let mut msg_content = RoomMessageEventContent::new(MessageType::Image(img_content));
+
+    if let Some(reply_event_id) = in_reply_to {
+        let owned_id = OwnedEventId::try_from(reply_event_id)
+            .map_err(|e| format!("Invalid reply event ID: {e}"))?;
+        msg_content.relates_to = Some(Relation::Reply {
+            in_reply_to: InReplyTo::new(owned_id),
+        });
+    }
 
     let response = room
         .send(msg_content)
@@ -1716,5 +1740,76 @@ mod tests {
         // No cutoff (e.g. "Entire history") → every hit is in range.
         assert!(hit_in_range(0, None));
         assert!(hit_in_range(cutoff, None));
+    }
+
+    #[test]
+    fn test_build_image_body_msc2530_mapping() {
+        use super::build_image_body;
+        // With a caption: body carries the caption, filename the real name.
+        assert_eq!(
+            build_image_body("cat.png", Some("look at this")),
+            ("look at this".to_string(), Some("cat.png".to_string()))
+        );
+        // Caption is trimmed.
+        assert_eq!(
+            build_image_body("cat.png", Some("  hi  ")),
+            ("hi".to_string(), Some("cat.png".to_string()))
+        );
+        // No caption → body = filename, field omitted (pre-caption wire format).
+        assert_eq!(
+            build_image_body("cat.png", None),
+            ("cat.png".to_string(), None)
+        );
+        // Whitespace-only caption counts as no caption.
+        assert_eq!(
+            build_image_body("cat.png", Some("   ")),
+            ("cat.png".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn test_convert_sync_captioned_image_surfaces_caption() {
+        // An MSC2530 image event as it arrives over sync: body = caption,
+        // filename = the real name (what Quark sends and Element renders).
+        let json = serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$img1:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "msgtype": "m.image",
+                "body": "look at this cat",
+                "filename": "pasted-image-123.png",
+                "url": "mxc://example.com/abc123",
+                "info": { "mimetype": "image/png", "w": 800, "h": 600 }
+            }
+        });
+        let ev: OriginalSyncRoomMessageEvent =
+            serde_json::from_value(json).expect("deserialize image event");
+        let te = convert_sync_room_message(ev);
+        assert_eq!(te.msg_type, "m.image");
+        assert_eq!(te.body, "look at this cat");
+        assert_eq!(te.caption.as_deref(), Some("look at this cat"));
+    }
+
+    #[test]
+    fn test_convert_sync_uncaptioned_image_has_no_caption() {
+        // No filename → body is the bare name, not a caption.
+        let json = serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$img2:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "msgtype": "m.image",
+                "body": "pasted-image-123.png",
+                "url": "mxc://example.com/abc123",
+                "info": { "mimetype": "image/png" }
+            }
+        });
+        let ev: OriginalSyncRoomMessageEvent =
+            serde_json::from_value(json).expect("deserialize image event");
+        let te = convert_sync_room_message(ev);
+        assert_eq!(te.caption, None);
     }
 }

@@ -404,11 +404,15 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     }
     case "send_pasted_image": {
       const filename = (args?.filename as string) ?? "pasted-image.png";
+      const caption = (args?.caption as string | null) ?? null;
+      const replyTo = (args?.replyToEventId as string | null) ?? null;
       MOCK_TIMELINE.push({
-        ...mockEvent("@you:matrix.org", `[Image: ${filename}]`, 0),
+        ...mockEvent("@you:matrix.org", caption ?? `[Image: ${filename}]`, 0),
         msg_type: "m.image",
         media_url: "",
         media_mimetype: (args?.mimeType as string) ?? "image/png",
+        caption,
+        in_reply_to: replyTo,
       } as TimelineEvent);
       return "$mock-paste-event-id";
     }

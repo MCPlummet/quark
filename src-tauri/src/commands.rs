@@ -1116,8 +1116,9 @@ pub async fn open_media_externally(
     Ok(())
 }
 
-/// Upload image data (base64-encoded) and send it as an m.image event.
-/// Used for clipboard paste of images from the frontend.
+/// Upload image data (base64-encoded) and send it as an m.image event, with an
+/// optional MSC2530 caption, optionally as a reply. Used for clipboard paste
+/// and picked images from the frontend.
 #[tauri::command]
 pub async fn send_pasted_image(
     state: State<'_, MatrixState>,
@@ -1125,6 +1126,8 @@ pub async fn send_pasted_image(
     data_base64: String,
     mime_type: String,
     filename: String,
+    caption: Option<String>,
+    reply_to_event_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
 
@@ -1142,10 +1145,12 @@ pub async fn send_pasted_image(
         &client,
         &room_id,
         &filename,
+        caption.as_deref(),
         &mxc_url,
         &mime_type,
         None,
         None,
+        reply_to_event_id.as_deref(),
     )
     .await
 }
@@ -1933,8 +1938,9 @@ pub async fn send_gif(
     )
     .await?;
 
-    // Send as m.image event.
-    crate::matrix::timeline::send_image(&client, &room_id, &title, &mxc_url, "image/gif", w, h)
+    // Send as m.image event. The title is the body, not an MSC2530 caption
+    // (no distinct filename), matching how GIF pickers label sends.
+    crate::matrix::timeline::send_image(&client, &room_id, &title, None, &mxc_url, "image/gif", w, h, None)
         .await
 }
 
