@@ -32,6 +32,10 @@ flatpak-repo/
 *.flatpak
 repo/
 
+# Nix build output symlinks
+result
+result-*
+
 # direnv
 .direnv/
 
