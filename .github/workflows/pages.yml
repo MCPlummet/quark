@@ -1,0 +1,71 @@
+# Quark — GitHub Pages deploy (workflow-built)
+#
+# Publishes docs/ to GitHub Pages (quark.tel). Replaces the legacy branch-based
+# Pages build — repo Settings → Pages → Source must be set to "GitHub Actions"
+# for this to be the live deployment path. The site is plain static files, so
+# there is no build step: the artifact is docs/ verbatim.
+#
+# Triggers:
+#   • push to main touching docs/** (or this file) — normal site edits.
+#   • workflow_call — invoked by release.yml after publish-update-feed commits
+#     the new updater feed to main. This call is REQUIRED because that feed
+#     commit carries [skip ci], which suppresses ALL push-triggered workflows
+#     (not just ci.yml) — without it the feed on quark.tel would silently go
+#     stale on every release.
+#   • workflow_dispatch — manual redeploy hatch.
+#
+# Environment note: release.yml runs on tag refs (v*), so the github-pages
+# environment's deployment policies must allow BOTH the main branch and v*
+# tags. If a release-triggered deploy fails with "... not allowed to deploy to
+# github-pages due to environment protection rules", restore the tag policy:
+#   gh api -X POST repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies \
+#     -f name='v*' -f type=tag
+
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    name: Deploy quark.tel
+    runs-on: ubuntu-22.04
+    # Job-level (not workflow-level) so the group also applies when this
+    # workflow is invoked via workflow_call from release.yml. Serialises
+    # deploys; never cancels an in-flight production deploy.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Always deploy main's docs/, whatever ref triggered this run: when
+      # called from release.yml the run is on the TAG ref, but the update feed
+      # was just committed to main by publish-update-feed.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

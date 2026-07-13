@@ -16,6 +16,11 @@
 #   • build-flatpak  — builds quark.flatpak via flatpak-builder and uploads it.
 #   • build-android  — builds an arm64-only release APK (debug-signed fallback
 #                       if no keystore secret), verifies the signature, uploads.
+#   • publish-update-feed — assembles latest.json from the signed updater
+#                       artifacts and commits it to docs/updates/ on main.
+#   • deploy-pages   — re-deploys the Pages site (quark.tel) so the freshly
+#                       committed feed goes live (calls pages.yml; the feed
+#                       commit's [skip ci] suppresses pages.yml's push trigger).
 #   • publish-release — needs all build jobs; flips the draft to published.
 #
 # ── Required repository secrets ──────────────────────────────────────────────
@@ -530,6 +535,24 @@ jobs:
           fi
           git commit -m "chore(updates): publish ${TAG} update feed [skip ci]"
           git push origin main
+
+  # ─── deploy the Pages site so the committed feed goes live ─────────────────
+  # Invokes pages.yml directly (rather than relying on its push trigger)
+  # because the feed commit above carries [skip ci], which suppresses ALL
+  # push-triggered workflows. Runs on the tag ref, so the github-pages
+  # environment must allow v* tag deployments (see the pages.yml header for
+  # the recovery command if that policy ever goes missing). Not a `needs` of
+  # publish-release: a failed site deploy shouldn't block the release, and is
+  # retriable via pages.yml's workflow_dispatch.
+  deploy-pages:
+    name: Deploy Pages site
+    if: ${{ github.event_name == 'push' }}
+    needs: publish-update-feed
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
 
   # ─── publish the release (flip draft → published) ──────────────────────────
   publish-release:
