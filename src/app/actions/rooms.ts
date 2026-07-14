@@ -12,6 +12,7 @@ import {
   getUserSpaces,
   getRooms,
   joinRoom as ipcJoinRoom,
+  leaveRoom as ipcLeaveRoom,
   createRoom,
   markRoomRead,
   getEventContext,
@@ -31,6 +32,7 @@ import type { RoomSection } from "../../ui/RoomList.js";
 import type { SpaceItem } from "../../ui/SpaceStrip.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
+import { askConfirm } from "../../ui/ConfirmDialog.js";
 
 import {
   getComponents,
@@ -1022,6 +1024,42 @@ export async function joinRoom(roomIdOrAlias: string): Promise<void> {
   showSuccess(`Joined ${roomId}`);
   await refreshRooms();
   await selectRoom(roomId);
+}
+
+/**
+ * Leave a room with user feedback: on success clear the active room and
+ * refresh the room list; on failure surface an error toast. Shared by the
+ * `:leave` command and the Room Info leave flow.
+ */
+export async function leaveRoomWithFeedback(roomId: string): Promise<void> {
+  try {
+    await ipcLeaveRoom(roomId);
+    showSuccess("Left room");
+    AppState.set("currentRoomId", null);
+    await refreshRooms();
+  } catch (err) {
+    showError(`Failed to leave: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Confirm-then-leave flow for the current room (Room Info's [leave room]
+ * button, `leave-room-confirm` action).
+ */
+export async function confirmAndLeaveRoom(): Promise<void> {
+  const roomId = AppState.get("currentRoomId");
+  if (!roomId) {
+    showError("No room to leave");
+    return;
+  }
+  const confirmed = await askConfirm({
+    title: "Leave room?",
+    message: "You will no longer receive messages from this room. Rejoining an invite-only room requires a new invite.",
+    confirmLabel: "Leave",
+    danger: true,
+  });
+  if (!confirmed) return;
+  await leaveRoomWithFeedback(roomId);
 }
 
 /**
