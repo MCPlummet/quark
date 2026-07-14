@@ -157,6 +157,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     wrapProgramShell $out/bin/quark \
       "''${gappsWrapperArgs[@]}" \
       --prefix PATH : ${lib.makeBinPath [ xdg-utils ]} \
+      --set QUARK_IMMUTABLE_INSTALL 1 \
       --run ${lib.escapeShellArg nvidiaDmabufWorkaround}
   '';
 

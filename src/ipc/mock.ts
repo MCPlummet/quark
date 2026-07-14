@@ -681,6 +681,8 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       return null;
     case "update_install":
       return undefined;
+    case "update_supported":
+      return true;
 
     default:
       console.warn(`[mock] unhandled command: ${cmd}`, args);

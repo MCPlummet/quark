@@ -136,5 +136,5 @@ export type { AppConfig, GeneralConfig, SyncConfig, MediaConfig, GifConfig, GifR
 export { listSessions, renameDevice, deleteDevices } from "./devices.js";
 
 // ─── Updates ──────────────────────────────────────────────────────────────────
-export { updateCheck, updateInstall } from "./updater.js";
+export { updateCheck, updateInstall, updateSupported } from "./updater.js";
 export type { UpdateChannel, UpdateInfo, UpdateProgress } from "./updater.js";

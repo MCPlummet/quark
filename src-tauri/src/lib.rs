@@ -253,6 +253,7 @@ pub fn run() {
             // Updater
             commands::update_check,
             commands::update_install,
+            commands::update_supported,
             // Config
             commands::load_theme,
             commands::list_custom_themes,
