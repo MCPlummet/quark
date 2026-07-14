@@ -59,7 +59,7 @@ import {
   setMediaCacheLimit,
 } from "./context.js";
 import { closeThread } from "./threads.js";
-import { cancelReply } from "./messages.js";
+import { cancelReply, cancelEdit } from "./messages.js";
 import { openRoomSettings } from "./dialogs.js";
 import { openProfileForUser } from "./profile.js";
 
@@ -161,6 +161,26 @@ export function appendRoomTimelineCache(roomId: string, event: TimelineEvent): v
   }
 }
 
+/** Unsent compose text per room, restored when the room is reopened (#34). */
+export const _composeDrafts = new Map<string, string>();
+
+/**
+ * Stash the outgoing room's compose text and restore the incoming room's
+ * draft. An in-progress edit is cancelled rather than saved — its text is
+ * another room's message body, not a draft. Rooms whose box was emptied lose
+ * their stored draft so reopening them shows a clean box. (#34)
+ */
+export function swapComposeDraft(prevRoom: string | null, nextRoom: string): void {
+  const { input } = getComponents();
+  cancelEdit(); // no-op unless an edit is in progress
+  if (prevRoom) {
+    const text = input.getValue();
+    if (text) _composeDrafts.set(prevRoom, text);
+    else _composeDrafts.delete(prevRoom);
+  }
+  input.setValue(_composeDrafts.get(nextRoom) ?? "");
+}
+
 /**
  * Select a room: fetch timeline, update header, mark read.
  */
@@ -176,6 +196,9 @@ export async function selectRoom(
   exitHomeView();
 
   AppState.set("currentRoomId", roomId);
+  // Swap compose drafts before anything else touches the box, so the outgoing
+  // room's text is stashed and the incoming room's draft appears at once (#34).
+  if (prevRoom !== roomId) swapComposeDraft(prevRoom, roomId);
   // Remember this room as the active space's chat so switching away and back
   // restores it instead of leaving a foreign room in the timeline (#11).
   const activeSpace = AppState.get("currentSpaceId");
