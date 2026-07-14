@@ -84,6 +84,26 @@ body {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
+/* Full-screen backdrop overlays (the position:fixed; inset:0 dialog tier).
+   WebKitGTK paints its fading overlay scrollbars on compositor layers; once a
+   dialog's entrance animation ends its own layer is dropped, and a room-list
+   scrollbar still mid-fade composites on top of the dialog (#32). Keeping the
+   overlay tier permanently on its own layer preserves the intended stacking. */
+.gif-picker,
+.help-dialog,
+.verification-dialog,
+.settings-dialog,
+.pinned-dialog,
+.search-dialog,
+.room-dir-dialog,
+.revision-dialog,
+.quick-nav-palette,
+.debug-viewer,
+.profile-edit-dialog,
+.image-lightbox {
+  transform: translateZ(0);
+}
+
 /* ── Root app container ──────────────────────────────────────────────────── */
 
 #app {
