@@ -1,0 +1,32 @@
+# F-Droid repository configuration (fdroidserver).
+#
+# `fdroid update` runs against this directory in pages.yml: CI drops the
+# newest release APK into repo/, this config signs the generated index, and
+# the resulting repo/ is published at https://quark.tel/fdroid/repo.
+#
+# The keystore here is the REPO signing key (signs the index the F-Droid
+# client downloads) — it is NOT the APK signing key from release.yml. Its
+# certificate's SHA-256 fingerprint is the `?fingerprint=` value users pin
+# when adding the repo, so the keystore must never be lost or rotated.
+# Both values come from the environment (set in pages.yml from the
+# FDROID_KEYSTORE_BASE64 / FDROID_KEYSTORE_PASSWORD repository secrets).
+
+repo_url: https://quark.tel/fdroid/repo
+repo_name: Quark
+repo_icon: icon.png
+repo_description: >-
+  Official F-Droid repository for Quark, a keyboard-driven,
+  terminal-aesthetic Matrix client. Serves the release APKs built and
+  signed by the project's CI.
+
+# Serve every APK from repo/ as-is; no archive split for a single-app repo.
+archive_older: 0
+
+# Don't create the "quark.apk" convenience symlink — the Pages artifact is
+# uploaded as plain files and symlinks don't survive the trip.
+make_current_version_link: false
+
+keystore: {env: FDROID_KEYSTORE_PATH}
+keystorepass: {env: FDROID_KEYSTORE_PASSWORD}
+keypass: {env: FDROID_KEYSTORE_PASSWORD}
+repo_keyalias: quark-repo

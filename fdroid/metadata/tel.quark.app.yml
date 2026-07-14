@@ -1,0 +1,35 @@
+Categories:
+  - Internet
+License: AGPL-3.0-only
+AuthorName: mcplummet
+WebSite: https://quark.tel
+SourceCode: https://github.com/MCPlummet/quark
+IssueTracker: https://github.com/MCPlummet/quark/issues
+Changelog: https://github.com/MCPlummet/quark/releases
+
+Name: Quark
+Summary: Keyboard-driven, terminal-aesthetic Matrix client
+
+Description: |
+  Quark is a Matrix chat client that looks like a terminal but renders in a
+  real GUI window. You drive it with vim-style keys and a ':' command bar,
+  while still getting inline images, animated GIFs, custom emoji, and
+  stickers — things a true TUI can't render reliably.
+
+  Features:
+
+  * End-to-end encryption — Megolm via Vodozemac, cross-signing, and device
+    verification (SAS emoji + QR)
+  * Rich replies, threads, reactions, message editing and redaction, typing
+    indicators, read receipts, and presence
+  * Custom emoji and stickers (MSC2545), compatible with Cinny, FluffyChat,
+    Nheko, and SchildiChat
+  * Integrated GIF search (Tenor / Giphy / Klipy) — GIFs are uploaded to
+    your homeserver, not hot-linked
+  * Authenticated media, inline image and video playback, blurhash
+    placeholders, disk-backed media cache
+  * Spaces strip, searchable public-room directory, TOML theming with 11
+    built-ins
+  * Every keybinding remappable via a vimrc-style quarkrc
+
+  The Android build is experimental; password login only for now.

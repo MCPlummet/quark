@@ -599,6 +599,12 @@ The `[updater]` section (above) holds the prefs; both are also editable live:
 
 In-app update covers the **AppImage** (Linux x86_64), the **`.app`** (macOS Apple-Silicon / `aarch64` only), and the **NSIS `-setup.exe`** (Windows x86_64). `.deb`/`.rpm`/Flatpak/Android builds update through their own package channels, not this updater. macOS auto-update is best-effort until Apple notarization is configured (Gatekeeper may still warn on a freshly downloaded build).
 
+### F-Droid repository (Android)
+
+Android updates ship through a **self-hosted F-Droid repository** at `https://quark.tel/fdroid/repo` (added in an F-Droid client via that URL plus the repo fingerprint). It is not the official f-droid.org repo — no submission or review is involved.
+
+The repo is assembled on every Pages deploy (`pages.yml`): CI downloads the newest published release's `*-android.apk` from GitHub Releases, then `fdroid update` (config in `fdroid/`) generates and signs the package index into the Pages artifact — no APK or index is ever committed to git. Two signing keys are involved: the APK key (`ANDROID_KEYSTORE_*` secrets, signs the app) and the repo key (`FDROID_KEYSTORE_*` secrets, signs the index; its certificate's SHA-256 is the pinned fingerprint users add). If the F-Droid secrets are absent the site deploys without `/fdroid/repo`. App listing metadata (name, description, license) lives in `fdroid/metadata/tel.quark.app.yml`.
+
 ---
 
 ## Project Structure

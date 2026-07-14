@@ -1,23 +1,35 @@
 # Quark — GitHub Pages deploy (workflow-built)
 #
-# Publishes docs/ to GitHub Pages (quark.tel). Replaces the legacy branch-based
-# Pages build — repo Settings → Pages → Source must be set to "GitHub Actions"
-# for this to be the live deployment path. The site is plain static files, so
-# there is no build step: the artifact is docs/ verbatim.
+# Publishes the quark.tel site to GitHub Pages: docs/ verbatim at the root,
+# plus a self-hosted F-Droid repository at /fdroid/repo built on the fly by
+# fdroidserver (the newest release APK + a signed package index). APKs and
+# index are assembled into the Pages artifact only — nothing binary is ever
+# committed to git. Repo Settings → Pages → Source must be "GitHub Actions".
 #
 # Triggers:
-#   • push to main touching docs/** (or this file) — normal site edits.
-#   • workflow_call — invoked by release.yml after publish-update-feed commits
-#     the new updater feed to main. This call is REQUIRED because that feed
-#     commit carries [skip ci], which suppresses ALL push-triggered workflows
-#     (not just ci.yml) — without it the feed on quark.tel would silently go
-#     stale on every release.
+#   • push to main touching docs/**, fdroid/**, or this file — site edits.
+#   • workflow_call — invoked by release.yml after the release is published,
+#     so the freshly committed update feed goes live and the F-Droid repo
+#     picks up the new APK. This call is REQUIRED because the feed commit
+#     carries a skip-ci marker, which suppresses ALL push-triggered
+#     workflows (not just ci.yml) — without it quark.tel would silently go
+#     stale on every release. The caller must pass `secrets: inherit`.
 #   • workflow_dispatch — manual redeploy hatch.
+#
+# ── F-Droid repository secrets (both optional — when absent, the F-Droid
+#    steps are skipped and the site deploys without /fdroid/repo) ───────────
+#   FDROID_KEYSTORE_BASE64    base64 of the REPO-signing keystore (.p12).
+#                             This signs the F-Droid *index*, not the APKs —
+#                             it is a different key from ANDROID_KEYSTORE_*.
+#                             Its cert's SHA-256 fingerprint is what users pin
+#                             when adding the repo; never lose or rotate it.
+#   FDROID_KEYSTORE_PASSWORD  password for that keystore (store == key pass).
+#   Key parameters (alias etc.) live in fdroid/config.yml.
 #
 # Environment note: release.yml runs on tag refs (v*), so the github-pages
 # environment's deployment policies must allow BOTH the main branch and v*
-# tags. If a release-triggered deploy fails with "... not allowed to deploy to
-# github-pages due to environment protection rules", restore the tag policy:
+# tags. If a release-triggered deploy fails with "... not allowed to deploy
+# to github-pages due to environment protection rules", restore the policy:
 #   gh api -X POST repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies \
 #     -f name='v*' -f type=tag
 
@@ -28,6 +40,7 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - "fdroid/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
   workflow_call:
@@ -50,6 +63,11 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      # Gates every F-Droid step: without the keystore secret the site still
+      # deploys, just without /fdroid/repo (mirrors release.yml's philosophy
+      # that missing secrets degrade, never fail).
+      FDROID_ENABLED: ${{ secrets.FDROID_KEYSTORE_BASE64 != '' }}
     steps:
       # Always deploy main's docs/, whatever ref triggered this run: when
       # called from release.yml the run is on the TAG ref, but the update feed
@@ -58,13 +76,81 @@ jobs:
         with:
           ref: main
 
+      # ── F-Droid repo (skipped when the keystore secret is absent) ─────────
+      - name: Set up JDK 17 (jarsigner signs the F-Droid index)
+        if: env.FDROID_ENABLED == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install fdroidserver
+        if: env.FDROID_ENABLED == 'true'
+        run: pipx install fdroidserver
+
+      - name: Fetch the newest release APK
+        if: env.FDROID_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p fdroid/repo
+          # Newest published, non-prerelease release that carries an Android
+          # APK (a release could theoretically omit one). Drafts are invisible
+          # to this token, which is also why release.yml calls us only AFTER
+          # the release is published.
+          found=""
+          for tag in $(gh release list --repo "$GITHUB_REPOSITORY" \
+              --exclude-drafts --exclude-pre-releases --limit 10 \
+              --json tagName --jq '.[].tagName'); do
+            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+                --pattern '*-android.apk' --dir fdroid/repo 2>/dev/null; then
+              found="$tag"; break
+            fi
+          done
+          if [ -z "$found" ]; then
+            echo "ERROR: no published release with an *-android.apk asset found." >&2
+            exit 1
+          fi
+          echo "Using APK from release $found:"
+          ls -l fdroid/repo/
+
+      - name: Build the F-Droid repo index
+        if: env.FDROID_ENABLED == 'true'
+        env:
+          FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
+          FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export FDROID_KEYSTORE_PATH="${RUNNER_TEMP}/fdroid-keystore.p12"
+          echo "${FDROID_KEYSTORE_BASE64}" | base64 -d > "${FDROID_KEYSTORE_PATH}"
+          # fdroidserver refuses group/world-readable config carrying key refs.
+          chmod 600 fdroid/config.yml
+          (cd fdroid && fdroid update)
+          rm -f "${FDROID_KEYSTORE_PATH}"
+
+      # ── assemble + publish ─────────────────────────────────────────────────
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          cp -r docs/. site/
+          if [ -f fdroid/repo/entry.jar ]; then
+            mkdir -p site/fdroid
+            cp -r fdroid/repo site/fdroid/repo
+            echo "F-Droid repo included:"
+            ls site/fdroid/repo/
+          else
+            echo "F-Droid repo NOT included (keystore secret absent — F-Droid steps skipped)."
+          fi
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
       - name: Upload site artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs
+          path: site
 
       - name: Deploy to GitHub Pages
         id: deployment
