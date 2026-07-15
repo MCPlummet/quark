@@ -24,8 +24,14 @@
         android:theme="@style/Theme.quark"
         android:usesCleartextTraffic="${usesCleartextTraffic}"
         android:allowBackup="false">
+        <!-- adjustResize pins keyboard handling to a defined behavior: modern
+             WebViews shrink the visual viewport (the --keyboard-offset tracker
+             compensates), older ones resize the page (offset computes to 0).
+             Without it, OEM adjustPan defaults leave the compose bar covered
+             by the keyboard on some installs (#33). -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask"
             android:label="@string/main_activity_title"
             android:name=".MainActivity"

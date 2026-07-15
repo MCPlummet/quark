@@ -34,9 +34,14 @@ function applyDrawerClass(): void {
 function trackVisualViewport(): void {
   const vv = window.visualViewport;
   if (!vv) return;
-  const update = (): void => {
+  const update = (ev?: Event): void => {
     // Height removed from the layout viewport when the keyboard is up.
     const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    // Scroll-driven updates stream every frame while the user drags with the
+    // keyboard open; easing them through the padding transition makes the
+    // compose bar lag and judder (#33). Apply those instantly and keep the
+    // ease for the open/close resize.
+    document.documentElement.classList.toggle("quark-kb-immediate", ev?.type === "scroll");
     document.documentElement.style.setProperty("--keyboard-offset", `${offset}px`);
   };
   vv.addEventListener("resize", update);

@@ -6612,6 +6612,12 @@ body.quark-mobile .content-area {
   transition: padding-bottom 120ms ease;
 }
 
+/* Scroll-driven keyboard-offset updates apply instantly (see mobile.ts) —
+ * easing them lags the compose bar behind the finger (#33). */
+:root.quark-kb-immediate body.quark-mobile .content-area {
+  transition: none;
+}
+
 /* Input bar: respect iOS home indicator. When the keyboard is up the indicator
  * is gone, so collapse to 0 to avoid an empty stripe under the field. */
 body.quark-mobile .input-bar-wrap {
@@ -6644,6 +6650,14 @@ body.quark-mobile .space-strip__item,
 body.quark-mobile .space-strip__settings-btn {
   width: 56px;
   height: 56px;
+}
+
+/* The compose box top-anchors its children (align-items: flex-start) so the
+ * action buttons hug the first text line. On desktop that lands visually
+ * centered, but the mobile ≥16px field font makes the line box taller than
+ * the buttons and they ride high (#33) — center them against the box instead. */
+body.quark-mobile .input-bar__actions {
+  align-self: center;
 }
 
 /* Thread view becomes a full-screen overlay on mobile *when toggled on*. The
