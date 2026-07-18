@@ -143,6 +143,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
       --set-key=Categories --set-value="Network;InstantMessaging;Chat;" \
       --set-key=Keywords --set-value="matrix;chat;messaging;im;" \
       --set-key=StartupWMClass --set-value=quark \
+      --set-key=SingleMainWindow --set-value=true \
       $out/share/applications/*.desktop
   '';
 
