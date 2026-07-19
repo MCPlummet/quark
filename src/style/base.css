@@ -84,24 +84,25 @@ body {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
-/* Full-screen backdrop overlays (the position:fixed; inset:0 dialog tier).
-   WebKitGTK paints its fading overlay scrollbars on compositor layers; once a
-   dialog's entrance animation ends its own layer is dropped, and a room-list
-   scrollbar still mid-fade composites on top of the dialog (#32). Keeping the
-   overlay tier permanently on its own layer preserves the intended stacking. */
-.gif-picker,
-.help-dialog,
-.verification-dialog,
-.settings-dialog,
-.pinned-dialog,
-.search-dialog,
-.room-dir-dialog,
-.revision-dialog,
-.quick-nav-palette,
-.debug-viewer,
-.profile-edit-dialog,
-.image-lightbox {
-  transform: translateZ(0);
+/* While any overlay is open (quark-modal-open is maintained by ModalManager),
+   remove the layout tier's scrollbars outright. WebKitGTK draws native overlay
+   scrollbars that composite above the position:fixed dialog tier regardless of
+   z-index (#32), and ignores every scrollbar-styling mechanism (neither
+   ::-webkit-scrollbar nor scrollbar-color works as of 2.50) — but no engine
+   can draw a scrollbar on a non-scroll container, so make the layout panes
+   overflow:hidden for the duration. Scroll positions are preserved and
+   programmatic scrolling (timeline stick-to-bottom) still works. Overlays
+   mount on <body>, outside .quark-layout, so their own scrollbars are
+   unaffected. .timeline's right edge stays put on classic-scrollbar platforms
+   because scrollbar-gutter: stable reserves the gutter even while hidden. */
+body.quark-modal-open .space-strip,
+body.quark-modal-open .room-list__scroll,
+body.quark-modal-open .thread-view__timeline,
+body.quark-modal-open .thread-inline__timeline,
+body.quark-modal-open .member-list__scroll,
+body.quark-modal-open .timeline,
+body.quark-modal-open .input-bar__field {
+  overflow: hidden;
 }
 
 /* ── Root app container ──────────────────────────────────────────────────── */
