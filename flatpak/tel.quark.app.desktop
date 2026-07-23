@@ -8,3 +8,4 @@ Type=Application
 Categories=Network;InstantMessaging;Chat;
 Keywords=matrix;chat;messaging;im;
 StartupWMClass=quark
+SingleMainWindow=true

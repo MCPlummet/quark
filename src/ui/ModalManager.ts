@@ -33,12 +33,23 @@ class ModalManager {
   push(modal: Modal): void {
     this.remove(modal);
     this._stack.push(modal);
+    this.syncBodyClass();
   }
 
   /** Record a modal as closed. No-op if it wasn't tracked. */
   remove(modal: Modal): void {
     const i = this._stack.indexOf(modal);
     if (i >= 0) this._stack.splice(i, 1);
+    this.syncBodyClass();
+  }
+
+  /**
+   * Mirror the open-state onto <body> so pure CSS can react to "some overlay
+   * is covering the layout" — used to blank the layout tier's scrollbars,
+   * which WebKitGTK otherwise composites above dialogs (#32).
+   */
+  private syncBodyClass(): void {
+    document.body.classList.toggle("quark-modal-open", this.isAnyOpen);
   }
 
   /** True when at least one tracked modal is currently visible. */

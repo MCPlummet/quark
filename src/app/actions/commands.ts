@@ -3,7 +3,6 @@
 import { AppState } from "../state.js";
 
 import {
-  leaveRoom,
   inviteUser as ipcInviteUser,
   kickUser as ipcKickUser,
   banUser as ipcBanUser,
@@ -18,7 +17,7 @@ import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js
 import packageJson from "../../../package.json";
 
 import { getComponents } from "./context.js";
-import { joinRoom, refreshRooms, openOrCreateDm } from "./rooms.js";
+import { joinRoom, leaveRoomWithFeedback, openOrCreateDm } from "./rooms.js";
 import { logout } from "./session.js";
 import { loadTheme } from "./theme.js";
 import { openProfileDialog } from "./profile.js";
@@ -61,14 +60,7 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
         showError("No room to leave");
         return;
       }
-      try {
-        await leaveRoom(roomId);
-        showSuccess(`Left room`);
-        AppState.set("currentRoomId", null);
-        await refreshRooms();
-      } catch (err) {
-        showError(`Failed to leave: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      await leaveRoomWithFeedback(roomId);
       break;
     }
 

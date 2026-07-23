@@ -143,6 +143,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
       --set-key=Categories --set-value="Network;InstantMessaging;Chat;" \
       --set-key=Keywords --set-value="matrix;chat;messaging;im;" \
       --set-key=StartupWMClass --set-value=quark \
+      --set-key=SingleMainWindow --set-value=true \
       $out/share/applications/*.desktop
   '';
 
@@ -157,6 +158,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     wrapProgramShell $out/bin/quark \
       "''${gappsWrapperArgs[@]}" \
       --prefix PATH : ${lib.makeBinPath [ xdg-utils ]} \
+      --set QUARK_IMMUTABLE_INSTALL 1 \
       --run ${lib.escapeShellArg nvidiaDmabufWorkaround}
   '';
 

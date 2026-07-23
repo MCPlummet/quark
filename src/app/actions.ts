@@ -46,6 +46,8 @@ export {
   applyCacheConfig,
   selectSpace,
   joinRoom,
+  leaveRoomWithFeedback,
+  confirmAndLeaveRoom,
   refreshRooms,
   bumpRoomActivity,
   applyLocalRoomMeta,

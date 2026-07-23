@@ -4,7 +4,7 @@
 
 import type { AppComponents } from "../ui/App.js";
 import { AppState } from "./state.js";
-import { getAppConfig, updateCheck } from "../ipc/index.js";
+import { getAppConfig, updateCheck, updateSupported } from "../ipc/index.js";
 import { showError, showToast } from "../ui/NotificationToast.js";
 
 let _lastDismissed: string | null = null;
@@ -26,6 +26,12 @@ export async function maybeCheckForUpdates(components: AppComponents): Promise<v
  * re-show a previously dismissed version); auto runs are silent on no-op.
  */
 export async function runUpdateCheck(components: AppComponents, manual: boolean): Promise<void> {
+  // Immutable installs (Nix/Flatpak/Snap) can't self-update — skip the feed
+  // check entirely; the manual path explains where updates come from (#28).
+  if (!(await updateSupported().catch(() => true))) {
+    if (manual) showToast("This install updates through your system package manager.", "info");
+    return;
+  }
   try {
     const info = await updateCheck();
     if (info) {

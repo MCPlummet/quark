@@ -1,7 +1,7 @@
 // Member list actions: toggling the member-list sidebar.
 
 import { AppState } from "../state.js";
-import { isMobile, closeDrawer } from "../mobile.js";
+import { isMobile, closeDrawer, dismissKeyboard } from "../mobile.js";
 
 import { getComponents } from "./context.js";
 
@@ -22,8 +22,12 @@ export function setMemberListVisible(visible: boolean): void {
   mainLayout.classList.toggle("quark-layout--member-list-open", visible);
 
   // Mobile is one-overlay-at-a-time: opening the member-list pulls focus
-  // away from the drawer.
-  if (visible && isMobile()) closeDrawer();
+  // away from the drawer — and dismisses the keyboard, which would otherwise
+  // sit over the panel and keep typing into the covered room (#37).
+  if (visible && isMobile()) {
+    closeDrawer();
+    dismissKeyboard();
+  }
 }
 
 /**

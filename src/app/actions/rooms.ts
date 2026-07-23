@@ -12,6 +12,7 @@ import {
   getUserSpaces,
   getRooms,
   joinRoom as ipcJoinRoom,
+  leaveRoom as ipcLeaveRoom,
   createRoom,
   markRoomRead,
   getEventContext,
@@ -31,6 +32,7 @@ import type { RoomSection } from "../../ui/RoomList.js";
 import type { SpaceItem } from "../../ui/SpaceStrip.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
+import { askConfirm } from "../../ui/ConfirmDialog.js";
 
 import {
   getComponents,
@@ -57,7 +59,7 @@ import {
   setMediaCacheLimit,
 } from "./context.js";
 import { closeThread } from "./threads.js";
-import { cancelReply } from "./messages.js";
+import { cancelReply, cancelEdit } from "./messages.js";
 import { openRoomSettings } from "./dialogs.js";
 import { openProfileForUser } from "./profile.js";
 
@@ -159,6 +161,26 @@ export function appendRoomTimelineCache(roomId: string, event: TimelineEvent): v
   }
 }
 
+/** Unsent compose text per room, restored when the room is reopened (#34). */
+export const _composeDrafts = new Map<string, string>();
+
+/**
+ * Stash the outgoing room's compose text and restore the incoming room's
+ * draft. An in-progress edit is cancelled rather than saved — its text is
+ * another room's message body, not a draft. Rooms whose box was emptied lose
+ * their stored draft so reopening them shows a clean box. (#34)
+ */
+export function swapComposeDraft(prevRoom: string | null, nextRoom: string): void {
+  const { input } = getComponents();
+  cancelEdit(); // no-op unless an edit is in progress
+  if (prevRoom) {
+    const text = input.getValue();
+    if (text) _composeDrafts.set(prevRoom, text);
+    else _composeDrafts.delete(prevRoom);
+  }
+  input.setValue(_composeDrafts.get(nextRoom) ?? "");
+}
+
 /**
  * Select a room: fetch timeline, update header, mark read.
  */
@@ -174,6 +196,9 @@ export async function selectRoom(
   exitHomeView();
 
   AppState.set("currentRoomId", roomId);
+  // Swap compose drafts before anything else touches the box, so the outgoing
+  // room's text is stashed and the incoming room's draft appears at once (#34).
+  if (prevRoom !== roomId) swapComposeDraft(prevRoom, roomId);
   // Remember this room as the active space's chat so switching away and back
   // restores it instead of leaving a foreign room in the timeline (#11).
   const activeSpace = AppState.get("currentSpaceId");
@@ -1022,6 +1047,42 @@ export async function joinRoom(roomIdOrAlias: string): Promise<void> {
   showSuccess(`Joined ${roomId}`);
   await refreshRooms();
   await selectRoom(roomId);
+}
+
+/**
+ * Leave a room with user feedback: on success clear the active room and
+ * refresh the room list; on failure surface an error toast. Shared by the
+ * `:leave` command and the Room Info leave flow.
+ */
+export async function leaveRoomWithFeedback(roomId: string): Promise<void> {
+  try {
+    await ipcLeaveRoom(roomId);
+    showSuccess("Left room");
+    AppState.set("currentRoomId", null);
+    await refreshRooms();
+  } catch (err) {
+    showError(`Failed to leave: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Confirm-then-leave flow for the current room (Room Info's [leave room]
+ * button, `leave-room-confirm` action).
+ */
+export async function confirmAndLeaveRoom(): Promise<void> {
+  const roomId = AppState.get("currentRoomId");
+  if (!roomId) {
+    showError("No room to leave");
+    return;
+  }
+  const confirmed = await askConfirm({
+    title: "Leave room?",
+    message: "You will no longer receive messages from this room. Rejoining an invite-only room requires a new invite.",
+    confirmLabel: "Leave",
+    danger: true,
+  });
+  if (!confirmed) return;
+  await leaveRoomWithFeedback(roomId);
 }
 
 /**

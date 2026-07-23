@@ -28,7 +28,7 @@ vi.mock("../../ipc/index.js", () => ({
 }));
 vi.mock("../mobile.js", () => ({ isMobile: () => false, closeDrawer: vi.fn() }));
 vi.mock("./threads.js", () => ({ closeThread: vi.fn() }));
-vi.mock("./messages.js", () => ({ cancelReply: vi.fn() }));
+vi.mock("./messages.js", () => ({ cancelReply: vi.fn(), cancelEdit: vi.fn() }));
 vi.mock("./dialogs.js", () => ({ openRoomSettings: vi.fn() }));
 vi.mock("./profile.js", () => ({ openProfileForUser: vi.fn() }));
 vi.mock("../../ui/NotificationToast.js", () => ({ showError: vi.fn(), showSuccess: vi.fn() }));
@@ -74,7 +74,7 @@ function fakeComponents(): AppComponents {
   return {
     roomList: stub(), roomHeader: stub(), timeline: stub(),
     memberList: stub(), statusBar: stub(), mobileTopBar: stub(),
-    typingIndicator,
+    input: stub(), typingIndicator,
   } as unknown as AppComponents;
 }
 
