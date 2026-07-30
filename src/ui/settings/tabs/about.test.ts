@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { aboutTab } from "./about.js";
 import { makeControls } from "../controls.js";
+import { updateSupported } from "../../../ipc/updater.js";
+
+vi.mock("../../../ipc/updater.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../ipc/updater.js")>();
+  return { ...actual, updateSupported: vi.fn(async () => true) };
+});
 
 function render(isMobile: boolean): HTMLElement {
   const content = document.createElement("div");
@@ -19,6 +25,13 @@ describe("aboutTab", () => {
   });
   it("hides Updates section on mobile", () => {
     expect(render(true).textContent).not.toMatch(/Release channel/i);
+  });
+  it("swaps the Updates controls for a package-manager note on immutable installs (#28)", async () => {
+    vi.mocked(updateSupported).mockResolvedValueOnce(false);
+    const el = render(false);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(el.textContent).not.toMatch(/Release channel/i);
+    expect(el.textContent).toMatch(/package manager/i);
   });
 });
 

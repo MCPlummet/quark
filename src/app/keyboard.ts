@@ -42,6 +42,7 @@ import {
   jumpToLatest,
   loadTheme,
   selectRoom,
+  confirmAndLeaveRoom,
   startVerification,
   setupCrossSigning,
   logout,
@@ -128,7 +129,7 @@ function registerDefaultBindings(): void {
 
 // ── Action dispatcher ─────────────────────────────────────────────────────────
 
-function dispatchAction(action: string, components: AppComponents): void {
+export function dispatchAction(action: string, components: AppComponents): void {
   const { input, commandBar, timeline, imageLightbox, revisionHistoryDialog, contextMenu } = components;
 
   switch (action) {
@@ -340,8 +341,15 @@ function dispatchAction(action: string, components: AppComponents): void {
       AppState.close();
       break;
 
+    case "leave-room-confirm":
+      void confirmAndLeaveRoom();
+      break;
+
     default:
-      document.dispatchEvent(new CustomEvent("quark:action", { detail: { action } }));
+      // Never re-dispatch quark:action here — the quark:action listener feeds
+      // back into dispatchAction, so an unhandled name would recurse forever
+      // and hang the app (#22).
+      console.warn(`[keyboard] unhandled action: ${action}`);
       break;
   }
 }

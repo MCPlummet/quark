@@ -2019,6 +2019,12 @@ pub async fn update_check(
     };
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
+        // Store-managed installs (Nix/Flatpak/Snap) can't self-update against
+        // their read-only store; report "no update" so the auto path stays
+        // quiet instead of offering an install that cannot work (#28).
+        if crate::updater::immutable_install() {
+            return Ok(None);
+        }
         crate::updater::check(&app, channel, &updater_state).await
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -2037,12 +2043,30 @@ pub async fn update_install(
 ) -> Result<(), String> {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
+        if crate::updater::immutable_install() {
+            return Err("This install is managed by a system package manager — update it there.".into());
+        }
         crate::updater::install(&app, &updater_state).await
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = (&app, &updater_state);
         Err("auto-update is desktop-only".into())
+    }
+}
+
+/// Whether in-app updates can work for this install: a desktop build that is
+/// not store-managed (Nix/Flatpak/Snap). The frontend uses this to swap the
+/// Updates settings for a package-manager hint and skip update checks (#28).
+#[tauri::command]
+pub fn update_supported() -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    {
+        !crate::updater::immutable_install()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        false
     }
 }
 

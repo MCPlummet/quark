@@ -24,8 +24,13 @@
         android:theme="@style/Theme.quark"
         android:usesCleartextTraffic="${usesCleartextTraffic}"
         android:allowBackup="false">
+        <!-- Keyboard dodge (#33) is done by MainActivity.applyImeInsets — in
+             edge-to-edge mode adjustResize alone never resizes the window.
+             It stays declared so the system picks resize (not pan) semantics
+             for IME inset dispatch instead of OEM adjustPan defaults. -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask"
             android:label="@string/main_activity_title"
             android:name=".MainActivity"

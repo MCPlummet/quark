@@ -37,6 +37,31 @@ pub struct UpdateProgress {
     pub content_length: Option<u64>,
 }
 
+/// True when the running binary lives in a read-only, store-managed install
+/// that the updater cannot write to — Flatpak, Snap, or the Nix store (#28).
+/// AppImage stays updatable: it is the one Linux packaging the Tauri updater
+/// supports. `QUARK_IMMUTABLE_INSTALL` force-enables this for packagings
+/// without an auto-detectable marker (the Nix wrapper sets it).
+pub fn immutable_install() -> bool {
+    immutable_install_from(
+        std::env::var_os("QUARK_IMMUTABLE_INSTALL").is_some(),
+        std::env::var_os("FLATPAK_ID").is_some()
+            || std::path::Path::new("/.flatpak-info").exists(),
+        std::env::var_os("SNAP").is_some(),
+        std::env::current_exe().ok().as_deref(),
+    )
+}
+
+/// Pure core of [`immutable_install`], split out for tests.
+fn immutable_install_from(
+    forced: bool,
+    flatpak: bool,
+    snap: bool,
+    exe: Option<&std::path::Path>,
+) -> bool {
+    forced || flatpak || snap || exe.is_some_and(|p| p.starts_with("/nix/store"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,6 +70,25 @@ mod tests {
     fn endpoints_are_per_channel() {
         assert_eq!(endpoint_for(UpdateChannel::Stable), "https://quark.tel/updates/stable/latest.json");
         assert_eq!(endpoint_for(UpdateChannel::Beta), "https://quark.tel/updates/beta/latest.json");
+    }
+
+    #[test]
+    fn immutable_install_detects_store_managed_packagings() {
+        use std::path::Path;
+        assert!(immutable_install_from(true, false, false, None), "env override");
+        assert!(immutable_install_from(false, true, false, None), "flatpak");
+        assert!(immutable_install_from(false, false, true, None), "snap");
+        assert!(
+            immutable_install_from(false, false, false, Some(Path::new("/nix/store/abc-quark-0.17.1/bin/quark"))),
+            "nix store exe"
+        );
+    }
+
+    #[test]
+    fn immutable_install_stays_off_for_normal_installs() {
+        use std::path::Path;
+        assert!(!immutable_install_from(false, false, false, Some(Path::new("/usr/bin/quark"))));
+        assert!(!immutable_install_from(false, false, false, None));
     }
 }
 

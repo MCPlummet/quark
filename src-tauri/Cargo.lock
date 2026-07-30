@@ -4378,7 +4378,7 @@ dependencies = [
 
 [[package]]
 name = "quark"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "ammonia",
  "chrono",
@@ -4398,6 +4398,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-notification",
  "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tempfile",
  "thiserror 2.0.18",
@@ -6093,6 +6094,22 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3214becf9ef5783c0ae99a3bb25adf5353a7a16ebf53e74b909e29205735c6c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zbus 5.14.0",
 ]
 
 [[package]]

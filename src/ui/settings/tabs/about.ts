@@ -7,6 +7,7 @@
 import type { SettingsTab } from "../types.js";
 import { openExternalUrl } from "../../../app/links.js";
 import { getAppConfig, setAppConfig, DEFAULT_APP_CONFIG } from "../../../ipc/app_config.js";
+import { updateSupported } from "../../../ipc/updater.js";
 import packageJson from "../../../../package.json";
 
 const GITHUB_URL = "https://github.com/MCPlummet/quark";
@@ -26,6 +27,17 @@ export const aboutTab: SettingsTab = {
     if (!isMobile) {
       content.appendChild(controls.sectionTitle("Updates"));
 
+      // Container for the update controls so an immutable install (Nix/
+      // Flatpak/Snap — no in-app updates) can swap them for a hint (#28).
+      const updatesBody = document.createElement("div");
+      content.appendChild(updatesBody);
+      void updateSupported().then((supported) => {
+        if (supported) return;
+        updatesBody.replaceChildren(
+          controls.readRow("Updates", "Managed by the system package manager for this install"),
+        );
+      });
+
       // Render the section synchronously with defaults so the UI is immediately
       // interactive, then patch the controls to reflect the loaded config.
       let draft = structuredClone(DEFAULT_APP_CONFIG);
@@ -44,7 +56,7 @@ export const aboutTab: SettingsTab = {
           }
         },
       );
-      content.appendChild(channelRow);
+      updatesBody.appendChild(channelRow);
 
       const autoCheckRow = controls.checkbox(
         "Check for updates automatically",
@@ -54,7 +66,7 @@ export const aboutTab: SettingsTab = {
           userEdited = true;
         },
       );
-      content.appendChild(autoCheckRow);
+      updatesBody.appendChild(autoCheckRow);
 
       // Save only the updater section back into the full current config so we
       // never overwrite other sections (general, sync, media, …) with defaults.
@@ -64,7 +76,7 @@ export const aboutTab: SettingsTab = {
         const current = await getAppConfig();
         await setAppConfig({ ...current, updater: draft.updater });
       }));
-      content.appendChild(actions);
+      updatesBody.appendChild(actions);
 
       // Load actual persisted config and sync the draft + controls, but only
       // if the user hasn't already made edits during this async window.

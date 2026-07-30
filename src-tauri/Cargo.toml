@@ -1,6 +1,6 @@
 [package]
 name = "quark"
-version = "0.17.0"
+version = "0.17.1"
 edition = "2021"
 description = "A CLI-styled Matrix client"
 authors = ["mcplummet"]
@@ -65,6 +65,7 @@ rusqlite = { version = "0.32", features = ["bundled-sqlcipher"] }
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
 
 # Windows: native-tls uses SChannel (no OpenSSL), but SQLCipher's libcrypto still
 # needs one. Vendor OpenSSL for the Windows target (build-time Perl + NASM on the

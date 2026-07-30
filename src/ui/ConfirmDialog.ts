@@ -100,3 +100,14 @@ export class ConfirmDialog extends DialogBase {
     return btn ?? this.content;
   }
 }
+
+/** Mount a ConfirmDialog, await the choice, then always unmount it. */
+export async function askConfirm(opts: ConfirmOpts): Promise<boolean> {
+  const dlg = new ConfirmDialog();
+  document.body.appendChild(dlg.getElement());
+  try {
+    return await dlg.confirm(opts);
+  } finally {
+    dlg.getElement().remove();
+  }
+}

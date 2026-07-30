@@ -91,7 +91,22 @@ pub fn run() {
         None
     };
 
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Desktop: enforce a single running instance — a second launch would open
+    // another window whose process contends for the same matrix-sdk SQLite
+    // store (#35). Must be the first plugin registered so it runs before any
+    // other init; a re-launch just surfaces the existing window.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    let builder = builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init());
 
@@ -238,6 +253,7 @@ pub fn run() {
             // Updater
             commands::update_check,
             commands::update_install,
+            commands::update_supported,
             // Config
             commands::load_theme,
             commands::list_custom_themes,

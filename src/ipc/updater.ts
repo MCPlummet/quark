@@ -20,6 +20,19 @@ export interface UpdateProgress {
   content_length: number | null;
 }
 
+let _updateSupported: Promise<boolean> | null = null;
+
+/**
+ * Whether in-app updates can work for this install — false on mobile and on
+ * store-managed packagings (Nix, Flatpak, Snap), where updates come from the
+ * system package manager. Matches `update_supported`. Cached: the answer
+ * cannot change while the app runs.
+ */
+export function updateSupported(): Promise<boolean> {
+  _updateSupported ??= invoke<boolean>("update_supported");
+  return _updateSupported;
+}
+
 /**
  * Check the configured channel's feed. Resolves to the update metadata when one
  * is available, or `null` when already up to date. Matches `update_check`.

@@ -599,6 +599,8 @@ The `[updater]` section (above) holds the prefs; both are also editable live:
 
 In-app update covers the **AppImage** (Linux x86_64), the **`.app`** (macOS Apple-Silicon / `aarch64` only), and the **NSIS `-setup.exe`** (Windows x86_64). `.deb`/`.rpm`/Flatpak/Android builds update through their own package channels, not this updater. macOS auto-update is best-effort until Apple notarization is configured (Gatekeeper may still warn on a freshly downloaded build).
 
+**Immutable installs** (Flatpak, Snap, Nix) are detected at runtime — `FLATPAK_ID`/`/.flatpak-info`, `SNAP`, an executable under `/nix/store`, or the `QUARK_IMMUTABLE_INSTALL=1` env var (set by the Nix wrapper) — and the updater disables itself: `update_check` reports "no update", `:update` explains that updates come from the system package manager, and Settings → About swaps the Updates controls for the same hint (the `update_supported` IPC command carries the flag to the frontend).
+
 ### F-Droid repository (Android)
 
 Android updates ship through a **self-hosted F-Droid repository** at `https://quark.tel/fdroid/repo` (added in an F-Droid client via that URL plus the repo fingerprint). It is not the official f-droid.org repo — no submission or review is involved.

@@ -19,8 +19,7 @@ import {
 import type { DeviceSessionInfo, KeyBackupStatus } from "../../../ipc/index.js";
 import { getAppConfig, setAppConfig } from "../../../ipc/app_config.js";
 import type { AppConfig } from "../../../ipc/app_config.js";
-import { ConfirmDialog } from "../../ConfirmDialog.js";
-import type { ConfirmOpts } from "../../ConfirmDialog.js";
+import { askConfirm } from "../../ConfirmDialog.js";
 import { PasswordPromptDialog } from "../../PasswordPromptDialog.js";
 import { showSuccess, showError } from "../../NotificationToast.js";
 import { startVerification } from "../../../app/actions/crypto.js";
@@ -40,17 +39,6 @@ function formatLastSeen(s: DeviceSessionInfo): string {
   if (s.last_seen_ts) parts.push(new Date(s.last_seen_ts).toLocaleString());
   if (s.last_seen_ip) parts.push(s.last_seen_ip);
   return parts.length ? parts.join(" · ") : "Last seen: unknown";
-}
-
-/** Mount a ConfirmDialog, await the choice, then always unmount it. */
-async function askConfirm(opts: ConfirmOpts): Promise<boolean> {
-  const dlg = new ConfirmDialog();
-  document.body.appendChild(dlg.getElement());
-  try {
-    return await dlg.confirm(opts);
-  } finally {
-    dlg.getElement().remove();
-  }
 }
 
 /**

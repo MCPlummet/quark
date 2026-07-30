@@ -84,6 +84,27 @@ body {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
+/* While any overlay is open (quark-modal-open is maintained by ModalManager),
+   remove the layout tier's scrollbars outright. WebKitGTK draws native overlay
+   scrollbars that composite above the position:fixed dialog tier regardless of
+   z-index (#32), and ignores every scrollbar-styling mechanism (neither
+   ::-webkit-scrollbar nor scrollbar-color works as of 2.50) — but no engine
+   can draw a scrollbar on a non-scroll container, so make the layout panes
+   overflow:hidden for the duration. Scroll positions are preserved and
+   programmatic scrolling (timeline stick-to-bottom) still works. Overlays
+   mount on <body>, outside .quark-layout, so their own scrollbars are
+   unaffected. .timeline's right edge stays put on classic-scrollbar platforms
+   because scrollbar-gutter: stable reserves the gutter even while hidden. */
+body.quark-modal-open .space-strip,
+body.quark-modal-open .room-list__scroll,
+body.quark-modal-open .thread-view__timeline,
+body.quark-modal-open .thread-inline__timeline,
+body.quark-modal-open .member-list__scroll,
+body.quark-modal-open .timeline,
+body.quark-modal-open .input-bar__field {
+  overflow: hidden;
+}
+
 /* ── Root app container ──────────────────────────────────────────────────── */
 
 #app {
@@ -6592,6 +6613,12 @@ body.quark-mobile .content-area {
   transition: padding-bottom 120ms ease;
 }
 
+/* Scroll-driven keyboard-offset updates apply instantly (see mobile.ts) —
+ * easing them lags the compose bar behind the finger (#33). */
+:root.quark-kb-immediate body.quark-mobile .content-area {
+  transition: none;
+}
+
 /* Input bar: respect iOS home indicator. When the keyboard is up the indicator
  * is gone, so collapse to 0 to avoid an empty stripe under the field. */
 body.quark-mobile .input-bar-wrap {
@@ -6624,6 +6651,14 @@ body.quark-mobile .space-strip__item,
 body.quark-mobile .space-strip__settings-btn {
   width: 56px;
   height: 56px;
+}
+
+/* The compose box top-anchors its children (align-items: flex-start) so the
+ * action buttons hug the first text line. On desktop that lands visually
+ * centered, but the mobile ≥16px field font makes the line box taller than
+ * the buttons and they ride high (#33) — center them against the box instead. */
+body.quark-mobile .input-bar__actions {
+  align-self: center;
 }
 
 /* Thread view becomes a full-screen overlay on mobile *when toggled on*. The

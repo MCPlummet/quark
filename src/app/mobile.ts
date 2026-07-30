@@ -34,9 +34,14 @@ function applyDrawerClass(): void {
 function trackVisualViewport(): void {
   const vv = window.visualViewport;
   if (!vv) return;
-  const update = (): void => {
+  const update = (ev?: Event): void => {
     // Height removed from the layout viewport when the keyboard is up.
     const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    // Scroll-driven updates stream every frame while the user drags with the
+    // keyboard open; easing them through the padding transition makes the
+    // compose bar lag and judder (#33). Apply those instantly and keep the
+    // ease for the open/close resize.
+    document.documentElement.classList.toggle("quark-kb-immediate", ev?.type === "scroll");
     document.documentElement.style.setProperty("--keyboard-offset", `${offset}px`);
   };
   vv.addEventListener("resize", update);
@@ -89,8 +94,20 @@ export function isDrawerOpen(): boolean {
   return _drawerOpen;
 }
 
+/**
+ * Blur the focused element so the mobile OS keyboard dismisses. The keyboard
+ * only closes when its input loses focus — a slide-over panel covering the
+ * compose box otherwise leaves the keyboard up (squashing the panel) and
+ * keeps routing keystrokes into the hidden room (#37).
+ */
+export function dismissKeyboard(): void {
+  const el = document.activeElement;
+  if (el instanceof HTMLElement) el.blur();
+}
+
 export function openDrawer(): void {
   if (!_mobile || _drawerOpen) return;
+  dismissKeyboard();
   _drawerOpen = true;
   applyDrawerClass();
   for (const cb of _drawerListeners) cb(true);

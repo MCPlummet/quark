@@ -106,12 +106,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          # Beta tags publish as prereleases. Without the flag a published
+          # beta becomes the repo's "latest" release AND pages.yml's F-Droid
+          # fetch (--exclude-pre-releases) would serve it to the stable repo.
+          # Matches the *-beta.* channel convention in publish-update-feed.
+          prerelease=false
+          [[ "$TAG" == *-beta.* ]] && prerelease=true
           release_id=$(gh api --method POST \
             "repos/${GITHUB_REPOSITORY}/releases" \
             -f tag_name="${TAG}" \
             -f name="Quark ${TAG}" \
             -f body="Automated release — see commit history for details." \
             -F draft=true \
+            -F prerelease="$prerelease" \
             --jq '.id')
           echo "release_id=${release_id}" >> "$GITHUB_OUTPUT"
 
