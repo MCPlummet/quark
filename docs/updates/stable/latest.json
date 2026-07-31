@@ -1,18 +1,18 @@
 {
-  "version": "0.17.0",
-  "pub_date": "2026-07-08T01:36:55Z",
+  "version": "0.17.1",
+  "pub_date": "2026-07-31T00:04:01Z",
   "platforms": {
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUR09zUW0wUmI3RGQxZ0doZTZFQ2ZpSWxZeFpncGJtNzl5dWl5Tld6NHR6RzF1VWJJVmMyeGFLR0NZR3JXclVYbWpaWXVtc2tUV0hoNThONVN4Yzdmd25Vd1VhQ3NJQmdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgzNDczNTM2CWZpbGU6UXVhcmtfMC4xNy4wX2FtZDY0LkFwcEltYWdlCk1YQjRtdlIrTi9IR0FvR0RKd2VTWktGRmNqdGdSMTc2cGtmVEo4MmNpTzIvUU95QTNRUW05eXNRWmg2WG9lNzF1Y1lZRlBOOWJNYVMybVJUMFNyc0JBPT0K",
-      "url": "https://github.com/MCPlummet/quark/releases/download/v0.17.0/Quark_0.17.0_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUR09zUW0wUmI3RFNkNURXOUdCUVZRSzBCaWFwQzZDc0JnaUVMWFFkWHBLNGdBWHJCZGdJWEF0cllMOXNLb0tBNzlZZU9BTDNHRlNHYVErMlAyM09GckVXQ21BRHNaZmdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1NDU0OTc2CWZpbGU6UXVhcmtfMC4xNy4xX2FtZDY0LkFwcEltYWdlCk5zQWNZWkc1dEdaWXMrVTA1b1BsMDgrRUwrQXk3Wi9Xb1k1cmdtV3J1S2xjdTcrK2h5VTI3cHo2UWtaNWVIaS9aZmxCM20zLzJHWjV4Sk9md3NUR0NRPT0K",
+      "url": "https://github.com/MCPlummet/quark/releases/download/v0.17.1/Quark_0.17.1_amd64.AppImage"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUR09zUW0wUmI3RGVLYlB5ZnJSSFlXa3RZUGp3REM1MmgvenBiNDFNSnlhemlqeTBqUHBSc1lReHR2RlYyS3NlQUpCc0VmMUNEaGR1bktTZ0M1MlNtNm9PMnA2L0tOb3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgzNDc0MzMxCWZpbGU6UXVhcmsuYXBwLnRhci5negpYTFViS0drckExVkFZNzdRVWVRQStmMEN2UFdmeXpJL0pEVWhLYndhZkZaVTRHRmtpazNWeVgzWmtWZzRZRmVVSnp3UEtvWEFWYWZnQWJFS2UzbktBZz09Cg==",
-      "url": "https://github.com/MCPlummet/quark/releases/download/v0.17.0/Quark_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUR09zUW0wUmI3RFJvZlBiaW56L0tXcTJQZjVwVUExcCtUc2ZJU3h1QzY0MDVMRjdMaDY5SUpuVTNjQ0Q1R2lvQzhaUytsTloyNXZmQjlpQ2JvMG1EcjVnR2tXV2luTFEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1NDU1MDk4CWZpbGU6UXVhcmsuYXBwLnRhci5negpnemI2RzEranZrNkVMTm1TRjhoN2h6L1FiRTlkclpRd3Z3Tm5pYm5JMVc3Q21KKzRZZTJIVlM5azFLUW11Z2VjSFJhZVNvQ2JtbEYzS1hQQ0dMbldBQT09Cg==",
+      "url": "https://github.com/MCPlummet/quark/releases/download/v0.17.1/Quark_aarch64.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUR09zUW0wUmI3RFZMNzZlOExJV0NrL3h5WnlTNDFWbCttUDJEZEVEc0h0Q0loVVY0U0pFNTZwSHhVMEtUQS9aU09vL2hid2RUSDA3TEpQNWNwdFJZM0tUMWFXT0N0QndvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgzNDc0NDg2CWZpbGU6UXVhcmtfMC4xNy4wX3g2NC1zZXR1cC5leGUKajE3cWFVajUzT2Z5L2RGNE5YUTN1NDdMOFNXNWZVanVROGxmUHEwZ3Z5bGJPR1F1dlFpY0RaakpkSi81MktIbkFZbVlQcVJIV1o3MmVXclM5Z2M2QUE9PQo=",
-      "url": "https://github.com/MCPlummet/quark/releases/download/v0.17.0/Quark_0.17.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUR09zUW0wUmI3RFpxayt2OEZMOW11MkxrcUpsN3NOVWp1VFBFejdJVzNYSEZkRlFQeFBGK0hyMHhlMUxKYlRoUHZDT1dvNTlzQW04Yi9ITEY2VHhGck1HMGFOWEQvZUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1NDU2MTA4CWZpbGU6UXVhcmtfMC4xNy4xX3g2NC1zZXR1cC5leGUKNng3K2hyQTA1Q2JxUm8rZnFCeXpkVk8yTDhuaFFhVGw3OEtNMU45QytnbzkxektkYlQ4Mlp3MWFUSmgwblhDdDJoM0lGVUQyd3lqTXRzN2tCbzZyQ0E9PQo=",
+      "url": "https://github.com/MCPlummet/quark/releases/download/v0.17.1/Quark_0.17.1_x64-setup.exe"
     }
   }
 }
