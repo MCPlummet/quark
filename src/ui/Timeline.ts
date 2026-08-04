@@ -359,8 +359,12 @@ function formatSeparatorLabel(isoString: string): string {
     const hour12 = ((h % 12) || 12).toString();
     const time = `${hour12}:${m} ${ampm}`;
 
+    // Compare local calendar days, not elapsed milliseconds. `getDate() - 1`
+    // rolls the month/year over for us and — unlike subtracting 86400000 from
+    // midnight — lands on the previous local midnight even on a DST shift day
+    // (which is 23 or 25 hours long).
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today.getTime() - 86400000);
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
     const msgDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
 
     if (msgDay.getTime() === today.getTime()) return `Today at ${time}`;
@@ -378,6 +382,9 @@ function buildTimeSeparator(isoString: string): HTMLElement {
   const el = document.createElement("div");
   el.className = "time-separator";
   el.setAttribute("role", "separator");
+  // Kept on the node so the label — which is relative to "now" — can be rebuilt
+  // when the calendar day rolls over under a long-lived session (#40).
+  el.dataset.timestamp = isoString;
   const label = formatSeparatorLabel(isoString);
   el.textContent = label;
   return el;
@@ -975,6 +982,8 @@ export class Timeline {
   private _scrollAnimCleanupTimer: ReturnType<typeof setTimeout> | null = null;
   /** Debounce handle for the deferred window cull (runs at scroll-settle). */
   private _cullTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Handle for the next local-midnight re-label of the time separators (#40). */
+  private _dayRolloverTimer: ReturnType<typeof setTimeout> | null = null;
   /** Observes the message list while pinned to the live tail so late content
    *  growth (images decoding, custom emoji and stickers resolving, GIFs
    *  resuming on window refocus) re-pins to the bottom in a single coalesced
@@ -1198,6 +1207,38 @@ export class Timeline {
     // doesn't reach finger-input users, so a 500ms press on a message opens
     // the full action menu instead. Cancelled by any move/scroll/end.
     this._setupLongPress();
+
+    this._scheduleDayRollover();
+  }
+
+  /** Rebuild every rendered time separator's label against the current date.
+   *  Labels are relative ("Today at 5:03 PM") but are baked in when the node is
+   *  built, so without this a session left open past midnight keeps showing
+   *  yesterday's separators as "Today" (#40). */
+  private _refreshSeparatorLabels(): void {
+    for (const sep of Array.from(this._listEl.querySelectorAll<HTMLElement>(".time-separator"))) {
+      const ts = sep.dataset.timestamp;
+      if (ts) sep.textContent = formatSeparatorLabel(ts);
+    }
+  }
+
+  /** Arm a one-shot timer for the next local midnight, re-arming after each
+   *  fire. One-shot rather than an interval so the wait is always recomputed
+   *  from the wall clock — a machine that suspends over midnight fires late and
+   *  still re-labels against the day it actually woke up on. */
+  private _scheduleDayRollover(): void {
+    if (typeof setTimeout === "undefined") return;
+    if (this._dayRolloverTimer !== null) clearTimeout(this._dayRolloverTimer);
+    const now = new Date();
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    // One second past midnight: setTimeout can fire a hair early, and relabelling
+    // against the old day would then stick for another 24 hours.
+    const delay = nextMidnight.getTime() - now.getTime() + 1000;
+    this._dayRolloverTimer = setTimeout(() => {
+      this._dayRolloverTimer = null;
+      this._refreshSeparatorLabels();
+      this._scheduleDayRollover();
+    }, delay);
   }
 
   private _setupLongPress(): void {
