@@ -127,6 +127,10 @@ function timelineEventToMessage(e: TimelineEvent) {
     mediaUrl: e.media_url ?? undefined,
     mediaAlt: e.body,
     mediaMimeType: e.media_mimetype ?? undefined,
+    // MSC2530 caption. Without this a captioned image painted bare in the live
+    // tail (sends have no local echo, so they arrive through here) and only
+    // showed its caption after a reload, which maps events via context.ts.
+    caption: e.caption ?? undefined,
     mediaEncryptionInfo: e.media_encryption_info ?? undefined,
     replyTo,
   };
