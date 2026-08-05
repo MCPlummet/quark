@@ -68,6 +68,12 @@ A single-page app styled as a terminal interface. No framework required initiall
 - Theme application from user config
 - Room list, member list, space hierarchy display
 
+### Mobile lifecycle
+
+iOS reclaims memory by killing the WKWebView's *content* process while an app is backgrounded. The app process itself survives, so the app resumes to a live window wrapping a dead page — a blank screen that nothing but a force-quit clears (#39). Tauri ≥ 2.11 implements WebKit's `webViewWebContentProcessDidTerminate:` callback and reloads the webview in response, which is why `src-tauri/Cargo.toml` floors `tauri` at `2.11` rather than `2`; dropping back to a 2.10.x lock reintroduces the blank screen.
+
+Recovery is a full page reload, so it costs the user their scroll position and any unsent draft. The reloaded page re-runs the normal startup path — `restore_session` reads the session back out of the keyring and lands on the room list — and because `start_sync` aborts any running loop before spawning one, a reload can never leave two sync loops polling the homeserver.
+
 ---
 
 ## UI Design
