@@ -30,19 +30,47 @@ function applyDrawerClass(): void {
   document.body.classList.toggle("quark-mobile-drawer-open", _mobile && _drawerOpen);
 }
 
+/**
+ * Split the visual-viewport geometry into the two independent quantities the
+ * layout needs. Conflating them is what made the composer misbehave when the
+ * user scrolled on it with the keyboard open (#33):
+ *
+ *   keyboardInset  how much of the *layout* viewport the on-screen keyboard
+ *                  covers. Only changes when the keyboard opens or closes, so
+ *                  it is safe to drive layout with (content-area padding).
+ *   pan            how far the engine has panned the visual viewport within the
+ *                  layout viewport. iOS keeps the layout viewport at full height
+ *                  while the keyboard is up, so any drag the page doesn't
+ *                  consume pans it — streaming an update every frame. Folding
+ *                  that into the inset re-laid-out the whole content column on
+ *                  each frame, which is what dragged the compose bar around
+ *                  under the finger; it is compensated with a transform instead.
+ *
+ * Panning is only meaningful while the keyboard is up: with no inset there is
+ * nothing to pan within, and a non-zero offsetTop then means a deliberate
+ * pinch-zoom pan, which must not be cancelled out.
+ */
+export function viewportMetrics(
+  layoutHeight: number,
+  visualHeight: number,
+  visualOffsetTop: number,
+): { keyboardInset: number; pan: number } {
+  const keyboardInset = Math.max(0, layoutHeight - visualHeight);
+  const pan = keyboardInset > 0
+    ? Math.max(0, Math.min(visualOffsetTop, keyboardInset))
+    : 0;
+  return { keyboardInset, pan };
+}
+
 /** Track the visual viewport so the compose box stays above the iOS keyboard. */
 function trackVisualViewport(): void {
   const vv = window.visualViewport;
   if (!vv) return;
-  const update = (ev?: Event): void => {
-    // Height removed from the layout viewport when the keyboard is up.
-    const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    // Scroll-driven updates stream every frame while the user drags with the
-    // keyboard open; easing them through the padding transition makes the
-    // compose bar lag and judder (#33). Apply those instantly and keep the
-    // ease for the open/close resize.
-    document.documentElement.classList.toggle("quark-kb-immediate", ev?.type === "scroll");
-    document.documentElement.style.setProperty("--keyboard-offset", `${offset}px`);
+  const root = document.documentElement;
+  const update = (): void => {
+    const { keyboardInset, pan } = viewportMetrics(window.innerHeight, vv.height, vv.offsetTop);
+    root.style.setProperty("--keyboard-offset", `${keyboardInset}px`);
+    root.style.setProperty("--viewport-pan", `${pan}px`);
   };
   vv.addEventListener("resize", update);
   vv.addEventListener("scroll", update);

@@ -223,4 +223,37 @@ describe("Input", () => {
       expect(input.hasPendingImage()).toBe(false);
     });
   });
+
+  // The mobile compose row is centered by styling `.input-bar__action-btn` into a
+  // uniform box (#33), so every control in the cluster has to carry that class —
+  // a new button added without it would sit off the shared center line.
+  describe("compose-row action buttons", () => {
+    function actionButtons(): HTMLButtonElement[] {
+      return Array.from(
+        input.getElement().querySelectorAll<HTMLButtonElement>(
+          ".input-bar__actions .input-bar__action-btn",
+        ),
+      );
+    }
+
+    it("styles every control in the cluster as an action button", () => {
+      expect(actionButtons().map((b) => b.getAttribute("aria-label"))).toEqual([
+        "Open emoji picker",
+        "Open GIF picker",
+        "Attach file",
+        "Send message",
+      ]);
+    });
+
+    it("toggles the send button by display alone, leaving the styling class in place", () => {
+      // setSendButtonVisible clears the inline display rather than setting one,
+      // so the button falls back to the stylesheet's (flex, on mobile) box.
+      const send = input.getElement().querySelector<HTMLButtonElement>(".input-bar__send-btn")!;
+      expect(send.style.display).toBe("none");
+
+      input.setSendButtonVisible(true);
+      expect(send.style.display).toBe("");
+      expect(send.classList.contains("input-bar__action-btn")).toBe(true);
+    });
+  });
 });
