@@ -1629,6 +1629,10 @@ export class Timeline {
     }
     this._listEl.insertBefore(fragment, this._listEl.firstChild);
 
+    // Newly-rendered older messages may be a receipt target — re-decorate
+    // (same rationale as _extendWindowUp).
+    this._renderReceipts();
+
     // Prepending means the user is reading history, not following the tail —
     // disengage stick. scrollTop is unchanged (column-reverse held it), so the
     // derived state below reads the same position the user was already at.
@@ -1675,6 +1679,9 @@ export class Timeline {
     this._scrolledUp = this._distanceFromBottom > 40;
     this._stickToBottom = false;
     this._prevScrollTop = this._el.scrollTop;
+    // Receipt containers are position:absolute (out of flow), so decorating
+    // after the compensation above can't perturb it.
+    this._renderReceipts();
     this._scheduleCull();
   }
 
@@ -1832,7 +1839,11 @@ export class Timeline {
    *  `flex-direction: column-reverse` the bottom is anchored, so appending below
    *  shifts the viewport toward the new tail — when scrolled up we subtract the
    *  added height to keep the previously-visible content fixed. `animate` uses the
-   *  send counter-animation instead of an instant pin. */
+   *  send counter-animation instead of an instant pin.
+   *
+   *  Every tail-append exit (appendMessage's grouped and ungrouped paths,
+   *  appendMessageHidden's three) funnels through here, which makes it the one
+   *  place the live tail has to re-decorate read receipts. */
   private _settleTailAppend(oldScrollHeight: number, animate = false): void {
     if (this._scrolledUp) {
       this._el.scrollTop -= this._el.scrollHeight - oldScrollHeight;
@@ -1842,6 +1853,13 @@ export class Timeline {
     } else {
       this._scrollToBottom();
     }
+    // A live message moves its *sender's* receipt: posting implies having read
+    // up to your own message, and homeservers do not bundle an m.receipt with
+    // the message. Without this, the sender's avatar sits above content they
+    // demonstrably saw until the next full render or explicit receipt. Runs
+    // after the scroll math — receipt containers are position:absolute, so they
+    // can't perturb the compensation above.
+    this._renderReceipts();
   }
 
   /** Force scroll to the latest message */
