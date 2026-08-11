@@ -2755,6 +2755,12 @@ span.reaction__emoji {
   border-radius: 8px 0px 0px 8px;
 }
 
+/* Vim off: hide the indicator but keep its box so the compose box stays put.
+ * Mobile overrides *how* it hides — see the touch-action guard further down. */
+.input-bar__mode--hidden {
+  visibility: hidden;
+}
+
 .input-bar__mode--insert {
   background-color: var(--accent-secondary);
   color: var(--bg);
@@ -6652,8 +6658,34 @@ body.quark-mobile .input-bar__field {
 
 body.quark-mobile .input-bar__mode,
 body.quark-mobile .input-bar__actions,
-body.quark-mobile .paste-preview {
+body.quark-mobile .paste-preview,
+body.quark-mobile .reply-preview-bar {
   touch-action: none;
+}
+
+/* …but on mobile the indicator is always in its hidden state — initMobile forces
+ * vim off — and `visibility: hidden` takes an element out of hit testing, so the
+ * rule above was guarding a surface no touch could ever land on. The drag fell
+ * through to .input-bar, which takes no touch-action (it is the field's ancestor,
+ * and `none` there would intersect away the field's own pan-y), and chained out
+ * to the pan. That left the row's whole left edge live: 8px of .input-bar padding
+ * + 4px of margin + the 40px indicator.
+ *
+ * So hide it by paint instead of by hit test, and let its box swallow that padding
+ * and its own margins so the guarded surface reaches the row's edges. Everything
+ * here applies only while hidden — i.e. only when nothing of it is drawn — so the
+ * geometry is invisible: the compose box's left edge does not move (16px of lead-in
+ * either way), and the accent block never paints at the stretched size. */
+body.quark-mobile .input-bar--no-vim {
+  padding-left: 0;
+}
+
+body.quark-mobile .input-bar--no-vim .input-bar__mode--hidden {
+  visibility: visible;
+  opacity: 0;
+  margin: 0;
+  width: 52px; /* was 8px bar padding + 4px margin + 40px box */
+  padding-left: 16px; /* keeps the 32px content box where it was */
 }
 
 /* Larger touch targets in the room list (drawer). */

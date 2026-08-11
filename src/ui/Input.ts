@@ -403,9 +403,19 @@ export class Input {
   /** Show or hide the vim mode indicator. When hidden, the input always behaves as Insert. */
   setVimMode(enabled: boolean): void {
     this._vimMode = enabled;
-    // Use visibility so the indicator still occupies space — no layout shift.
-    this._modeEl.style.visibility = enabled ? "" : "hidden";
+    this._setModeHidden(!enabled);
     this._inputBarEl.classList.toggle("input-bar--no-vim", !enabled);
+  }
+
+  /** Hide the indicator while keeping its box — it must stay a hit-test target on
+   * mobile, where it carries the compose row's `touch-action: none` guard (#33).
+   * The mechanism is the stylesheet's to choose (`visibility` on desktop, paint-only
+   * on mobile), so toggle a class rather than an inline style; `aria-hidden` keeps
+   * it out of the a11y tree either way, since `visibility` no longer always does. */
+  private _setModeHidden(hidden: boolean): void {
+    this._modeEl.classList.toggle("input-bar__mode--hidden", hidden);
+    if (hidden) this._modeEl.setAttribute("aria-hidden", "true");
+    else this._modeEl.removeAttribute("aria-hidden");
   }
 
   setMode(mode: Mode): void {
@@ -414,12 +424,12 @@ export class Input {
 
     // When vim is disabled, keep the indicator invisible (still occupies space)
     if (!this._vimMode) {
-      this._modeEl.style.visibility = "hidden";
+      this._setModeHidden(true);
       this._refreshPlaceholder();
       return;
     }
 
-    this._modeEl.style.visibility = "";
+    this._setModeHidden(false);
 
     // Remove previous mode class
     for (const cls of Object.values(MODE_CSS_CLASS)) {

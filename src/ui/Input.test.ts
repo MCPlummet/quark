@@ -256,4 +256,44 @@ describe("Input", () => {
       expect(send.classList.contains("input-bar__action-btn")).toBe(true);
     });
   });
+
+  describe("hidden mode indicator", () => {
+    function modeEl(): HTMLElement {
+      return input.getElement().querySelector<HTMLElement>(".input-bar__mode")!;
+    }
+
+    // The indicator carries the compose row's touch-action guard on mobile, where
+    // vim is always off (#33). An inline `visibility: hidden` would drop it out of
+    // hit testing — and beat any stylesheet rule trying to put it back — so the
+    // whole left edge of the row would hand drags to the viewport pan again.
+    it("hides via a class, never an inline visibility, so it stays hit-testable", () => {
+      input.setVimMode(false);
+      expect(modeEl().classList.contains("input-bar__mode--hidden")).toBe(true);
+      expect(modeEl().style.visibility).toBe("");
+
+      // setMode re-asserts the hidden state while vim is off — same mechanism.
+      input.setMode(Mode.Normal);
+      expect(modeEl().classList.contains("input-bar__mode--hidden")).toBe(true);
+      expect(modeEl().style.visibility).toBe("");
+    });
+
+    it("keeps the hidden indicator out of the a11y tree", () => {
+      input.setVimMode(false);
+      expect(modeEl().getAttribute("aria-hidden")).toBe("true");
+
+      input.setVimMode(true);
+      expect(modeEl().classList.contains("input-bar__mode--hidden")).toBe(false);
+      expect(modeEl().hasAttribute("aria-hidden")).toBe(false);
+    });
+
+    it("marks the bar --no-vim in lockstep, since the mobile geometry keys off it", () => {
+      const bar = input.getElement().querySelector(".input-bar")!;
+
+      input.setVimMode(false);
+      expect(bar.classList.contains("input-bar--no-vim")).toBe(true);
+
+      input.setVimMode(true);
+      expect(bar.classList.contains("input-bar--no-vim")).toBe(false);
+    });
+  });
 });
