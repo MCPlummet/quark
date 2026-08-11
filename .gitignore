@@ -4,6 +4,12 @@ node_modules/
 # Build
 dist/
 src-tauri/target/
+# Regenerated from the capability/permission definitions on every build, and
+# nothing here consumes them (no $schema refs in src-tauri/capabilities/, no
+# mention in CI) — they only ever churned review diffs when a toolchain moved.
+# Note this is gen/schemas alone: gen/apple and gen/android are hand-maintained
+# (project.yml, Info.plist, entitlements, the Android launcher icons).
+src-tauri/gen/schemas/
 
 # IDE
 .vscode/
