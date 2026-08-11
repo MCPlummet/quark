@@ -44,6 +44,7 @@ export class Input {
     this._el.className = "input-bar-wrap";
     this._el.setAttribute("role", "region");
     this._el.setAttribute("aria-label", "Message input");
+    this._guardAgainstViewportPan();
 
     // ── Paste image preview (hidden by default, shown above compose bar) ──
     this._pastePreviewEl = document.createElement("div");
@@ -407,11 +408,40 @@ export class Input {
     this._inputBarEl.classList.toggle("input-bar--no-vim", !enabled);
   }
 
-  /** Hide the indicator while keeping its box — it must stay a hit-test target on
-   * mobile, where it carries the compose row's `touch-action: none` guard (#33).
-   * The mechanism is the stylesheet's to choose (`visibility` on desktop, paint-only
-   * on mobile), so toggle a class rather than an inline style; `aria-hidden` keeps
-   * it out of the a11y tree either way, since `visibility` no longer always does. */
+  /**
+   * No drag anywhere in the compose region may reach the iOS visual-viewport pan
+   * (#33). `touch-action` alone cannot express that: .input-bar and
+   * .input-bar__compose-box are the field's ancestors, and touch-action intersects
+   * down the tree, so `none` on either would take the field's own `pan-y` with it.
+   * That left every bare surface between the guarded leaves — the bar's padding,
+   * the compose box's margins and padding ring, the wrap's safe-area strip — still
+   * handing drags to the pan, one gap at a time.
+   *
+   * State the rule once instead: swallow any drag in the region that isn't the
+   * field scrolling itself (the field stops its own chaining with
+   * overscroll-behavior: contain). The listener is on the wrap, not the document,
+   * so the rest of the page keeps its passive fast path, and `passive: false` is
+   * what lets preventDefault bind at all. preventDefault only cancels the browser's
+   * default action — other listeners still run, so the drawer swipe in touch.ts,
+   * which drives its own transform, is unaffected.
+   */
+  private _guardAgainstViewportPan(): void {
+    this._el.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!isMobile()) return;
+        const target = e.target instanceof Element ? e.target : null;
+        if (target?.closest(".input-bar__field")) return;
+        if (e.cancelable) e.preventDefault();
+      },
+      { passive: false },
+    );
+  }
+
+  /** Hide the indicator while keeping its box, so the compose box stays put.
+   * The mechanism is the stylesheet's to choose, so toggle a class rather than an
+   * inline style — an inline one would beat any rule trying to override it.
+   * `aria-hidden` carries the a11y half that `visibility` used to do implicitly. */
   private _setModeHidden(hidden: boolean): void {
     this._modeEl.classList.toggle("input-bar__mode--hidden", hidden);
     if (hidden) this._modeEl.setAttribute("aria-hidden", "true");

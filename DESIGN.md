@@ -74,6 +74,12 @@ iOS reclaims memory by killing the WKWebView's *content* process while an app is
 
 Recovery is a full page reload, so it costs the user their scroll position and any unsent draft. The reloaded page re-runs the normal startup path — `restore_session` reads the session back out of the keyring and lands on the room list — and because `start_sync` aborts any running loop before spawning one, a reload can never leave two sync loops polling the homeserver.
 
+### Mobile touch behaviour
+
+**The compose region never pans the viewport.** With the keyboard up, iOS keeps the layout viewport at full height and lets the visual viewport be panned within it, so any drag the page doesn't consume pans the shell — including drags on the compose bar, which has nothing of its own to scroll (#33). `touch-action` handles the leaves it can, but it cannot express the rule for the region: it intersects down the tree, so `none` on `.input-bar` or the compose box would take the text field's own `pan-y` with it. `Input._guardAgainstViewportPan` is the enforcement — a non-passive `touchmove` listener on `.input-bar-wrap` that swallows every drag except the field scrolling itself. Adding chrome to the compose row therefore needs no new `touch-action` rule; it is covered by being inside the wrap.
+
+**Pinch-zoom is off.** The viewport meta in `index.html` carries `user-scalable=no, maximum-scale=1`, which is the only lever that works — WebKit does not let `touch-action` suppress the page-level pinch gesture on iOS. Zooming the shell only ever left the UI misaligned against a fixed compose bar and drawer. Images keep pinch-to-zoom: `ImageLightbox` implements that itself in JS, which the viewport meta does not affect. Desktop browsers ignore the meta, so their zoom is unchanged.
+
 ---
 
 ## UI Design

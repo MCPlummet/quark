@@ -6642,15 +6642,23 @@ body.quark-mobile .input-bar-wrap {
   padding-bottom: max(0px, env(safe-area-inset-bottom) - var(--keyboard-offset, 0px));
 }
 
-/* Keep drags that start on the compose row out of the viewport pan (#33). With
- * the keyboard up the row is the one thing the user's thumb naturally rests on,
+/* Keep drags in the compose region out of the viewport pan (#33). With the
+ * keyboard up the region is the one thing the user's thumb naturally rests on,
  * and it has nothing of its own to scroll: the field only overflows past six
  * lines, and the mode indicator / button cluster never scroll at all. Without
  * this the drag chains straight out to a visual-viewport pan (see the #app
  * transform above). The field keeps its own vertical scrolling — `pan-y` plus
  * `contain` lets it scroll its overflow but stops the scroll chaining onward
- * once it hits either end. Note `touch-action` intersects down the tree, so the
- * `none` values stay off the field's ancestors. */
+ * once it hits either end.
+ *
+ * These rules are the cheap first line — they stop the gesture before it starts,
+ * on the leaves that a touch actually lands on. They cannot cover the region as a
+ * whole: `touch-action` intersects down the tree, so `none` on .input-bar or
+ * .input-bar__compose-box would take the field's `pan-y` with it, which leaves
+ * every bare surface between the leaves (the bar's padding, the box's margins and
+ * padding ring, the wrap's safe-area strip) still able to hand off a drag. Input's
+ * _guardAgainstViewportPan is what actually enforces the rule across the region;
+ * see the note there. */
 body.quark-mobile .input-bar__field {
   touch-action: pan-y;
   overscroll-behavior: contain;
@@ -6661,31 +6669,6 @@ body.quark-mobile .input-bar__actions,
 body.quark-mobile .paste-preview,
 body.quark-mobile .reply-preview-bar {
   touch-action: none;
-}
-
-/* …but on mobile the indicator is always in its hidden state — initMobile forces
- * vim off — and `visibility: hidden` takes an element out of hit testing, so the
- * rule above was guarding a surface no touch could ever land on. The drag fell
- * through to .input-bar, which takes no touch-action (it is the field's ancestor,
- * and `none` there would intersect away the field's own pan-y), and chained out
- * to the pan. That left the row's whole left edge live: 8px of .input-bar padding
- * + 4px of margin + the 40px indicator.
- *
- * So hide it by paint instead of by hit test, and let its box swallow that padding
- * and its own margins so the guarded surface reaches the row's edges. Everything
- * here applies only while hidden — i.e. only when nothing of it is drawn — so the
- * geometry is invisible: the compose box's left edge does not move (16px of lead-in
- * either way), and the accent block never paints at the stretched size. */
-body.quark-mobile .input-bar--no-vim {
-  padding-left: 0;
-}
-
-body.quark-mobile .input-bar--no-vim .input-bar__mode--hidden {
-  visibility: visible;
-  opacity: 0;
-  margin: 0;
-  width: 52px; /* was 8px bar padding + 4px margin + 40px box */
-  padding-left: 16px; /* keeps the 32px content box where it was */
 }
 
 /* Larger touch targets in the room list (drawer). */
