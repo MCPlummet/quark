@@ -22,6 +22,8 @@ export {
   resolveSenderAvatarUrl,
   ensureSenderAvatarDownloaded,
   resolveInlineEmojiForTimeline,
+  timelineEventToMessage,
+  timelineEventToThreadMessage,
 } from "./actions/context.js";
 
 // Session lifecycle.

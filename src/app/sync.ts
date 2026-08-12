@@ -3,7 +3,7 @@
 import { AppState } from "./state.js";
 import type { AppComponents } from "../ui/App.js";
 import type { TimelineEvent, RoomInfo } from "../ipc/types.js";
-import { refreshRooms, selectRoom, resolveDisplayName, consumeOwnSentEvent, applyIncomingReaction, resolveInlineEmojiForTimeline, handleIncomingVerificationRequest, downloadSyncMessageImage, resolveSenderAvatarUrl, ensureSenderAvatarDownloaded, applyIncomingRedaction, stripReplyFallback, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, appendRoomTimelineCache, bumpRoomActivity, homeViewHandleMessage, homeViewHandlePresence } from "./actions.js";
+import { refreshRooms, selectRoom, resolveDisplayName, consumeOwnSentEvent, applyIncomingReaction, resolveInlineEmojiForTimeline, handleIncomingVerificationRequest, downloadSyncMessageImage, ensureSenderAvatarDownloaded, applyIncomingRedaction, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, appendRoomTimelineCache, bumpRoomActivity, homeViewHandleMessage, homeViewHandlePresence, timelineEventToMessage, timelineEventToThreadMessage } from "./actions.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { handleIncomingMessage } from "./notifications.js";
 
@@ -80,61 +80,13 @@ async function tauriListen<T>(
   }
 }
 
-// ── Message helpers ───────────────────────────────────────────────────────────
-
-function timelineEventToMessage(e: TimelineEvent) {
-  const msgType = (() => {
-    if (e.msg_type === "m.image") return "image" as const;
-    if (e.msg_type === "m.sticker") return "sticker" as const;
-    if (e.msg_type === "m.video") return "video" as const;
-    if (e.msg_type === "m.file") return "file" as const;
-    return "text" as const;
-  })();
-
-  // Build reply preview from the current timeline state
-  let replyTo: import("../ui/Timeline.js").ReplyPreviewData | undefined;
-  if (e.in_reply_to) {
-    const allEvents = AppState.get("currentTimeline");
-    const parent = allEvents.find((ev) => ev.event_id === e.in_reply_to);
-    if (parent) {
-      // If the parent is itself a reply, strip its quoted fallback so the
-      // preview shows the parent's own words, not its grandparent's.
-      const parentBody = parent.in_reply_to
-        ? stripReplyFallback(parent.body, parent.formatted_body ?? undefined).body
-        : parent.body;
-      replyTo = {
-        eventId: parent.event_id,
-        senderName: resolveDisplayName(parent.sender),
-        body: parentBody.slice(0, 80),
-      };
-    }
-  }
-
-  // Strip Matrix reply fallback so the quoted original doesn't render twice
-  const { body: displayBody, htmlBody: displayHtml } = e.in_reply_to
-    ? stripReplyFallback(e.body, e.formatted_body ?? undefined)
-    : { body: e.body, htmlBody: e.formatted_body ?? undefined };
-
-  return {
-    id: e.event_id,
-    senderId: e.sender,
-    senderName: resolveDisplayName(e.sender),
-    senderAvatarUrl: resolveSenderAvatarUrl(e.sender),
-    timestamp: new Date(e.timestamp).toISOString(),
-    body: displayBody,
-    htmlBody: displayHtml,
-    type: msgType,
-    mediaUrl: e.media_url ?? undefined,
-    mediaAlt: e.body,
-    mediaMimeType: e.media_mimetype ?? undefined,
-    // MSC2530 caption. Without this a captioned image painted bare in the live
-    // tail (sends have no local echo, so they arrive through here) and only
-    // showed its caption after a reload, which maps events via context.ts.
-    caption: e.caption ?? undefined,
-    mediaEncryptionInfo: e.media_encryption_info ?? undefined,
-    replyTo,
-  };
-}
+// ── Message mapping ───────────────────────────────────────────────────────────
+//
+// There is deliberately no event→MessageData mapper here. The live tail maps
+// events with the SAME `timelineEventToMessage` the room-load path uses (see
+// actions/context.ts); a private near-copy in this file is what made captions
+// (#41), image dimensions, video thumbnails and own-sender styling appear only
+// after a room reload.
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -216,12 +168,14 @@ export async function startSync(components: AppComponents): Promise<() => void> 
             // thread panel if the matching thread is open, and always update
             // the reply count indicator on the thread root message.
             if (openThreadId !== null && payload.event.thread_root === openThreadId) {
-              timeline.appendInlineReply({
-                id: payload.event.event_id,
-                senderName: resolveDisplayName(payload.event.sender),
-                isOwn: false,
-                timestamp: new Date(payload.event.timestamp).toISOString(),
-                body: payload.event.body,
+              // Map with the same converter the thread-open path uses, so a
+              // reply that arrives live renders with its media (image/video/
+              // sticker/file) instead of a bare filename line.
+              timeline.appendInlineReply(timelineEventToThreadMessage(payload.event));
+              // …and resolve its mxc:// media into the panel, mirroring what
+              // openThread() does for the replies it loads.
+              downloadSyncMessageImage(payload.event, {
+                updateMessageMedia: (id, url) => timeline.updateInlineThreadMedia(id, url),
               });
             }
             timeline.incrementThreadReplyCount(payload.event.thread_root);
@@ -233,7 +187,12 @@ export async function startSync(components: AppComponents): Promise<() => void> 
               payload.event.formatted_body ?? undefined,
             );
           } else {
-            timeline.appendMessage(timelineEventToMessage(payload.event));
+            // `currentTimeline` (already including this event, appended above)
+            // is the lookup list for the reply preview — the same list the
+            // room-load path passes.
+            timeline.appendMessage(
+              timelineEventToMessage(payload.event, AppState.get("currentTimeline")),
+            );
             downloadSyncMessageImage(payload.event, timeline);
             ensureSenderAvatarDownloaded(payload.event.sender, timeline);
             resolveInlineEmojiForTimeline(timeline);

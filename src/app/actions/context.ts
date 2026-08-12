@@ -29,6 +29,7 @@ import type { AppComponents } from "../../ui/App.js";
 import type { RoomInfo, TimelineEvent, RoomMember } from "../../ipc/types.js";
 import type { RoomEntry } from "../../ui/RoomList.js";
 import type { MessageData, ReplyPreviewData } from "../../ui/Timeline.js";
+import type { ThreadMessageData } from "../../ui/ThreadView.js";
 import type { MemberEntry } from "../../ui/MemberList.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -329,15 +330,26 @@ export function _resolveReactionImage(key: string): string | undefined {
   return _emojiImageCache.get(key);
 }
 
-/** Convert IPC TimelineEvent → Timeline MessageData */
+/** Map a Matrix `msgtype` to the renderer's message kind. */
+function _messageTypeOf(e: TimelineEvent): "text" | "image" | "sticker" | "video" | "file" {
+  if (e.msg_type === "m.image") return "image";
+  if (e.msg_type === "m.sticker") return "sticker";
+  if (e.msg_type === "m.video") return "video";
+  if (e.msg_type === "m.file") return "file";
+  return "text";
+}
+
+/**
+ * Convert IPC TimelineEvent → Timeline MessageData.
+ *
+ * THE single TimelineEvent → MessageData mapper: the room-load path, the
+ * pagination paths and the live sync tail (`app/sync.ts`) all go through here.
+ * Keeping one mapper is the invariant that matters — a private near-copy in the
+ * sync handler is what made captions (#41) appear only after a room reload, and
+ * would have done the same for every field added since.
+ */
 export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEvent[], threadRootCounts?: Map<string, number>): MessageData {
-  const msgType = (() => {
-    if (e.msg_type === "m.image") return "image" as const;
-    if (e.msg_type === "m.sticker") return "sticker" as const;
-    if (e.msg_type === "m.video") return "video" as const;
-    if (e.msg_type === "m.file") return "file" as const;
-    return "text" as const;
-  })();
+  const msgType = _messageTypeOf(e);
 
   let replyTo: ReplyPreviewData | undefined;
   if (e.in_reply_to && allEvents) {
@@ -404,6 +416,35 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
     threadReplyCount: threadRootCounts?.get(e.event_id),
     wasEdited: e.was_edited,
     originalBody: e.original_body,
+  };
+}
+
+/**
+ * Convert IPC TimelineEvent → inline-thread ThreadMessageData.
+ *
+ * The thread panel's counterpart to {@link timelineEventToMessage}, shared by
+ * the thread-open path (`actions/threads.ts`) and the live sync tail so a reply
+ * arriving into an open thread renders exactly like one loaded with the thread.
+ *
+ * Note: ThreadMessageData has no `caption` field and the inline renderer draws
+ * none, so an MSC2530 caption is dropped here — see the summary in #41.
+ */
+export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageData {
+  const ownUserId = AppState.get("ownUserId");
+  return {
+    id: e.event_id,
+    senderName: resolveDisplayName(e.sender),
+    isOwn: ownUserId ? e.sender === ownUserId : false,
+    timestamp: new Date(e.timestamp).toISOString(),
+    body: e.body,
+    htmlBody: e.formatted_body ?? undefined,
+    type: _messageTypeOf(e),
+    mediaUrl: e.media_url ?? undefined,
+    mediaAlt: e.body,
+    mediaMimeType: e.media_mimetype ?? undefined,
+    mediaEncryptionInfo: e.media_encryption_info ?? undefined,
+    mediaThumbnailUrl: e.media_thumbnail_url ?? undefined,
+    mediaThumbnailEncryptionInfo: e.media_thumbnail_encryption_info ?? undefined,
   };
 }
 
