@@ -1,7 +1,7 @@
 // Compose bar with mode indicator
 
 import { Mode } from "../vim/mode.js";
-import { isMobile, onMobileChange } from "../app/mobile.js";
+import { isMobile, onMobileChange, guardViewportPan } from "../app/mobile.js";
 
 const MODE_LABELS: Record<string, string> = {
   Normal: "NOR",
@@ -44,6 +44,9 @@ export class Input {
     this._el.className = "input-bar-wrap";
     this._el.setAttribute("role", "region");
     this._el.setAttribute("aria-label", "Message input");
+    // Nothing in the compose region scrolls except the field itself, so no drag
+    // over it may reach the visual-viewport pan (#33).
+    guardViewportPan(this._el, (t) => !!t?.closest(".input-bar__field"));
 
     // ── Paste image preview (hidden by default, shown above compose bar) ──
     this._pastePreviewEl = document.createElement("div");
@@ -403,9 +406,20 @@ export class Input {
   /** Show or hide the vim mode indicator. When hidden, the input always behaves as Insert. */
   setVimMode(enabled: boolean): void {
     this._vimMode = enabled;
-    // Use visibility so the indicator still occupies space — no layout shift.
-    this._modeEl.style.visibility = enabled ? "" : "hidden";
+    this._setModeHidden(!enabled);
     this._inputBarEl.classList.toggle("input-bar--no-vim", !enabled);
+  }
+
+  /** Hide the indicator while keeping its box, so the compose box stays put.
+   * The mechanism is the stylesheet's to choose, so toggle a class rather than an
+   * inline style — an inline one would beat any rule trying to override it, and
+   * mobile overrides exactly that (it hides by paint, so the strip stays a touch
+   * surface the pan guard can claim — see base.css).
+   * `aria-hidden` carries the a11y half that `visibility` used to do implicitly. */
+  private _setModeHidden(hidden: boolean): void {
+    this._modeEl.classList.toggle("input-bar__mode--hidden", hidden);
+    if (hidden) this._modeEl.setAttribute("aria-hidden", "true");
+    else this._modeEl.removeAttribute("aria-hidden");
   }
 
   setMode(mode: Mode): void {
@@ -414,12 +428,12 @@ export class Input {
 
     // When vim is disabled, keep the indicator invisible (still occupies space)
     if (!this._vimMode) {
-      this._modeEl.style.visibility = "hidden";
+      this._setModeHidden(true);
       this._refreshPlaceholder();
       return;
     }
 
-    this._modeEl.style.visibility = "";
+    this._setModeHidden(false);
 
     // Remove previous mode class
     for (const cls of Object.values(MODE_CSS_CLASS)) {

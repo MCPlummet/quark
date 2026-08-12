@@ -40,8 +40,9 @@ body {
 }
 
 body {
-  /* iOS-only: also disable any browser-level pinch zoom that slips past the
-     viewport meta on older WebKit. Desktop browsers ignore this. */
+  /* The Chromium-side pinch-zoom kill; on iOS WebKit ignores this and the
+     viewport meta (index.html) does the real work. Desktop browsers keep
+     ctrl/cmd zoom either way. */
   touch-action: pan-x pan-y;
 }
 
@@ -2753,6 +2754,23 @@ span.reaction__emoji {
   border-right: var(--border-width) solid var(--border-color);
   transition: background-color var(--transition-speed), color var(--transition-speed);
   border-radius: 8px 0px 0px 8px;
+}
+
+/* Vim off: hide the indicator but keep its box so the compose box stays put.
+ * Mobile overrides *how* it hides — see the touch-action guard further down. */
+.input-bar__mode--hidden {
+  visibility: hidden;
+}
+
+/* Mobile is always in that state (initMobile forces vim off), and
+ * `visibility: hidden` takes an element out of hit testing — which would leave
+ * the row's whole left edge, 40px of indicator plus its margin, unable to carry
+ * the `touch-action: none` that keeps it out of the viewport pan (#33). Hide it
+ * by paint instead, so the surface stays real. `aria-hidden` (set from Input.ts)
+ * carries the a11y half `visibility` was doing implicitly. */
+body.quark-mobile .input-bar__mode--hidden {
+  visibility: visible;
+  opacity: 0;
 }
 
 .input-bar__mode--insert {
@@ -6613,16 +6631,86 @@ body.quark-mobile .content-area {
   transition: padding-bottom 120ms ease;
 }
 
-/* Scroll-driven keyboard-offset updates apply instantly (see mobile.ts) —
- * easing them lags the compose bar behind the finger (#33). */
-:root.quark-kb-immediate body.quark-mobile .content-area {
-  transition: none;
+/* iOS keeps the layout viewport at full height while the keyboard is up, so the
+ * visual viewport is a smaller window that can be panned within it — and any
+ * touch drag the page doesn't consume does exactly that. Follow the pan with a
+ * transform (--viewport-pan, set from mobile.ts) rather than feeding it back
+ * into --keyboard-offset: the offset drives layout, so a pan used to re-lay-out
+ * the entire content column on every frame, resizing the timeline and dragging
+ * the compose bar around under the finger (#33). A transform is compositor-only
+ * — nothing reflows — and it keeps the whole shell pinned to the visible area.
+ *
+ * Overlays are moved with it. They mount on <body>, outside #app, so nothing can
+ * clip them (see ui/overlay.ts) — which also means they do not inherit the
+ * shell's offset. Left behind, they shear away from the UI they belong to as the
+ * pan grows: a toast off the top of the screen, the emoji picker floating the
+ * whole pan below the compose bar it is anchored 80px above.
+ *
+ * `translate`, not `transform`: dialogs centre themselves with
+ * `transform: translate(-50%, -50%)` and several animate `transform` on entry.
+ * The individual property composes with both instead of replacing them.
+ *
+ * Consequence to know about: this makes each of these elements the containing
+ * block for its position:fixed descendants (drawer, member list, thread overlay).
+ * Every one of them is the viewport rect at (0,0), so the resolved geometry is
+ * unchanged, and the descendants travel with the pan — which is what we want. */
+body.quark-mobile #app,
+body.quark-mobile .quark-overlay {
+  translate: 0 var(--viewport-pan, 0px);
 }
 
 /* Input bar: respect iOS home indicator. When the keyboard is up the indicator
  * is gone, so collapse to 0 to avoid an empty stripe under the field. */
 body.quark-mobile .input-bar-wrap {
   padding-bottom: max(0px, env(safe-area-inset-bottom) - var(--keyboard-offset, 0px));
+}
+
+/* Keep drags in the compose region out of the viewport pan (#33). With the
+ * keyboard up the region is the one thing the user's thumb naturally rests on,
+ * and it has nothing of its own to scroll: the field only overflows past six
+ * lines, and the mode indicator / button cluster never scroll at all. Without
+ * this the drag chains straight out to a visual-viewport pan (see the #app
+ * transform above). The field keeps its own vertical scrolling — `pan-y` plus
+ * `contain` lets it scroll its overflow but stops the scroll chaining onward
+ * once it hits either end.
+ *
+ * These rules are the cheap first line — they stop the gesture before it starts,
+ * on the leaves that a touch actually lands on. They cannot cover the region as a
+ * whole: `touch-action` intersects down the tree, so `none` on .input-bar or
+ * .input-bar__compose-box would take the field's `pan-y` with it, which leaves
+ * every bare surface between the leaves (the bar's padding, the box's margins and
+ * padding ring, the wrap's safe-area strip) still able to hand off a drag.
+ * `guardViewportPan` in app/mobile.ts is what actually enforces the rule across a
+ * region; see the note there. */
+body.quark-mobile .input-bar__field {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+
+body.quark-mobile .input-bar__mode,
+body.quark-mobile .input-bar__actions,
+body.quark-mobile .paste-preview,
+body.quark-mobile .reply-preview-bar {
+  touch-action: none;
+}
+
+/* The autocomplete popover (shortcodes and mentions share the class) is a
+ * second compose surface, and it is not inside the wrap — it mounts on
+ * .content-area — so the composer's guard never sees its drags. It is its own
+ * scroll container, so it takes the field's treatment rather than `none`; its
+ * own guard covers the case `contain` can't, a list too short to scroll at all. */
+body.quark-mobile .shortcode-preview {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+
+/* The thread overlay's compose row is a third: ThreadView builds its own, so
+ * it is covered by neither the wrap's rules nor its guard. Nothing in this one
+ * scrolls — the reply field is a single line — so unlike the main composer the
+ * whole row can take `none`: there is no descendant `pan-y` to intersect away.
+ * ThreadView's guard backs it up on the surfaces WebKit hands over regardless. */
+body.quark-mobile .thread-view__input-bar {
+  touch-action: none;
 }
 
 /* Larger touch targets in the room list (drawer). */
@@ -6653,12 +6741,44 @@ body.quark-mobile .space-strip__settings-btn {
   height: 56px;
 }
 
-/* The compose box top-anchors its children (align-items: flex-start) so the
- * action buttons hug the first text line. On desktop that lands visually
- * centered, but the mobile ≥16px field font makes the line box taller than
- * the buttons and they ride high (#33) — center them against the box instead. */
-body.quark-mobile .input-bar__actions {
-  align-self: center;
+/* Vertically center the compose row's controls (#33).
+ *
+ * The desktop compose box is deliberately lopsided: a top-only padding (a
+ * quarter line, matching .message-group) wrapping a field whose own padding is
+ * bottom-heavy (4px / 8px). "Centered in the content box" therefore lands well
+ * below the pill's optical middle — roughly half the box padding plus half the
+ * field's padding skew, ~3px on a 22px button — which is why simply centering the
+ * cluster wasn't enough. Mobile makes it obvious because the field is forced to
+ * ≥16px (a taller line box) while the box padding still derives from the smaller
+ * desktop --font-size.
+ *
+ * So make the geometry symmetric here instead of compensating for it: drop the
+ * box's top padding, split the field's 12px of vertical padding evenly (same
+ * total, so the auto-grow and max-height math in Input.ts is untouched), and let
+ * the box center every child. Text line and buttons then share one center line,
+ * and that line is the pill's. */
+body.quark-mobile .input-bar__compose-box {
+  align-items: center;
+  padding-top: 0;
+}
+
+body.quark-mobile .input-bar__field {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+/* One uniform box per control so the four glyphs — 16px emoji, 10px GIF badge,
+ * 16px paperclip, 15px send arrow — sit on that center line too. Centering by
+ * button box alone left them straddling it, since `line-height: 1` gives each a
+ * different height (14–22px) with its ink at a different offset inside. Also
+ * buys a squarer tap target. */
+body.quark-mobile .input-bar__action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 4px;
 }
 
 /* Thread view becomes a full-screen overlay on mobile *when toggled on*. The

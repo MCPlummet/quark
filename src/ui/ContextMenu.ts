@@ -8,6 +8,7 @@
 
 import { isMobile } from "../app/mobile.js";
 import { modalManager, type Modal } from "./ModalManager.js";
+import { mountOverlay } from "./overlay.js";
 
 export interface ContextMenuItem {
   label: string;
@@ -44,7 +45,7 @@ export class ContextMenu implements Modal {
     this._el.className = "context-menu";
     this._el.setAttribute("role", "menu");
     this._el.style.display = "none";
-    document.body.appendChild(this._el);
+    mountOverlay(this._el);
 
     this._el.addEventListener("keydown", (e) => this._handleKey(e));
   }

@@ -13,8 +13,8 @@ import { showError } from "../../ui/NotificationToast.js";
 import {
   getComponents,
   _ownSentEventIds,
-  resolveDisplayName,
   prepareOutgoingBody,
+  timelineEventToThreadMessage,
   _downloadMessageImages,
 } from "./context.js";
 
@@ -33,8 +33,6 @@ export async function openThread(eventId: string): Promise<void> {
   // the drawer.
   if (isMobile()) closeDrawer();
 
-  const ownUserId = AppState.get("ownUserId");
-
   // Show the thread banner in the reply-preview bar so the compose box is
   // visually marked as "sending to thread".
   const { replyPreview } = getComponents();
@@ -44,21 +42,7 @@ export async function openThread(eventId: string): Promise<void> {
 
   try {
     const replies = await getThreadTimeline(roomId, eventId);
-    const replyData = replies.map((e) => ({
-      id: e.event_id,
-      senderName: resolveDisplayName(e.sender),
-      isOwn: ownUserId ? e.sender === ownUserId : false,
-      timestamp: new Date(e.timestamp).toISOString(),
-      body: e.body,
-      htmlBody: e.formatted_body ?? undefined,
-      type: (e.msg_type === "m.image" ? "image" : e.msg_type === "m.sticker" ? "sticker" : e.msg_type === "m.video" ? "video" : e.msg_type === "m.file" ? "file" : "text") as "text" | "image" | "sticker" | "video" | "file",
-      mediaUrl: e.media_url ?? undefined,
-      mediaAlt: e.body,
-      mediaMimeType: e.media_mimetype ?? undefined,
-      mediaEncryptionInfo: e.media_encryption_info ?? undefined,
-      mediaThumbnailUrl: e.media_thumbnail_url ?? undefined,
-      mediaThumbnailEncryptionInfo: e.media_thumbnail_encryption_info ?? undefined,
-    }));
+    const replyData = replies.map((e) => timelineEventToThreadMessage(e));
     timeline.openInlineThread(eventId, replyData);
     _downloadMessageImages(replies, {
       updateMessageMedia: (id: string, url: string) => timeline.updateInlineThreadMedia(id, url),

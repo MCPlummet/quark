@@ -2,6 +2,7 @@
 
 import { createReactionBar, type ReactionGroup } from "./Reactions.js";
 import { attachResizeHandle } from "./ResizeHandle.js";
+import { guardViewportPan } from "../app/mobile.js";
 
 export interface ThreadMessageData {
   id: string;
@@ -138,6 +139,10 @@ export class ThreadView {
     });
     this._inputBarEl.appendChild(this._inputField);
     this._el.appendChild(this._inputBarEl);
+    // On mobile this row is the compose bar of a full-screen overlay, and it is
+    // this panel's own — not an Input — so it needs the same pan guard (#33).
+    // Nothing in it scrolls (the reply field is one line), so nothing is exempt.
+    guardViewportPan(this._inputBarEl);
 
     // Drag-to-resize handle at the left edge
     attachResizeHandle(this._el, "--thread-view-width", "left", 200, 600);

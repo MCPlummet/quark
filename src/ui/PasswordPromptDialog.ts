@@ -2,7 +2,7 @@
 //
 // Usage:
 //   const dialog = new PasswordPromptDialog();
-//   document.body.appendChild(dialog.getElement());
+//   mountOverlay(dialog.getElement());
 //   const password = await dialog.prompt({ title: "Re-enter password" });
 //   if (password === null) { /* user cancelled */ }
 

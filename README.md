@@ -2,7 +2,7 @@
 
 **A keyboard-driven, terminal-aesthetic Matrix client.**
 
-![version](https://img.shields.io/badge/version-0.17.1-00ff41) ![license](https://img.shields.io/badge/license-AGPL--3.0-blue) ![stack](https://img.shields.io/badge/Tauri-v2-ffc131)
+![version](https://img.shields.io/badge/version-0.17.2-00ff41) ![license](https://img.shields.io/badge/license-AGPL--3.0-blue) ![stack](https://img.shields.io/badge/Tauri-v2-ffc131)
 
 Quark is a [Matrix](https://matrix.org) chat client that looks like a terminal but renders in a real GUI window. You drive it with vim-style keys and a `:` command bar, while still getting inline images, animated GIFs, custom emoji, and stickers — things a true TUI can't render reliably.
 
@@ -235,7 +235,7 @@ Mobile (iOS and Android, via Tauri v2) is **experimental and in progress** — s
 
 ## Contributing
 
-- When shipping a feature or fix, bump the version in **all three** files together: `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`. Features bump minor; fixes bump patch.
+- When shipping a feature or fix, bump the version in **every file that carries it, together**: `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, the version badge in this README, the `quark` entry in `Cargo.lock`, the iOS `Info.plist`, and `src-tauri/gen/apple/project.yml` (`.claude/skills/version-bump/bump.sh` does all seven in lockstep). Features bump minor; fixes bump patch.
 - Keep [DESIGN.md](DESIGN.md) up to date — it's the authoritative spec.
 - Run `pnpm test` and `cargo test` (from `src-tauri/`) before opening a pull request.
 

@@ -1,5 +1,7 @@
 // Notification toast system — stacks temporary messages on screen
 
+import { mountOverlay } from "./overlay.js";
+
 export type ToastType = "info" | "error" | "success";
 
 interface ToastOptions {
@@ -27,7 +29,7 @@ function _getContainer(): HTMLElement {
   _container.setAttribute("role", "log");
   _container.setAttribute("aria-live", "polite");
   _container.setAttribute("aria-label", "Notifications");
-  document.body.appendChild(_container);
+  mountOverlay(_container);
 
   return _container;
 }

@@ -15,7 +15,7 @@ maintain as complexity grows. You should propose to add a layer of abstraction t
 
 ## Versioning
 
-Bump the version **once per branch, when prepping it for merge** — not eagerly mid-feature (per-commit bumps churn the version files and cause cross-file drift). Use the `version-bump` skill, which updates every file that carries the version in lockstep (package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json, the README badge, the Cargo.lock `quark` entry, and the iOS Info.plist) and refuses to run if they're already out of sync.
+Bump the version **once per branch, when prepping it for merge** — not eagerly mid-feature (per-commit bumps churn the version files and cause cross-file drift). Use the `version-bump` skill, which updates every file that carries the version in lockstep (package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json, the README badge, the Cargo.lock `quark` entry, the iOS Info.plist, and src-tauri/gen/apple/project.yml — the xcodegen manifest, whose `CFBundleShortVersionString`/`CFBundleVersion` stamp the iOS app) and refuses to run if they're already out of sync.
 
 Rules:
 - **Feature** (new user-visible behaviour) → bump **minor** version (e.g. `0.1.0` → `0.2.0`)

@@ -1,6 +1,6 @@
 [package]
 name = "quark"
-version = "0.17.1"
+version = "0.17.2"
 edition = "2021"
 description = "A CLI-styled Matrix client"
 authors = ["mcplummet"]
@@ -12,7 +12,11 @@ homepage = "https://quark.tel"
 # `devtools` is intentionally NOT enabled: Tauri turns the Web Inspector on
 # automatically in debug builds, and the `devtools` feature is only what would
 # additionally enable it in *release* builds — which we don't want shipping.
-tauri = { version = "2", features = ["protocol-asset"] }
+# 2.11 is a hard floor, not incidental: it is the first release whose runtime
+# handles WKWebView's `webViewWebContentProcessDidTerminate:` and reloads the
+# webview. Without it, iOS killing the web content process of a backgrounded app
+# leaves a blank screen on resume that only a force-quit clears (#39).
+tauri = { version = "2.11", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 chrono = { version = "0.4", features = ["clock"] }

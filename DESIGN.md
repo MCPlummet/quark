@@ -68,6 +68,28 @@ A single-page app styled as a terminal interface. No framework required initiall
 - Theme application from user config
 - Room list, member list, space hierarchy display
 
+### Mobile lifecycle
+
+iOS reclaims memory by killing the WKWebView's *content* process while an app is backgrounded. The app process itself survives, so the app resumes to a live window wrapping a dead page — a blank screen that nothing but a force-quit clears (#39). Tauri ≥ 2.11 implements WebKit's `webViewWebContentProcessDidTerminate:` callback and reloads the webview in response, which is why `src-tauri/Cargo.toml` floors `tauri` at `2.11` rather than `2`; dropping back to a 2.10.x lock reintroduces the blank screen.
+
+Recovery is a full page reload, so it costs the user their scroll position and any unsent draft. The reloaded page re-runs the normal startup path — `restore_session` reads the session back out of the keyring and lands on the room list — and because `start_sync` aborts any running loop before spawning one, a reload can never leave two sync loops polling the homeserver.
+
+### Mobile touch behaviour
+
+**Nothing the user composes on pans the viewport.** With the keyboard up, iOS keeps the layout viewport at full height and lets the visual viewport be panned within it, so any drag the page doesn't consume pans the shell — including drags on a compose bar, which has nothing of its own to scroll (#33). `touch-action` handles the leaves it can, but it cannot express the rule for a region: it intersects down the tree, so `none` on `.input-bar` or the compose box would take the text field's own `pan-y` with it. `guardViewportPan` (`src/app/mobile.ts`) is the enforcement — a non-passive `touchmove` listener on a container that swallows every drag except the one element with something of its own to scroll. Three surfaces carry one, because each is a container the others don't reach into:
+
+| Surface | Guarded element | Let through |
+| --- | --- | --- |
+| Main composer | `.input-bar-wrap` (`Input`) | `.input-bar__field` — it scrolls past six lines |
+| Autocomplete popover | `.shortcode-preview` (`ShortcodePreview` / `MentionPreview`, mounted on `.content-area`, so outside the wrap) | itself, but only while the list actually overflows |
+| Thread overlay compose row | `.thread-view__input-bar` (`ThreadView` builds its own row; it does not use `Input`) | nothing — the reply field is one line |
+
+Adding chrome inside one of those containers needs no new `touch-action` rule. Adding a *new* compose surface does need its own guard. The guard is attached only while mobile mode is on, so desktop never pays for a blocking touch path, and it stands down while the page is pinch-zoomed, where panning is how the user reaches the rest of the shell.
+
+**Overlays follow the pan.** The shell compensates for the pan with a transform on `#app` (`--viewport-pan`, published by `mobile.ts`). Overlays mount on `<body>` so nothing can clip them, which puts them outside that element — so they mount through `mountOverlay` (`src/ui/overlay.ts`), which tags them with `.quark-overlay` and earns them the same offset. Without it the two shear apart as the pan grows: toasts land off-screen and the emoji picker floats away from the compose bar it is anchored to. The offset uses the individual `translate` property, not `transform`, so it composes with the `translate(-50%, -50%)` that dialogs centre themselves with. The shell and the overlay layer therefore share a coordinate space that client rects do not: an overlay placed off an anchor's `getBoundingClientRect()` must subtract `viewportPan()`, or it lands a pan below its anchor.
+
+**Pinch-zoom is off, but the layout is still zoom-aware.** The viewport meta (`user-scalable=no`, `maximum-scale=1`) disables page zoom — on iOS the meta is the only mechanism, since WebKit does not let `touch-action` suppress its page-level pinch; a body-level `touch-action: pan-x pan-y` covers engines that do honor it. Zoom can still happen regardless: Android's "force enable zoom" accessibility setting overrides the meta, and a ≤768px desktop window can be trackpad-pinched. A pinch shrinks the visual viewport to roughly `layoutHeight / scale`, which from a height difference alone is indistinguishable from an open keyboard — so `viewportMetrics` takes `visualViewport.scale` and claims neither a keyboard inset nor a pan while zoomed, and the compose guards stand down there too. `ImageLightbox` implements its own pinch-to-zoom for images in JS; the meta does not affect it.
+
 ---
 
 ## UI Design

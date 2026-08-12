@@ -37,6 +37,7 @@ import { RevisionHistoryDialog } from "./RevisionHistoryDialog.js";
 import { ContextMenu } from "./ContextMenu.js";
 import { MobileTopBar } from "./MobileTopBar.js";
 import { UpdateBanner } from "./UpdateBanner.js";
+import { mountOverlay } from "./overlay.js";
 import { initMobile, isMobile, openDrawer, closeDrawer, toggleDrawer, onMobileChange, onDrawerChange } from "../app/mobile.js";
 import { shouldShowSendButton } from "../app/send_behavior.js";
 import { setupTouchGestures } from "../app/touch.js";
@@ -313,27 +314,27 @@ export function mountApp(container: HTMLElement): AppComponents {
   // Update banner (fixed top-center, floats over content; hidden until offered)
   container.appendChild(updateBanner.getElement());
 
-  // ── Overlays (appended to body so they float above everything) ───────────
-  document.body.appendChild(emojiPicker.getElement());
-  document.body.appendChild(gifPicker.getElement());
-  document.body.appendChild(verification.getElement());
-  document.body.appendChild(verificationPrompt.getElement());
-  document.body.appendChild(devicePicker.getElement());
-  document.body.appendChild(helpDialog.getElement());
-  document.body.appendChild(quickReactPicker.getElement());
-  document.body.appendChild(profileDialog.getElement());
-  document.body.appendChild(profileEditDialog.getElement());
-  document.body.appendChild(settingsDialog.getElement());
-  document.body.appendChild(roomInfoDialog.getElement());
-  document.body.appendChild(pinnedMessagesDialog.getElement());
-  document.body.appendChild(searchDialog.getElement());
-  document.body.appendChild(roomDirectoryDialog.getElement());
-  document.body.appendChild(imageLightbox.getElement());
-  document.body.appendChild(quickNavPalette.getElement());
-  document.body.appendChild(roomSettingsDialog.getElement());
-  document.body.appendChild(spaceSettingsDialog.getElement());
-  document.body.appendChild(debugViewer.getElement());
-  document.body.appendChild(revisionHistoryDialog.getElement());
+  // ── Overlays (mounted on body so they float above everything) ────────────
+  mountOverlay(emojiPicker.getElement());
+  mountOverlay(gifPicker.getElement());
+  mountOverlay(verification.getElement());
+  mountOverlay(verificationPrompt.getElement());
+  mountOverlay(devicePicker.getElement());
+  mountOverlay(helpDialog.getElement());
+  mountOverlay(quickReactPicker.getElement());
+  mountOverlay(profileDialog.getElement());
+  mountOverlay(profileEditDialog.getElement());
+  mountOverlay(settingsDialog.getElement());
+  mountOverlay(roomInfoDialog.getElement());
+  mountOverlay(pinnedMessagesDialog.getElement());
+  mountOverlay(searchDialog.getElement());
+  mountOverlay(roomDirectoryDialog.getElement());
+  mountOverlay(imageLightbox.getElement());
+  mountOverlay(quickNavPalette.getElement());
+  mountOverlay(roomSettingsDialog.getElement());
+  mountOverlay(spaceSettingsDialog.getElement());
+  mountOverlay(debugViewer.getElement());
+  mountOverlay(revisionHistoryDialog.getElement());
 
   return {
     loginScreen,

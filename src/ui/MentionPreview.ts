@@ -1,6 +1,7 @@
 // Inline @mention autocomplete popup — appears when user types @name in insert mode
 
 import { isAnimatedUrl } from "../app/animated_urls.js";
+import { guardViewportPan } from "../app/mobile.js";
 
 export interface MentionEntry {
   userId: string;
@@ -33,6 +34,10 @@ export class MentionPreview {
     this._listEl.className = "shortcode-preview__list";
     this._listEl.setAttribute("role", "presentation");
     this._el.appendChild(this._listEl);
+
+    // Same reasoning as ShortcodePreview: outside the compose wrap, its own
+    // scroll container, so drags only pass through when there is list to scroll.
+    guardViewportPan(this._el, () => this._el.scrollHeight > this._el.clientHeight);
   }
 
   getElement(): HTMLElement { return this._el; }

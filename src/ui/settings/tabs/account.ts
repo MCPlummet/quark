@@ -21,6 +21,7 @@ import { getAppConfig, setAppConfig } from "../../../ipc/app_config.js";
 import type { AppConfig } from "../../../ipc/app_config.js";
 import { askConfirm } from "../../ConfirmDialog.js";
 import { PasswordPromptDialog } from "../../PasswordPromptDialog.js";
+import { mountOverlay } from "../../overlay.js";
 import { showSuccess, showError } from "../../NotificationToast.js";
 import { startVerification } from "../../../app/actions/crypto.js";
 import type { SettingsTab } from "../types.js";
@@ -57,7 +58,7 @@ async function withUiaa(
   } catch (e) {
     if (String(e) !== "UIAA_REQUIRED") throw e;
     const dlg = new PasswordPromptDialog();
-    document.body.appendChild(dlg.getElement());
+    mountOverlay(dlg.getElement());
     let pw: string | null;
     try {
       pw = await dlg.prompt(pwOpts);

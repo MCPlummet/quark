@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Timeline, type MessageData } from "./Timeline.js";
 
 function makeMsg(overrides: Partial<MessageData> = {}): MessageData {
@@ -332,5 +332,95 @@ describe("Timeline", () => {
       timeline.setMessages([makeMsg({ id: "e1" })]);
       expect(timeline.selectLast()).toBe(true);
     });
+  });
+});
+
+// #40 — separator labels are relative to "now", so they must be built against a
+// calendar day (not a 24h window) *and* refreshed when the day rolls over under
+// a session that stays open. Own describe block: these mount their own timeline
+// after the clock is faked, so the rollover timer is faked too.
+describe("time separator day labels (#40)", () => {
+  /** ISO timestamp for a local wall-clock time — keeps assertions TZ-independent. */
+  const localIso = (y: number, mo: number, d: number, h: number, mi: number): string =>
+    new Date(y, mo - 1, d, h, mi).toISOString();
+
+  let tl: Timeline | null = null;
+
+  /** Mount a timeline with the clock pinned to the given local wall-clock time. */
+  function mountAt(y: number, mo: number, d: number, h: number, mi: number): Timeline {
+    vi.setSystemTime(new Date(y, mo - 1, d, h, mi));
+    tl = new Timeline();
+    document.body.appendChild(tl.getElement());
+    return tl;
+  }
+
+  /** Render two messages more than 30 minutes apart — the gap puts a time
+   *  separator on the second one. */
+  function showGap(t: Timeline, first: string, second: string): void {
+    t.setMessages([makeMsg({ id: "e1", timestamp: first }), makeMsg({ id: "e2", timestamp: second })]);
+  }
+
+  const labels = (t: Timeline): string[] =>
+    Array.from(t.getElement().querySelectorAll(".time-separator")).map((el) => el.textContent ?? "");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    tl?.getElement().remove();
+    tl = null;
+    vi.useRealTimers();
+  });
+
+  it("labels an earlier gap on the same calendar day as Today", () => {
+    const t = mountAt(2026, 7, 15, 11, 6);
+    showGap(t, localIso(2026, 7, 15, 9, 0), localIso(2026, 7, 15, 10, 30));
+    expect(labels(t)).toEqual(["Today at 10:30 AM"]);
+  });
+
+  it("labels last night as Yesterday even when less than 24h has passed", () => {
+    const t = mountAt(2026, 7, 15, 11, 6);
+    showGap(t, localIso(2026, 7, 14, 16, 0), localIso(2026, 7, 14, 17, 3));
+    expect(labels(t)).toEqual(["Yesterday at 5:03 PM"]);
+  });
+
+  it("labels older days with the date, not Today/Yesterday", () => {
+    const t = mountAt(2026, 7, 15, 11, 6);
+    showGap(t, localIso(2026, 7, 13, 16, 0), localIso(2026, 7, 13, 17, 3));
+    const [label] = labels(t);
+    expect(label).not.toMatch(/Today|Yesterday/);
+    expect(label).toContain("13");
+    expect(label).toContain("at 5:03 PM");
+  });
+
+  it("re-labels separators when the local day rolls over mid-session", () => {
+    const t = mountAt(2026, 7, 14, 17, 30);
+    showGap(t, localIso(2026, 7, 14, 16, 0), localIso(2026, 7, 14, 17, 3));
+    expect(labels(t)).toEqual(["Today at 5:03 PM"]);
+
+    // Same session, seven hours later — it is now 00:30 on the 15th, so the
+    // separator the user is still looking at belongs to yesterday.
+    vi.advanceTimersByTime(7 * 60 * 60 * 1000);
+    expect(labels(t)).toEqual(["Yesterday at 5:03 PM"]);
+  });
+
+  it("labels yesterday as Yesterday across a DST spring-forward boundary", () => {
+    // 2026-03-08 is 23 hours long in America/New_York (clocks jump 02:00→03:00),
+    // so "yesterday" is not "now minus 86400000ms". Reached through globalThis
+    // because the app's tsconfig type-checks these tests without @types/node.
+    const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env;
+    if (!env) return; // not running under Node — nothing to pin the zone to
+    const prevTz = env.TZ;
+    env.TZ = "America/New_York";
+    try {
+      const t = mountAt(2026, 3, 9, 10, 0);
+      showGap(t, localIso(2026, 3, 8, 16, 0), localIso(2026, 3, 8, 17, 3));
+      expect(labels(t)).toEqual(["Yesterday at 5:03 PM"]);
+    } finally {
+      // Assigning undefined would leave the literal string "undefined" behind.
+      if (prevTz === undefined) delete env.TZ;
+      else env.TZ = prevTz;
+    }
   });
 });

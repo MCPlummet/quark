@@ -10,6 +10,9 @@
 // The popover is mounted on <body> with `position: fixed` (positioned from the
 // trigger's rect) so an `overflow: hidden` ancestor can't clip it.
 
+import { mountOverlay } from "./overlay.js";
+import { viewportPan } from "../app/mobile.js";
+
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -55,7 +58,7 @@ export class DatePicker {
     this._popover = document.createElement("div");
     this._popover.className = "date-picker__calendar";
     this._popover.style.display = "none";
-    document.body.appendChild(this._popover);
+    mountOverlay(this._popover);
 
     this._updateTrigger();
   }
@@ -145,7 +148,10 @@ export class DatePicker {
     if (left + popW > window.innerWidth - margin) {
       left = Math.max(margin, window.innerWidth - margin - popW);
     }
-    this._popover.style.top = `${Math.round(top)}px`;
+    // The flip/clamp math above is all layout-viewport space, like the rect it
+    // starts from; the popover is in the overlay layer, which is offset by the
+    // viewport pan (#33). Convert once, here.
+    this._popover.style.top = `${Math.round(top - viewportPan())}px`;
     this._popover.style.left = `${Math.round(left)}px`;
   }
 
