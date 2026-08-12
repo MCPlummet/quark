@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # version-bump — bump Quark's version everywhere it appears, in lockstep.
 #
-# The version string lives in SIX places. Editing one and forgetting the
+# The version string lives in SEVEN places. Editing one and forgetting the
 # others (a recurring mistake — the README badge and the iOS plist in particular
 # have been bumped in separate, late commits) leaves them out of sync. This
-# script changes all six atomically and refuses to run if they don't already
+# script changes all seven atomically and refuses to run if they don't already
 # agree.
 #
 #   1. package.json                 "version": "X.Y.Z"
@@ -17,6 +17,11 @@
 #   6. src-tauri/gen/apple/quark_iOS/Info.plist
 #                                    CFBundleShortVersionString + CFBundleVersion
 #                                    (both <string>X.Y.Z</string>)
+#   7. src-tauri/gen/apple/project.yml
+#                                    CFBundleShortVersionString + CFBundleVersion
+#                                    (xcodegen stamps these into the built iOS
+#                                    app; it sat at 0.5.0 while the tree was at
+#                                    0.17.2 because nothing checked it)
 #
 # Usage:   bump.sh <major|minor|patch|X.Y.Z>
 #   major  1.4.2 -> 2.0.0
@@ -34,6 +39,7 @@ CARGO_LOCK="src-tauri/Cargo.lock"
 TAURI_CONF="src-tauri/tauri.conf.json"
 README="README.md"
 PLIST="src-tauri/gen/apple/quark_iOS/Info.plist"
+XCODEGEN="src-tauri/gen/apple/project.yml"
 
 die() { echo "version-bump: $*" >&2; exit 1; }
 
@@ -80,16 +86,25 @@ read_lock()  { awk -F'"' '/^name = "quark"$/{getline; print $2; exit}' "$CARGO_L
 read_readme(){ grep -m1 -oE 'version-[0-9]+\.[0-9]+\.[0-9]+-' "$README" | sed -E 's/version-(.*)-/\1/'; }
 # Info.plist: the <string> on the line after the CFBundleShortVersionString key.
 read_plist(){ awk '/CFBundleShortVersionString/{getline; gsub(/[[:space:]]*<\/?string>/,""); print; exit}' "$PLIST"; }
+# project.yml: both keys are inline YAML values, but quoted inconsistently
+# (`CFBundleShortVersionString: X.Y.Z` bare vs `CFBundleVersion: "X.Y.Z"`), so
+# strip spaces and quotes. Read separately — they can drift from each other.
+read_yml_short(){ awk -F: '/CFBundleShortVersionString:/{gsub(/[[:space:]"]/,"",$2); print $2; exit}' "$XCODEGEN"; }
+read_yml_build(){ awk -F: '/CFBundleVersion:/{gsub(/[[:space:]"]/,"",$2); print $2; exit}' "$XCODEGEN"; }
 
 CURRENT="$(read_pkg)"
 [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "could not parse current version from $PKG_JSON (got '$CURRENT')"
 
-# ── All five must already agree, or we'd be papering over an existing drift ──
+# ── All seven must already agree, or we'd be papering over an existing drift ──
 # Parallel indexed arrays (not an associative map): macOS ships bash 3.2, which
 # has no `declare -A`. Indexed arrays + `${!arr[@]}` work there and in the nix
 # dev shell's bash 5 alike, so the drift check actually runs on both.
-FILES=("$PKG_JSON" "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK" "$README" "$PLIST")
-FOUND=("$(read_pkg)" "$(read_tauri)" "$(read_cargo)" "$(read_lock)" "$(read_readme)" "$(read_plist)")
+# project.yml contributes two entries — its two keys are independent values, and
+# a bare label wouldn't say which one drifted.
+FILES=("$PKG_JSON" "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK" "$README" "$PLIST" \
+       "$XCODEGEN (CFBundleShortVersionString)" "$XCODEGEN (CFBundleVersion)")
+FOUND=("$(read_pkg)" "$(read_tauri)" "$(read_cargo)" "$(read_lock)" "$(read_readme)" "$(read_plist)" \
+       "$(read_yml_short)" "$(read_yml_build)")
 drift=0
 for i in "${!FILES[@]}"; do
   if [[ "${FOUND[$i]}" != "$CURRENT" ]]; then
@@ -157,6 +172,11 @@ perl -0pi -e "s/(version-)${CUR_RE}(-)/\${1}${NEW}\${2}/"                       
 # updates both. Scoped to <string>X.Y.Z</string> so other plist strings (bundle
 # name, etc.) are untouched — no non-version string equals the version number.
 perl -0pi -e "s/(<string>)${CUR_RE}(<\\/string>)/\${1}${NEW}\${2}/g"                       "$PLIST"
+# project.yml carries the same two keys; the /g updates both. Anchored on the key
+# names and replacing only the number, so each line keeps its own quoting style
+# (one value is bare YAML, the other quoted) and the iOS deployment target and
+# other dotted values in the file are left alone.
+perl -0pi -e "s/(CFBundle(?:ShortVersionString|Version):[ \\t]*\"?)${CUR_RE}/\${1}${NEW}/g" "$XCODEGEN"
 
 # ── Verify every file now reports the new version ──
 fail=0
@@ -167,9 +187,11 @@ check "$CARGO_TOML" "$(read_cargo)"
 check "$CARGO_LOCK" "$(read_lock)"
 check "$README"     "$(read_readme)"
 check "$PLIST"      "$(read_plist)"
+check "$XCODEGEN (CFBundleShortVersionString)" "$(read_yml_short)"
+check "$XCODEGEN (CFBundleVersion)"            "$(read_yml_build)"
 [[ $fail -eq 0 ]] || die "one or more files did not update cleanly — inspect the diff."
 
-echo "version-bump: all six files now at $NEW"
+echo "version-bump: all seven files now at $NEW"
 echo
 echo "Changed lines:"
 grep -nH -m1 '"version"' "$PKG_JSON" "$TAURI_CONF"
@@ -177,3 +199,4 @@ grep -nH    'version-'"$NEW"'-' "$README"
 awk '/^\[package\]/{p=1} p&&/^version/{print FILENAME":"FNR":"$0; exit}' "$CARGO_TOML"
 awk '/^name = "quark"$/{getline; print FILENAME":"FNR":"$0; exit}' "$CARGO_LOCK"
 grep -nH -m1 -A1 'CFBundleShortVersionString' "$PLIST" | grep '<string>'
+grep -nH -E 'CFBundle(ShortVersionString|Version):' "$XCODEGEN"
