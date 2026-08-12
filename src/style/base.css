@@ -39,11 +39,12 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* No page-wide `touch-action: pan-x pan-y` here: that is the Chromium-side
-   pinch-zoom kill, and page zoom is the only way to magnify text on a phone
-   (font_size lives in a theme file). The surfaces that must not hand a gesture
-   to the viewport keep their own rules, scoped to themselves — see the compose
-   region and the lightbox. */
+body {
+  /* The Chromium-side pinch-zoom kill; on iOS WebKit ignores this and the
+     viewport meta (index.html) does the real work. Desktop browsers keep
+     ctrl/cmd zoom either way. */
+  touch-action: pan-x pan-y;
+}
 
 
 /* ── Selection ───────────────────────────────────────────────────────────── */
@@ -6719,10 +6720,9 @@ body.quark-mobile .room-list__item {
   font-size: calc(var(--font-size) + 1px);
 }
 
-/* iOS auto-zooms into any input whose computed font-size is < 16px. The viewport
- * meta allows zooming again (index.html, so low-vision users can magnify), which
- * makes this the only thing standing between a tap on the compose field and the
- * page lurching to 150% — it is load-bearing, not a belt-and-braces. */
+/* iOS auto-zooms into any input whose computed font-size is < 16px.
+ * viewport meta with user-scalable=no usually suppresses that, but make it
+ * explicit so the compose / login fields render predictably across versions. */
 body.quark-mobile .input-bar__field,
 body.quark-mobile .login-screen__field-input,
 body.quark-mobile .thread-view__input,

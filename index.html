@@ -2,15 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <!-- Page zoom stays available on purpose. It was briefly off (user-scalable=no,
-         maximum-scale=1) because a zoomed shell confused the keyboard math —
-         visualViewport.height shrinks with the zoom, which the layout read as an
-         open keyboard — and left the fixed chrome misaligned. viewportMetrics is
-         scale-aware now (src/app/mobile.ts), so the math holds while zoomed, and
-         the compose region's touch-action rules still keep a gesture that starts
-         there off the viewport. Without this the timeline has no magnification at
-         all: font_size lives in a theme file no phone can edit (WCAG 1.4.4). -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- user-scalable=no / maximum-scale=1 are what actually disable pinch-zoom on
+         iOS: WebKit does not let `touch-action` suppress the page-level pinch
+         gesture, so the `touch-action` rules in base.css never covered it. Images
+         keep their own pinch-to-zoom, which ImageLightbox implements in JS and
+         this does not affect; desktop browsers ignore the viewport meta entirely.
+         Android's "force enable zoom" accessibility setting overrides this meta,
+         which is why viewportMetrics (src/app/mobile.ts) stays scale-aware. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <title>Quark</title>
     <link rel="stylesheet" href="/src/style/base.css" />
     <link rel="stylesheet" href="/src/theme/vars.css" />

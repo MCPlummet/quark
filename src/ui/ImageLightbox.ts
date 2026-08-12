@@ -157,14 +157,6 @@ export class ImageLightbox implements Modal {
     const dist = (a: Touch, b: Touch): number =>
       Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
 
-    // Page zoom is enabled again (index.html), and WebKit runs its pinch in the
-    // UI process where neither `touch-action: none` nor a cancelled touchmove
-    // reaches it — so a pinch here would zoom the image and the whole page at
-    // once. The gesture events are WebKit's own hook for exactly that; other
-    // engines never fire them and are covered by the wrap's `touch-action`.
-    wrap.addEventListener("gesturestart", (e) => e.preventDefault());
-    wrap.addEventListener("gesturechange", (e) => e.preventDefault());
-
     const beginPan = (t: Touch): void => {
       mode = "pan";
       panStartTouchX = t.clientX;
