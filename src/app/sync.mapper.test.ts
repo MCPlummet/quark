@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-// Partial mock (see Input.pan.test.ts): the real actions module is loaded so the
+// Partial mock (see Timeline.links.test.ts): the real actions module is loaded so the
 // mapper under test is the real, shared one — only the network/IPC-touching
 // helpers sync.ts calls after appending are stubbed out. Hand-enumerating every
 // export here is what previously made an unrelated new import break this file.

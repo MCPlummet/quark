@@ -1,5 +1,7 @@
 // Inline emoji autocomplete popup — appears when user types :shortcode in insert mode
 
+import { guardViewportPan } from "../app/mobile.js";
+
 export interface ShortcodeEntry {
   /** Unicode glyph or :shortcode: identifier */
   key: string;
@@ -43,6 +45,13 @@ export class ShortcodePreview {
     this._emptyEl.textContent = "No matches";
     this._emptyEl.style.display = "none";
     this._el.appendChild(this._emptyEl);
+
+    // The popover sits in .content-area, outside the compose wrap, so the
+    // composer's guard never sees its drags (#33). It is its own scroll
+    // container: let a drag through only while there is list to scroll —
+    // a two-item list has nothing to give the gesture, and would hand it to
+    // the viewport pan instead.
+    guardViewportPan(this._el, () => this._el.scrollHeight > this._el.clientHeight);
   }
 
   getElement(): HTMLElement {

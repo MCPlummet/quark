@@ -2,10 +2,11 @@
 //
 // Usage:
 //   const dialog = new ConfirmDialog();
-//   document.body.appendChild(dialog.getElement());
+//   mountOverlay(dialog.getElement());
 //   const confirmed = await dialog.confirm({ title: "Delete room?", message: "This cannot be undone.", danger: true });
 
 import { DialogBase } from "./DialogBase.js";
+import { mountOverlay } from "./overlay.js";
 
 export interface ConfirmOpts {
   title: string;
@@ -104,7 +105,7 @@ export class ConfirmDialog extends DialogBase {
 /** Mount a ConfirmDialog, await the choice, then always unmount it. */
 export async function askConfirm(opts: ConfirmOpts): Promise<boolean> {
   const dlg = new ConfirmDialog();
-  document.body.appendChild(dlg.getElement());
+  mountOverlay(dlg.getElement());
   try {
     return await dlg.confirm(opts);
   } finally {

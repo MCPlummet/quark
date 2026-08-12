@@ -16,6 +16,7 @@ import {
 
 import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js";
 import { PasswordPromptDialog } from "../../ui/PasswordPromptDialog.js";
+import { mountOverlay } from "../../ui/overlay.js";
 
 import { getComponents } from "./context.js";
 
@@ -242,7 +243,7 @@ export async function setupCrossSigning(password?: string): Promise<void> {
       // bootstrap with the supplied password instead of asking them to re-run a
       // `:cross-sign <password>` command.
       const dlg = new PasswordPromptDialog();
-      document.body.appendChild(dlg.getElement());
+      mountOverlay(dlg.getElement());
       let password: string | null;
       try {
         password = await dlg.prompt({

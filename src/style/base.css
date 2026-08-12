@@ -39,11 +39,11 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
-body {
-  /* iOS-only: also disable any browser-level pinch zoom that slips past the
-     viewport meta on older WebKit. Desktop browsers ignore this. */
-  touch-action: pan-x pan-y;
-}
+/* No page-wide `touch-action: pan-x pan-y` here: that is the Chromium-side
+   pinch-zoom kill, and page zoom is the only way to magnify text on a phone
+   (font_size lives in a theme file). The surfaces that must not hand a gesture
+   to the viewport keep their own rules, scoped to themselves — see the compose
+   region and the lightbox. */
 
 
 /* ── Selection ───────────────────────────────────────────────────────────── */
@@ -2759,6 +2759,17 @@ span.reaction__emoji {
  * Mobile overrides *how* it hides — see the touch-action guard further down. */
 .input-bar__mode--hidden {
   visibility: hidden;
+}
+
+/* Mobile is always in that state (initMobile forces vim off), and
+ * `visibility: hidden` takes an element out of hit testing — which would leave
+ * the row's whole left edge, 40px of indicator plus its margin, unable to carry
+ * the `touch-action: none` that keeps it out of the viewport pan (#33). Hide it
+ * by paint instead, so the surface stays real. `aria-hidden` (set from Input.ts)
+ * carries the a11y half `visibility` was doing implicitly. */
+body.quark-mobile .input-bar__mode--hidden {
+  visibility: visible;
+  opacity: 0;
 }
 
 .input-bar__mode--insert {
@@ -6628,12 +6639,23 @@ body.quark-mobile .content-area {
  * the compose bar around under the finger (#33). A transform is compositor-only
  * — nothing reflows — and it keeps the whole shell pinned to the visible area.
  *
- * Consequence to know about: a transformed #app becomes the containing block for
- * its position:fixed descendants (drawer, member list, thread overlay). #app is
- * exactly the viewport rect at (0,0), so their resolved geometry is unchanged,
- * and they now travel with the pan — which is what we want. */
-body.quark-mobile #app {
-  transform: translateY(var(--viewport-pan, 0px));
+ * Overlays are moved with it. They mount on <body>, outside #app, so nothing can
+ * clip them (see ui/overlay.ts) — which also means they do not inherit the
+ * shell's offset. Left behind, they shear away from the UI they belong to as the
+ * pan grows: a toast off the top of the screen, the emoji picker floating the
+ * whole pan below the compose bar it is anchored 80px above.
+ *
+ * `translate`, not `transform`: dialogs centre themselves with
+ * `transform: translate(-50%, -50%)` and several animate `transform` on entry.
+ * The individual property composes with both instead of replacing them.
+ *
+ * Consequence to know about: this makes each of these elements the containing
+ * block for its position:fixed descendants (drawer, member list, thread overlay).
+ * Every one of them is the viewport rect at (0,0), so the resolved geometry is
+ * unchanged, and the descendants travel with the pan — which is what we want. */
+body.quark-mobile #app,
+body.quark-mobile .quark-overlay {
+  translate: 0 var(--viewport-pan, 0px);
 }
 
 /* Input bar: respect iOS home indicator. When the keyboard is up the indicator
@@ -6656,9 +6678,9 @@ body.quark-mobile .input-bar-wrap {
  * whole: `touch-action` intersects down the tree, so `none` on .input-bar or
  * .input-bar__compose-box would take the field's `pan-y` with it, which leaves
  * every bare surface between the leaves (the bar's padding, the box's margins and
- * padding ring, the wrap's safe-area strip) still able to hand off a drag. Input's
- * _guardAgainstViewportPan is what actually enforces the rule across the region;
- * see the note there. */
+ * padding ring, the wrap's safe-area strip) still able to hand off a drag.
+ * `guardViewportPan` in app/mobile.ts is what actually enforces the rule across a
+ * region; see the note there. */
 body.quark-mobile .input-bar__field {
   touch-action: pan-y;
   overscroll-behavior: contain;
@@ -6671,6 +6693,25 @@ body.quark-mobile .reply-preview-bar {
   touch-action: none;
 }
 
+/* The autocomplete popover (shortcodes and mentions share the class) is a
+ * second compose surface, and it is not inside the wrap — it mounts on
+ * .content-area — so the composer's guard never sees its drags. It is its own
+ * scroll container, so it takes the field's treatment rather than `none`; its
+ * own guard covers the case `contain` can't, a list too short to scroll at all. */
+body.quark-mobile .shortcode-preview {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+
+/* The thread overlay's compose row is a third: ThreadView builds its own, so
+ * it is covered by neither the wrap's rules nor its guard. Nothing in this one
+ * scrolls — the reply field is a single line — so unlike the main composer the
+ * whole row can take `none`: there is no descendant `pan-y` to intersect away.
+ * ThreadView's guard backs it up on the surfaces WebKit hands over regardless. */
+body.quark-mobile .thread-view__input-bar {
+  touch-action: none;
+}
+
 /* Larger touch targets in the room list (drawer). */
 body.quark-mobile .room-list__item {
   padding: 12px 12px;
@@ -6678,9 +6719,10 @@ body.quark-mobile .room-list__item {
   font-size: calc(var(--font-size) + 1px);
 }
 
-/* iOS auto-zooms into any input whose computed font-size is < 16px.
- * viewport meta with user-scalable=no usually suppresses that, but make it
- * explicit so the compose / login fields render predictably across versions. */
+/* iOS auto-zooms into any input whose computed font-size is < 16px. The viewport
+ * meta allows zooming again (index.html, so low-vision users can magnify), which
+ * makes this the only thing standing between a tap on the compose field and the
+ * page lurching to 150% — it is load-bearing, not a belt-and-braces. */
 body.quark-mobile .input-bar__field,
 body.quark-mobile .login-screen__field-input,
 body.quark-mobile .thread-view__input,

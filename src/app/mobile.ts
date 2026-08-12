@@ -30,6 +30,15 @@ function applyDrawerClass(): void {
   document.body.classList.toggle("quark-mobile-drawer-open", _mobile && _drawerOpen);
 }
 
+// Engines report scale as an exact 1 at rest, but leave room for float drift
+// rather than reading a rounding error as a zoom.
+const ZOOM_EPSILON = 0.02;
+
+/** Whether the user has pinched the page in. Scale is 1 (or below) at rest. */
+export function isZoomed(): boolean {
+  return (window.visualViewport?.scale ?? 1) > 1 + ZOOM_EPSILON;
+}
+
 /**
  * Split the visual-viewport geometry into the two independent quantities the
  * layout needs. Conflating them is what made the composer misbehave when the
@@ -49,17 +58,41 @@ function applyDrawerClass(): void {
  * Panning is only meaningful while the keyboard is up: with no inset there is
  * nothing to pan within, and a non-zero offsetTop then means a deliberate
  * pinch-zoom pan, which must not be cancelled out.
+ *
+ * Zoom is the third thing the geometry can mean, and from a height diff alone it
+ * is indistinguishable from the first: pinching to `scale` shrinks the visual
+ * viewport to roughly layoutHeight / scale, which reads as a keyboard that tall —
+ * phantom padding under the timeline, a compose bar stranded mid-screen, and the
+ * shell translated by the user's own pan. So take the scale and, while zoomed,
+ * claim neither quantity: the user is moving the viewport deliberately and the
+ * engine keeps the focused field in view on its own.
  */
 export function viewportMetrics(
   layoutHeight: number,
   visualHeight: number,
   visualOffsetTop: number,
+  scale: number = 1,
 ): { keyboardInset: number; pan: number } {
+  if (scale > 1 + ZOOM_EPSILON) return { keyboardInset: 0, pan: 0 };
   const keyboardInset = Math.max(0, layoutHeight - visualHeight);
   const pan = keyboardInset > 0
     ? Math.max(0, Math.min(visualOffsetTop, keyboardInset))
     : 0;
   return { keyboardInset, pan };
+}
+
+let _pan = 0;
+
+/**
+ * How far the shell is currently offset from the layout viewport, in CSS px.
+ *
+ * The shell and the body-mounted overlay layer both carry this offset (see the
+ * `#app` rule in base.css), so they share a coordinate space the layout viewport
+ * doesn't. A client rect measures in layout space — the pan is already in it —
+ * so anything positioning an overlay off one has to take it back out.
+ */
+export function viewportPan(): number {
+  return _pan;
 }
 
 /** Track the visual viewport so the compose box stays above the iOS keyboard. */
@@ -68,7 +101,13 @@ function trackVisualViewport(): void {
   if (!vv) return;
   const root = document.documentElement;
   const update = (): void => {
-    const { keyboardInset, pan } = viewportMetrics(window.innerHeight, vv.height, vv.offsetTop);
+    const { keyboardInset, pan } = viewportMetrics(
+      window.innerHeight,
+      vv.height,
+      vv.offsetTop,
+      vv.scale,
+    );
+    _pan = pan;
     root.style.setProperty("--keyboard-offset", `${keyboardInset}px`);
     root.style.setProperty("--viewport-pan", `${pan}px`);
   };
@@ -77,9 +116,60 @@ function trackVisualViewport(): void {
   update();
 }
 
+/** Decides whether a touch is allowed through the guard; see guardViewportPan. */
+type PanExempt = (target: Element | null) => boolean;
+
+// Guards are wired from component constructors, and every one of those runs
+// before initMobile() (see App.ts) — so initMobile syncs them as well, or on a
+// phone, where the breakpoint is never crossed, they would never attach.
+const _panGuardSyncs = new Set<Listener>();
+
+/**
+ * Keep drags inside `el` out of the visual-viewport pan (#33).
+ *
+ * `touch-action` alone cannot state this rule for a region: it intersects down
+ * the tree, so `none` on a container takes any `pan-y` its scrollable child needs
+ * with it. That confines the CSS guards to the leaves and leaves every bare
+ * surface between them — a bar's padding, a box's margins and padding ring, a
+ * wrap's safe-area strip — handing drags to the pan, one gap at a time. State it
+ * once instead: swallow every drag in the region except the one element that has
+ * something of its own to scroll (`exempt`; it must stop its own chaining with
+ * overscroll-behavior: contain).
+ *
+ * The listener is on `el`, not the document, so the rest of the page keeps its
+ * passive fast path, and `passive: false` is what lets preventDefault bind at
+ * all — which is why it is only attached in mobile mode, the only place the pan
+ * exists: desktop should not pay the blocking touch path for a no-op. While the
+ * page is pinch-zoomed the guard stands down, since panning is then the user's
+ * only way to reach the rest of the shell. preventDefault only cancels the
+ * browser's default action — other listeners still run, so the drawer swipe in
+ * touch.ts, which drives its own transform, is unaffected.
+ */
+export function guardViewportPan(el: HTMLElement, exempt?: PanExempt): void {
+  const swallow = (e: TouchEvent): void => {
+    if (isZoomed()) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (exempt?.(target)) return;
+    if (e.cancelable) e.preventDefault();
+  };
+
+  let attached = false;
+  const sync = (mobile: boolean): void => {
+    if (mobile === attached) return;
+    attached = mobile;
+    if (mobile) el.addEventListener("touchmove", swallow, { passive: false });
+    else el.removeEventListener("touchmove", swallow);
+  };
+
+  sync(_mobile);
+  _panGuardSyncs.add(sync);
+  onMobileChange(sync);
+}
+
 export function initMobile(): void {
   _mobile = detectMobile();
   applyMobileClass();
+  for (const sync of _panGuardSyncs) sync(_mobile);
   trackVisualViewport();
 
   // When entering mobile mode for the first time, remember the user's vim setting

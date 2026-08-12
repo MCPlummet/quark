@@ -263,10 +263,11 @@ describe("Input", () => {
     }
 
     // The indicator carries the compose row's touch-action guard on mobile, where
-    // vim is always off (#33). An inline `visibility: hidden` would drop it out of
-    // hit testing — and beat any stylesheet rule trying to put it back — so the
-    // whole left edge of the row would hand drags to the viewport pan again.
-    it("hides via a class, never an inline visibility, so it stays hit-testable", () => {
+    // vim is always off (#33). `visibility: hidden` drops an element out of hit
+    // testing, so mobile hides it by paint instead (base.css) — which it can only
+    // do if the state is a class. An inline style would beat that rule and leave
+    // the row's whole left edge handing drags to the viewport pan again.
+    it("hides via a class, never an inline visibility, so the stylesheet can override it", () => {
       input.setVimMode(false);
       expect(modeEl().classList.contains("input-bar__mode--hidden")).toBe(true);
       expect(modeEl().style.visibility).toBe("");

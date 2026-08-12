@@ -1,7 +1,7 @@
 // Compose bar with mode indicator
 
 import { Mode } from "../vim/mode.js";
-import { isMobile, onMobileChange } from "../app/mobile.js";
+import { isMobile, onMobileChange, guardViewportPan } from "../app/mobile.js";
 
 const MODE_LABELS: Record<string, string> = {
   Normal: "NOR",
@@ -44,7 +44,9 @@ export class Input {
     this._el.className = "input-bar-wrap";
     this._el.setAttribute("role", "region");
     this._el.setAttribute("aria-label", "Message input");
-    this._guardAgainstViewportPan();
+    // Nothing in the compose region scrolls except the field itself, so no drag
+    // over it may reach the visual-viewport pan (#33).
+    guardViewportPan(this._el, (t) => !!t?.closest(".input-bar__field"));
 
     // ── Paste image preview (hidden by default, shown above compose bar) ──
     this._pastePreviewEl = document.createElement("div");
@@ -408,39 +410,11 @@ export class Input {
     this._inputBarEl.classList.toggle("input-bar--no-vim", !enabled);
   }
 
-  /**
-   * No drag anywhere in the compose region may reach the iOS visual-viewport pan
-   * (#33). `touch-action` alone cannot express that: .input-bar and
-   * .input-bar__compose-box are the field's ancestors, and touch-action intersects
-   * down the tree, so `none` on either would take the field's own `pan-y` with it.
-   * That left every bare surface between the guarded leaves — the bar's padding,
-   * the compose box's margins and padding ring, the wrap's safe-area strip — still
-   * handing drags to the pan, one gap at a time.
-   *
-   * State the rule once instead: swallow any drag in the region that isn't the
-   * field scrolling itself (the field stops its own chaining with
-   * overscroll-behavior: contain). The listener is on the wrap, not the document,
-   * so the rest of the page keeps its passive fast path, and `passive: false` is
-   * what lets preventDefault bind at all. preventDefault only cancels the browser's
-   * default action — other listeners still run, so the drawer swipe in touch.ts,
-   * which drives its own transform, is unaffected.
-   */
-  private _guardAgainstViewportPan(): void {
-    this._el.addEventListener(
-      "touchmove",
-      (e) => {
-        if (!isMobile()) return;
-        const target = e.target instanceof Element ? e.target : null;
-        if (target?.closest(".input-bar__field")) return;
-        if (e.cancelable) e.preventDefault();
-      },
-      { passive: false },
-    );
-  }
-
   /** Hide the indicator while keeping its box, so the compose box stays put.
    * The mechanism is the stylesheet's to choose, so toggle a class rather than an
-   * inline style — an inline one would beat any rule trying to override it.
+   * inline style — an inline one would beat any rule trying to override it, and
+   * mobile overrides exactly that (it hides by paint, so the strip stays a touch
+   * surface the pan guard can claim — see base.css).
    * `aria-hidden` carries the a11y half that `visibility` used to do implicitly. */
   private _setModeHidden(hidden: boolean): void {
     this._modeEl.classList.toggle("input-bar__mode--hidden", hidden);

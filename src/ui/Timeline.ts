@@ -6,8 +6,9 @@ import type { SearchResult } from "../ipc/types.js";
 import type { ThreadMessageData } from "./ThreadView.js";
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { hashColor } from "./avatarColors.js";
-import { isMobile } from "../app/mobile.js";
+import { isMobile, viewportPan } from "../app/mobile.js";
 import { openExternalUrl } from "../app/links.js";
+import { mountOverlay } from "./overlay.js";
 
 // ── Blob URL management ───────────────────────────────────────────────────────
 // Blob URLs are more memory-efficient than data: URIs — the binary data is held
@@ -1541,7 +1542,7 @@ export class Timeline {
 
     overlay.appendChild(fragment);
     // Append to body so it isn't clipped by the timeline's overflow or scroll position
-    document.body.appendChild(overlay);
+    mountOverlay(overlay);
   }
 
   /**
@@ -2550,7 +2551,7 @@ export class Timeline {
     const el = document.createElement("div");
     el.className = "read-receipts-tooltip";
     el.style.display = "none";
-    document.body.appendChild(el);
+    mountOverlay(el);
     this._receiptTooltipEl = el;
     return el;
   }
@@ -2606,7 +2607,9 @@ export class Timeline {
     if (top < 8) top = a.bottom + 6;
     const left = Math.max(8, Math.min(a.right - t.width, window.innerWidth - t.width - 8));
     tip.style.left = `${left}px`;
-    tip.style.top = `${top}px`;
+    // The rects are layout-viewport space; the tooltip is in the overlay layer,
+    // which carries the viewport pan (#33).
+    tip.style.top = `${top - viewportPan()}px`;
   }
 
   private _hideReceiptTooltip(): void {

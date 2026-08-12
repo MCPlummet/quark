@@ -68,6 +68,7 @@ const KEYBOARD_PX = 340;
 class FakeVisualViewport extends EventTarget {
   height = LAYOUT_HEIGHT_PX;
   offsetTop = 0;
+  scale = 1;
 
   /** Move the visual viewport and fire the event the engine would fire. */
   moveTo(height: number, offsetTop: number, type: "resize" | "scroll"): void {
@@ -115,6 +116,32 @@ describe("visual viewport metrics (#33)", () => {
     // adjustResize shrinks the layout viewport too, so there is nothing to compensate.
     expect(viewportMetrics(460, 460, 0)).toEqual({ keyboardInset: 0, pan: 0 });
   });
+
+  // A pinch shrinks the visual viewport to roughly layoutHeight / scale, which is
+  // exactly what an open keyboard looks like from a height diff alone. Reachable
+  // even with pinch-zoom off in the viewport meta: Android's "force enable zoom"
+  // overrides it, and mobile mode is width-driven, so a trackpad pinch in a narrow
+  // desktop window gets there too.
+  it("does not read a pinch-zoom as a keyboard", () => {
+    expect(viewportMetrics(800, 400, 0, 2)).toEqual({ keyboardInset: 0, pan: 0 });
+  });
+
+  it("leaves the user's own pan alone while zoomed", () => {
+    expect(viewportMetrics(800, 400, 220, 2)).toEqual({ keyboardInset: 0, pan: 0 });
+  });
+
+  it("stands down for the keyboard too once zoomed — neither quantity is knowable", () => {
+    expect(viewportMetrics(800, 260, 120, 1.8)).toEqual({ keyboardInset: 0, pan: 0 });
+  });
+
+  it("still reads the keyboard at rest, and tolerates float drift in the scale", () => {
+    expect(viewportMetrics(800, 460, 120, 1)).toEqual({ keyboardInset: 340, pan: 120 });
+    expect(viewportMetrics(800, 460, 120, 1.005)).toEqual({ keyboardInset: 340, pan: 120 });
+  });
+
+  it("treats a zoomed-out viewport as no keyboard, not a negative one", () => {
+    expect(viewportMetrics(800, 1000, 0, 0.8)).toEqual({ keyboardInset: 0, pan: 0 });
+  });
 });
 
 describe("visual viewport tracking (#33)", () => {
@@ -147,5 +174,104 @@ describe("visual viewport tracking (#33)", () => {
     vv.moveTo(LAYOUT_HEIGHT_PX, 0, "resize");
     expect(cssVar("--keyboard-offset")).toBe("0px");
     expect(cssVar("--viewport-pan")).toBe("0px");
+  });
+
+  it("reports the pan to overlays that place themselves off a client rect", async () => {
+    const vv = stubVisualViewport();
+    const mod = await loadMobile(500);
+    expect(mod.viewportPan()).toBe(0);
+    vv.moveTo(LAYOUT_HEIGHT_PX - KEYBOARD_PX, 90, "scroll");
+    expect(mod.viewportPan()).toBe(90);
+  });
+
+  it("publishes nothing while the user is pinch-zoomed", async () => {
+    const vv = stubVisualViewport();
+    vv.scale = 2;
+    await loadMobile(500);
+    // A zoom looks exactly like a keyboard from the height alone, and the pan
+    // that follows is the user moving around the page.
+    vv.moveTo(LAYOUT_HEIGHT_PX / 2, 200, "resize");
+    expect(cssVar("--keyboard-offset")).toBe("0px");
+    expect(cssVar("--viewport-pan")).toBe("0px");
+    vv.scale = 1;
+  });
+});
+
+// ── Pan guard (#33) ──────────────────────────────────────────────────────────
+
+describe("viewport pan guard (#33)", () => {
+  function drag(el: Element): Event {
+    const e = new Event("touchmove", { bubbles: true, cancelable: true });
+    el.dispatchEvent(e);
+    return e;
+  }
+
+  /** Cross the breakpoint the way a rotation or a resized dev window would. */
+  function crossTo(px: number): void {
+    setViewportWidth(px);
+    window.dispatchEvent(new Event("resize"));
+  }
+
+  it("swallows drags on the guarded element in mobile mode", async () => {
+    const { guardViewportPan } = await loadMobile(500);
+    const el = document.createElement("div");
+    guardViewportPan(el);
+    expect(drag(el).defaultPrevented).toBe(true);
+  });
+
+  it("lets the exempt element through so it can scroll itself", async () => {
+    const { guardViewportPan } = await loadMobile(500);
+    const el = document.createElement("div");
+    const scroller = document.createElement("div");
+    scroller.className = "scrolls";
+    el.appendChild(scroller);
+    guardViewportPan(el, (t) => !!t?.closest(".scrolls"));
+    expect(drag(scroller).defaultPrevented).toBe(false);
+    expect(drag(el).defaultPrevented).toBe(true);
+  });
+
+  // Components are all constructed before initMobile() runs (see App.ts), and a
+  // phone never crosses the breakpoint — so init is the only chance to attach.
+  it("attaches to elements guarded before initMobile ran", async () => {
+    vi.resetModules();
+    setViewportWidth(500);
+    const mod = await import("./mobile.js");
+    const el = document.createElement("div");
+    mod.guardViewportPan(el);
+    mod.initMobile();
+    expect(drag(el).defaultPrevented).toBe(true);
+  });
+
+  // Desktop should not pay the blocking (non-passive) touch path for a listener
+  // that could only ever no-op there.
+  it("detaches on the way out to desktop and re-attaches on the way back", async () => {
+    const { guardViewportPan } = await loadMobile(500);
+    const el = document.createElement("div");
+    guardViewportPan(el);
+
+    crossTo(1200);
+    expect(drag(el).defaultPrevented).toBe(false);
+
+    crossTo(500);
+    expect(drag(el).defaultPrevented).toBe(true);
+  });
+
+  it("never attaches when the app starts on desktop", async () => {
+    const { guardViewportPan } = await loadMobile(1200);
+    const el = document.createElement("div");
+    guardViewportPan(el);
+    expect(drag(el).defaultPrevented).toBe(false);
+  });
+
+  it("stands down while zoomed — panning is then the user's only way around", async () => {
+    const vv = stubVisualViewport();
+    const { guardViewportPan } = await loadMobile(500);
+    const el = document.createElement("div");
+    guardViewportPan(el);
+    expect(drag(el).defaultPrevented).toBe(true);
+
+    vv.scale = 2;
+    expect(drag(el).defaultPrevented).toBe(false);
+    vv.scale = 1;
   });
 });
