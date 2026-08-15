@@ -111,7 +111,151 @@ impl PushRegistration {
     }
 }
 
+// ─── Persisted state ─────────────────────────────────────────────────────────
+
+/// Push state filename within the config directory. JSON rather than TOML
+/// because none of it is meant to be hand-edited.
+pub const PUSH_STATE_FILENAME: &str = "push.json";
+
+/// A pusher we successfully registered, remembered so it can be deleted when
+/// the transport hands us a new address. Without this a rotated APNs token or
+/// a re-subscribed UnifiedPush endpoint leaves the old pusher on the
+/// homeserver, still being pushed to and never read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegisteredPusher {
+    pub app_id: String,
+    pub pushkey: String,
+    pub gateway_url: String,
+}
+
+/// Everything about push that outlives a process but isn't a user preference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushState {
+    /// Stable per-install tag. Selects which device-specific push rules apply,
+    /// so it must survive re-registration.
+    pub profile_tag: String,
+    /// The last pusher we registered, if any.
+    #[serde(default)]
+    pub last: Option<RegisteredPusher>,
+}
+
+/// Read push state, minting and persisting a profile tag on first use.
+///
+/// Never fails: a missing file is a fresh install, and a corrupt one is not
+/// worth bricking push over — the cost of starting again is an orphaned set of
+/// per-device push rules, not a broken client.
+pub fn load_or_init_push_state(config_dir: &std::path::Path) -> PushState {
+    let path = config_dir.join(PUSH_STATE_FILENAME);
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        match serde_json::from_str::<PushState>(&content) {
+            Ok(state) => return state,
+            Err(e) => tracing::warn!("Ignoring unparsable {PUSH_STATE_FILENAME}: {e}"),
+        }
+    }
+    let state = PushState { profile_tag: new_profile_tag(), last: None };
+    if let Err(e) = save_push_state_to(config_dir, &state) {
+        tracing::warn!("Failed to persist initial push state: {e}");
+    }
+    state
+}
+
+/// Write push state to `<config_dir>/push.json`.
+pub fn save_push_state_to(
+    config_dir: &std::path::Path,
+    state: &PushState,
+) -> Result<(), String> {
+    std::fs::create_dir_all(config_dir)
+        .map_err(|e| format!("Failed to create config dir: {e}"))?;
+    let content = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("Failed to serialize push state: {e}"))?;
+    std::fs::write(config_dir.join(PUSH_STATE_FILENAME), content)
+        .map_err(|e| format!("Failed to write {PUSH_STATE_FILENAME}: {e}"))
+}
+
+/// 16 hex chars of randomness — unique enough per install, short enough to
+/// read in a pusher list on another client.
+fn new_profile_tag() -> String {
+    use rand::Rng;
+    let bytes: [u8; 8] = rand::thread_rng().gen();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+
+    fn registered() -> RegisteredPusher {
+        RegisteredPusher {
+            app_id: "tel.quark.app.android".into(),
+            pushkey: "https://ntfy.example.org/up1234".into(),
+            gateway_url: "https://ntfy.example.org/_matrix/push/v1/notify".into(),
+        }
+    }
+
+    /// The tag selects which device-specific push rules apply. Minting a new
+    /// one on every launch would orphan the rules attached to the old one.
+    #[test]
+    fn profile_tag_survives_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = load_or_init_push_state(dir.path()).profile_tag;
+        let second = load_or_init_push_state(dir.path()).profile_tag;
+        assert!(!first.is_empty());
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn separate_installs_get_separate_profile_tags() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        assert_ne!(
+            load_or_init_push_state(a.path()).profile_tag,
+            load_or_init_push_state(b.path()).profile_tag
+        );
+    }
+
+    /// A rotated APNs token or re-subscribed UnifiedPush endpoint has to
+    /// delete the pusher it replaces, or the homeserver keeps pushing to an
+    /// address nothing listens on.
+    #[test]
+    fn remembers_the_last_registration_across_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = load_or_init_push_state(dir.path());
+        state.last = Some(registered());
+        save_push_state_to(dir.path(), &state).unwrap();
+
+        assert_eq!(load_or_init_push_state(dir.path()).last, Some(registered()));
+    }
+
+    #[test]
+    fn a_fresh_install_has_registered_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load_or_init_push_state(dir.path()).last, None);
+    }
+
+    /// A corrupt state file must not brick push — worst case we mint a new tag.
+    #[test]
+    fn unparsable_state_falls_back_to_a_fresh_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(PUSH_STATE_FILENAME), "{ not json").unwrap();
+
+        let state = load_or_init_push_state(dir.path());
+        assert!(!state.profile_tag.is_empty());
+        assert_eq!(state.last, None);
+    }
+
+    #[test]
+    fn saving_creates_the_config_dir_if_it_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("does/not/exist");
+        let state = PushState { profile_tag: "tag".into(), last: None };
+
+        save_push_state_to(&nested, &state).unwrap();
+
+        assert_eq!(load_or_init_push_state(&nested), state);
+    }
+}
 
 #[cfg(test)]
 mod tests {
