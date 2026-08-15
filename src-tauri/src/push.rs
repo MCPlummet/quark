@@ -210,6 +210,47 @@ pub fn plan_registration(state: &PushState, next: &RegisteredPusher) -> PushActi
     }
 }
 
+// ─── Status snapshot ─────────────────────────────────────────────────────────
+
+/// Whether this platform has a push transport at all. Desktop holds a live
+/// sync connection and has no use for one.
+pub const PLATFORM_SUPPORTS_PUSH: bool =
+    cfg!(any(target_os = "android", target_os = "ios"));
+
+/// What Settings shows about push. Distinct from [`PushState`], which is what
+/// we persist — this is derived, read-only, and safe to hand the frontend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushStatus {
+    /// This platform has a push transport (mobile).
+    pub supported: bool,
+    /// The user's persisted preference.
+    pub enabled: bool,
+    /// A pusher is currently registered with the homeserver. False while push
+    /// is on but the transport has not yet supplied an address.
+    pub registered: bool,
+    /// The `app_id` of the registered pusher, if any.
+    pub app_id: Option<String>,
+    /// The gateway actually in use — so the user can tell whether discovery
+    /// found their own server or fell back to the public one.
+    pub gateway_url: Option<String>,
+}
+
+/// Derive the Settings snapshot from the user's preference and what we last
+/// registered.
+pub fn status(config: &crate::notifications::NotificationConfig, state: &PushState) -> PushStatus {
+    // A registration left over from before push was switched off is stale, not
+    // live — reporting it as registered would tell the user they are receiving
+    // pushes they have turned off.
+    let live = config.push_enabled.then_some(state.last.as_ref()).flatten();
+    PushStatus {
+        supported: PLATFORM_SUPPORTS_PUSH,
+        enabled: config.push_enabled,
+        registered: live.is_some(),
+        app_id: live.map(|p| p.app_id.clone()),
+        gateway_url: live.map(|p| p.gateway_url.clone()),
+    }
+}
+
 // ─── Homeserver round-trips ──────────────────────────────────────────────────
 //
 // Thin glue over `client.pusher()`. Every decision these make is delegated to
@@ -299,6 +340,65 @@ async fn delete_pusher(
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use crate::notifications::NotificationConfig;
+
+    fn config(push_enabled: bool) -> NotificationConfig {
+        NotificationConfig { push_enabled, ..NotificationConfig::default() }
+    }
+
+    fn registered_state() -> PushState {
+        PushState {
+            profile_tag: "tag".into(),
+            last: Some(RegisteredPusher {
+                app_id: "tel.quark.app.android".into(),
+                pushkey: "https://ntfy.example.org/up1".into(),
+                gateway_url: "https://ntfy.example.org/_matrix/push/v1/notify".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn reports_the_persisted_preference() {
+        let state = PushState { profile_tag: "tag".into(), last: None };
+        assert!(status(&config(true), &state).enabled);
+        assert!(!status(&config(false), &state).enabled);
+    }
+
+    /// Push can be switched on before the transport hands over an address —
+    /// Settings has to distinguish "on" from "actually receiving pushes".
+    #[test]
+    fn is_not_registered_until_a_pusher_exists() {
+        let state = PushState { profile_tag: "tag".into(), last: None };
+        let snapshot = status(&config(true), &state);
+        assert!(!snapshot.registered);
+        assert_eq!(snapshot.gateway_url, None);
+        assert_eq!(snapshot.app_id, None);
+    }
+
+    /// Surfacing the gateway is how a self-hoster can tell their own ntfy was
+    /// discovered rather than the public fallback.
+    #[test]
+    fn surfaces_the_gateway_and_app_id_actually_registered() {
+        let snapshot = status(&config(true), &registered_state());
+        assert!(snapshot.registered);
+        assert_eq!(
+            snapshot.gateway_url.as_deref(),
+            Some("https://ntfy.example.org/_matrix/push/v1/notify")
+        );
+        assert_eq!(snapshot.app_id.as_deref(), Some("tel.quark.app.android"));
+    }
+
+    /// A leftover registration from before push was turned off must not read
+    /// as "receiving pushes".
+    #[test]
+    fn a_disabled_pusher_does_not_read_as_registered() {
+        assert!(!status(&config(false), &registered_state()).registered);
+    }
+}
 
 #[cfg(test)]
 mod plan_tests {
