@@ -9,6 +9,7 @@ pub mod mobile_sync;
 pub mod net_guard;
 pub mod notifications;
 pub mod notify;
+pub mod push;
 pub mod search_index;
 pub mod secrets;
 pub mod updater;
