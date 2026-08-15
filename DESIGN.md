@@ -74,6 +74,47 @@ iOS reclaims memory by killing the WKWebView's *content* process while an app is
 
 Recovery is a full page reload, so it costs the user their scroll position and any unsent draft. The reloaded page re-runs the normal startup path — `restore_session` reads the session back out of the keyring and lands on the room list — and because `start_sync` aborts any running loop before spawning one, a reload can never leave two sync loops polling the homeserver.
 
+### Push notifications
+
+Desktop holds a live sync connection, so it never needs push. Mobile does: iOS
+suspends a backgrounded app outright, and on Android the alternative is
+`SyncForegroundService` holding the connection open — which costs battery, shows
+a permanent shade entry, and loses to Doze and OEM task-killers. Push inverts
+that: the homeserver POSTs to a **push gateway**, the gateway wakes the device
+through the platform transport, and the device runs a bounded sync.
+
+Two invariants shape the design.
+
+**Nothing readable leaves the homeserver.** Every pusher registers with
+`format: event_id_only` (`push.rs`), so a push carries a room id, an event id
+and an unread count — no ciphertext, no sender, no room name. Turning that back
+into a notification happens on-device through the existing `notify` pipeline,
+which is why `notify::evaluate` is pure and transport-agnostic: the same
+function serves the warm sync path and a push-woken one.
+
+**Filtering has to be server-side.** A locally-muted room the homeserver doesn't
+know about still wakes the phone for every message, only for the device to
+discard it — the exact cost push exists to remove. So muting a room sets the
+Matrix push rule (`commands.rs::set_room_mute`), which also syncs the mute to the
+user's other clients; the local `mute_rooms` list remains as an offline fallback.
+
+The transports differ, and so does what each costs to run:
+
+| Platform | Transport | Gateway | Infrastructure |
+| --- | --- | --- | --- |
+| Android | UnifiedPush (ntfy, NextPush, …) | the distributor's own, found by discovery, else `matrix.gateway.unifiedpush.org` | none — the UnifiedPush gateway is a protocol translator holding no secrets, so any client may use it |
+| iOS | APNs | self-hosted Sygnal at `push.quark.tel` | required — only the holder of the APNs key for `tel.quark.app` can push to it |
+
+`app_id` is part of the deployment contract, since Sygnal keys its config
+literally by that string: `tel.quark.app.android`, and `tel.quark.app.ios.dev` /
+`.ios.prod` for the two APNs environments. iOS registrations also carry a
+`default_payload` with `mutable-content: 1`, without which iOS never routes the
+push through the notification service extension.
+
+Push is opt-in and off by default (`push_enabled` in `notifications.toml`),
+toggled in Settings → Notifications. Where no transport is available — no
+UnifiedPush distributor installed — the foreground service remains the fallback.
+
 ### Mobile touch behaviour
 
 **Nothing the user composes on pans the viewport.** With the keyboard up, iOS keeps the layout viewport at full height and lets the visual viewport be panned within it, so any drag the page doesn't consume pans the shell — including drags on a compose bar, which has nothing of its own to scroll (#33). `touch-action` handles the leaves it can, but it cannot express the rule for a region: it intersects down the tree, so `none` on `.input-bar` or the compose box would take the text field's own `pan-y` with it. `guardViewportPan` (`src/app/mobile.ts`) is the enforcement — a non-passive `touchmove` listener on a container that swallows every drag except the one element with something of its own to scroll. Three surfaces carry one, because each is a container the others don't reach into:
@@ -441,7 +482,6 @@ When the user types `:` followed by characters in insert mode, an inline autocom
 ### Not in Scope (v1)
 - VoIP / MatrixRTC (group calls) — fundamentally incompatible with CLI aesthetic
 - Widgets — no iframe support in terminal-styled UI
-- Mobile targets — Tauri v2 supports them, but defer to future
 
 ---
 
