@@ -36,6 +36,17 @@ pub struct NotificationConfig {
     /// load unchanged.
     #[serde(default)]
     pub background_sync: bool,
+    /// Register a pusher so the homeserver wakes this device instead of a live
+    /// sync connection holding it open (mobile only). Opt-in: it hands a
+    /// third-party push gateway this device's address, so it must never turn
+    /// itself on. `serde(default)` so configs predating push load unchanged.
+    #[serde(default)]
+    pub push_enabled: bool,
+    /// Override the push gateway URL. Escape hatch for self-hosters whose
+    /// distributor doesn't advertise a Matrix gateway; normally discovery
+    /// picks the right one.
+    #[serde(default)]
+    pub push_gateway_override: Option<String>,
 }
 
 impl Default for NotificationConfig {
@@ -47,6 +58,8 @@ impl Default for NotificationConfig {
             mute_rooms: Vec::new(),
             quiet_hours: None,
             background_sync: false,
+            push_enabled: false,
+            push_gateway_override: None,
         }
     }
 }
@@ -174,6 +187,51 @@ mod tests {
 
     fn default_config() -> NotificationConfig {
         NotificationConfig::default()
+    }
+
+    // ── push settings ─────────────────────────────────────────────────────────
+
+    /// Every existing install has a notifications.toml predating push. Failing
+    /// to parse it would reset the user's whole notification config.
+    #[test]
+    fn a_config_predating_push_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(NOTIFICATIONS_FILENAME),
+            "enabled = true\nshow_body = false\nshow_sender = true\nmute_rooms = []\n",
+        )
+        .unwrap();
+
+        let config = load_notification_config_from(dir.path());
+
+        assert!(!config.show_body, "pre-existing settings survive");
+        assert!(!config.push_enabled, "push stays opt-in");
+        assert_eq!(config.push_gateway_override, None);
+    }
+
+    /// Push is opt-in: it registers this device with a third-party gateway, so
+    /// it must never turn itself on.
+    #[test]
+    fn push_is_off_by_default() {
+        assert!(!default_config().push_enabled);
+    }
+
+    #[test]
+    fn push_settings_round_trip_through_the_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = default_config();
+        config.push_enabled = true;
+        config.push_gateway_override =
+            Some("https://ntfy.example.org/_matrix/push/v1/notify".into());
+
+        save_notification_config_to(dir.path(), &config).unwrap();
+        let loaded = load_notification_config_from(dir.path());
+
+        assert!(loaded.push_enabled);
+        assert_eq!(
+            loaded.push_gateway_override.as_deref(),
+            Some("https://ntfy.example.org/_matrix/push/v1/notify")
+        );
     }
 
     // ── should_notify ─────────────────────────────────────────────────────────
