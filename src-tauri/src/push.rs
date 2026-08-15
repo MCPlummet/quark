@@ -210,6 +210,94 @@ pub fn plan_registration(state: &PushState, next: &RegisteredPusher) -> PushActi
     }
 }
 
+// ─── Homeserver round-trips ──────────────────────────────────────────────────
+//
+// Thin glue over `client.pusher()`. Every decision these make is delegated to
+// the pure functions above, which is where the tests are — an SDK call and a
+// file write are all that is left here. End-to-end coverage is
+// `GET /_matrix/client/v3/pushers` against a real homeserver.
+
+/// Register this device's pusher, deleting whatever it replaces.
+///
+/// Safe to call on every launch: an unchanged address returns `Ok(false)`
+/// without touching the network.
+pub async fn register(
+    client: &matrix_sdk::Client,
+    config_dir: &std::path::Path,
+    transport: PushTransport,
+    pushkey: String,
+    gateway_url: String,
+    device_display_name: String,
+) -> Result<bool, String> {
+    let mut state = load_or_init_push_state(config_dir);
+    let next = RegisteredPusher {
+        app_id: transport.app_id(),
+        pushkey: pushkey.clone(),
+        gateway_url: gateway_url.clone(),
+    };
+
+    let stale = match plan_registration(&state, &next) {
+        PushAction::Unchanged => return Ok(false),
+        PushAction::Register { stale } => stale,
+    };
+
+    // Delete first: the stale pusher is at an address this registration will
+    // not overwrite, so leaving it would have the homeserver pushing to a dead
+    // endpoint indefinitely. A failure here is not fatal — a duplicate pusher
+    // is worse than no cleanup, but neither is worth blocking registration.
+    if let Some(stale) = stale {
+        if let Err(e) = delete_pusher(client, &stale).await {
+            tracing::warn!("Failed to delete stale pusher {}: {e}", stale.app_id);
+        }
+    }
+
+    let registration = PushRegistration {
+        transport,
+        pushkey,
+        gateway_url,
+        device_display_name,
+        profile_tag: state.profile_tag.clone(),
+        lang: "en".to_owned(),
+    };
+    client
+        .pusher()
+        .set(registration.to_pusher())
+        .await
+        .map_err(|e| format!("Failed to register pusher: {e}"))?;
+
+    state.last = Some(next);
+    save_push_state_to(config_dir, &state)?;
+    Ok(true)
+}
+
+/// Remove this device's pusher — on logout, or when the user turns push off.
+///
+/// Leaving it registered would have the homeserver push every message to an
+/// endpoint that no longer resolves to a logged-in session.
+pub async fn unregister(
+    client: &matrix_sdk::Client,
+    config_dir: &std::path::Path,
+) -> Result<(), String> {
+    let mut state = load_or_init_push_state(config_dir);
+    let Some(last) = state.last.take() else {
+        return Ok(());
+    };
+    delete_pusher(client, &last).await?;
+    save_push_state_to(config_dir, &state)
+}
+
+async fn delete_pusher(
+    client: &matrix_sdk::Client,
+    pusher: &RegisteredPusher,
+) -> Result<(), String> {
+    use matrix_sdk::ruma::api::client::push::PusherIds;
+    client
+        .pusher()
+        .delete(PusherIds::new(pusher.pushkey.clone(), pusher.app_id.clone()))
+        .await
+        .map_err(|e| format!("Failed to delete pusher: {e}"))
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
