@@ -2372,28 +2372,92 @@ pub async fn set_notification_config(
     Ok(())
 }
 
-/// Add a room to the mute list so notifications from it are suppressed.
+/// Mute a room: set the Matrix push rule, and record it locally.
+///
+/// The push rule is the part that matters under push notifications — a local
+/// list is invisible to the homeserver, which would go on waking the device
+/// for every message in a room the user muted, only for the device to discard
+/// it. The rule also syncs the mute to the user's other clients.
+///
+/// The local list is kept as a fallback for when the rule can't be set (offline,
+/// or not logged in), and is what `should_notify` consults.
 #[tauri::command]
 pub async fn mute_room(
+    state: State<'_, MatrixState>,
     config_state: State<'_, Mutex<NotificationConfig>>,
+    paths: State<'_, crate::Paths>,
     room_id: String,
 ) -> Result<(), String> {
-    let mut guard = config_state.lock().map_err(|_| "Notification config lock poisoned")?;
-    if !guard.mute_rooms.contains(&room_id) {
-        guard.mute_rooms.push(room_id);
-    }
-    Ok(())
+    set_room_mute(&state, &room_id, true).await;
+    update_mute_list(&config_state, &paths, |rooms| {
+        if !rooms.contains(&room_id) {
+            rooms.push(room_id.clone());
+        }
+    })
 }
 
-/// Remove a room from the mute list.
+/// Unmute a room: clear the Matrix push rule, and drop it from the local list.
 #[tauri::command]
 pub async fn unmute_room(
+    state: State<'_, MatrixState>,
     config_state: State<'_, Mutex<NotificationConfig>>,
+    paths: State<'_, crate::Paths>,
     room_id: String,
 ) -> Result<(), String> {
+    set_room_mute(&state, &room_id, false).await;
+    update_mute_list(&config_state, &paths, |rooms| {
+        rooms.retain(|r| r != &room_id);
+    })
+}
+
+/// Apply the mute to the homeserver's push rules. Best-effort: the local list
+/// still suppresses the notification on this device if it fails, so a mute
+/// never appears to do nothing.
+async fn set_room_mute(state: &State<'_, MatrixState>, room_id: &str, mute: bool) {
+    use matrix_sdk::notification_settings::{IsEncrypted, IsOneToOne, RoomNotificationMode};
+    use matrix_sdk::ruma::RoomId;
+
+    let Ok(client) = get_client(state) else { return };
+    let Ok(parsed) = RoomId::parse(room_id) else {
+        tracing::warn!("Not a room id, skipping push rule: {room_id}");
+        return;
+    };
+
+    let settings = client.notification_settings().await;
+    let result = if mute {
+        settings
+            .set_room_notification_mode(&parsed, RoomNotificationMode::Mute)
+            .await
+    } else {
+        // Unmuting needs the room's shape to know which default to restore.
+        let Some(room) = client.get_room(&parsed) else {
+            tracing::warn!("Room {room_id} not in store, skipping push rule");
+            return;
+        };
+        let is_encrypted: IsEncrypted = room.is_encrypted().await.unwrap_or(false).into();
+        // The SDK defines one-to-one as exactly two members, not as "is a DM" —
+        // it selects between the `.m.rule.room_one_to_one` and `.m.rule.message`
+        // defaults, so a DM that grew a third member is no longer one-to-one.
+        let is_one_to_one: IsOneToOne = (room.active_members_count() == 2).into();
+        settings.unmute_room(&parsed, is_encrypted, is_one_to_one).await
+    };
+    if let Err(e) = result {
+        tracing::warn!("Failed to set push rule for {room_id}: {e}");
+    }
+}
+
+/// Mutate the local mute list and persist it. Persisting is the point: without
+/// it a mute is forgotten on restart, and the next Settings save can resurrect
+/// or drop mutes depending on how stale the frontend's cached config is.
+fn update_mute_list(
+    config_state: &State<'_, Mutex<NotificationConfig>>,
+    paths: &State<'_, crate::Paths>,
+    mutate: impl FnOnce(&mut Vec<String>),
+) -> Result<(), String> {
     let mut guard = config_state.lock().map_err(|_| "Notification config lock poisoned")?;
-    guard.mute_rooms.retain(|r| r != &room_id);
-    Ok(())
+    mutate(&mut guard.mute_rooms);
+    let snapshot = guard.clone();
+    crate::notifications::save_notification_config_to(&paths.config_dir, &snapshot)
 }
 
 /// Create the Android notification channels (Messages / Mentions / Background
