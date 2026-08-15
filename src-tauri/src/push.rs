@@ -180,7 +180,115 @@ fn new_profile_tag() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+// ─── Registration planning ───────────────────────────────────────────────────
+
+/// What registering `next` requires, given what we last registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushAction {
+    /// Already registered at this address — no round-trip needed.
+    Unchanged,
+    /// Register `next`, first deleting `stale` if the old pusher is at an
+    /// address the new one will not overwrite.
+    Register { stale: Option<RegisteredPusher> },
+}
+
+/// Decide what a registration attempt has to do.
+///
+/// The homeserver identifies a pusher by `(app_id, pushkey)`, so re-setting
+/// the same pair overwrites in place and needs no cleanup. Only when that pair
+/// changes does the previous pusher survive on its own and have to be deleted.
+pub fn plan_registration(state: &PushState, next: &RegisteredPusher) -> PushAction {
+    let Some(last) = &state.last else {
+        return PushAction::Register { stale: None };
+    };
+    if last == next {
+        return PushAction::Unchanged;
+    }
+    let same_pusher = last.app_id == next.app_id && last.pushkey == next.pushkey;
+    PushAction::Register {
+        stale: if same_pusher { None } else { Some(last.clone()) },
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    fn state_with(last: Option<RegisteredPusher>) -> PushState {
+        PushState { profile_tag: "tag".into(), last }
+    }
+
+    fn pusher(app_id: &str, pushkey: &str, gateway: &str) -> RegisteredPusher {
+        RegisteredPusher {
+            app_id: app_id.into(),
+            pushkey: pushkey.into(),
+            gateway_url: gateway.into(),
+        }
+    }
+
+    fn android(pushkey: &str, gateway: &str) -> RegisteredPusher {
+        pusher("tel.quark.app.android", pushkey, gateway)
+    }
+
+    /// Every launch re-offers the same endpoint. Re-registering it would be a
+    /// pointless round-trip on a connection the user may be paying for.
+    #[test]
+    fn re_offering_the_same_address_is_a_no_op() {
+        let next = android("https://ntfy.example.org/up1", "https://gw/_matrix/push/v1/notify");
+        assert_eq!(
+            plan_registration(&state_with(Some(next.clone())), &next),
+            PushAction::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_first_registration_has_nothing_to_delete() {
+        let next = android("https://ntfy.example.org/up1", "https://gw/_matrix/push/v1/notify");
+        assert_eq!(
+            plan_registration(&state_with(None), &next),
+            PushAction::Register { stale: None }
+        );
+    }
+
+    /// A new pushkey is a different pusher as far as the homeserver is
+    /// concerned, so the old one survives unless we delete it explicitly.
+    #[test]
+    fn a_rotated_pushkey_deletes_the_pusher_it_replaces() {
+        let old = android("https://ntfy.example.org/up1", "https://gw/_matrix/push/v1/notify");
+        let next = android("https://ntfy.example.org/up2", "https://gw/_matrix/push/v1/notify");
+        assert_eq!(
+            plan_registration(&state_with(Some(old.clone())), &next),
+            PushAction::Register { stale: Some(old) }
+        );
+    }
+
+    /// Moving a debug build to TestFlight keeps the device token but changes
+    /// the app_id, which the homeserver treats as a separate pusher.
+    #[test]
+    fn switching_apns_environment_deletes_the_old_app_ids_pusher() {
+        let old = pusher("tel.quark.app.ios.dev", "dG9rZW4=", "https://push.quark.tel/_matrix/push/v1/notify");
+        let next = pusher("tel.quark.app.ios.prod", "dG9rZW4=", "https://push.quark.tel/_matrix/push/v1/notify");
+        assert_eq!(
+            plan_registration(&state_with(Some(old.clone())), &next),
+            PushAction::Register { stale: Some(old) }
+        );
+    }
+
+    /// Same app_id and pushkey, new gateway — the user stood up their own
+    /// ntfy. `set` overwrites in place, so deleting first would be wrong: it
+    /// would briefly leave the device with no pusher at all.
+    #[test]
+    fn a_changed_gateway_overwrites_in_place() {
+        let old = android("https://ntfy.example.org/up1", "https://matrix.gateway.unifiedpush.org/_matrix/push/v1/notify");
+        let next = android("https://ntfy.example.org/up1", "https://ntfy.example.org/_matrix/push/v1/notify");
+        assert_eq!(
+            plan_registration(&state_with(Some(old)), &next),
+            PushAction::Register { stale: None }
+        );
+    }
+}
 
 #[cfg(test)]
 mod state_tests {
