@@ -12,7 +12,10 @@ import {
   getBackgroundSyncState,
   setBackgroundSync,
   requestBatteryExemption,
+  getPushStatus,
+  setPushEnabled,
 } from "../../../ipc/notifications.js";
+import type { PushStatus } from "../../../ipc/notifications.js";
 import { showSuccess, showError } from "../../NotificationToast.js";
 import type { SettingsTab } from "../types.js";
 
@@ -38,6 +41,55 @@ export const notificationsTab: SettingsTab = {
     section.appendChild(controls.checkbox("Enable notifications", draft.enabled, (v) => { draft = { ...draft, enabled: v }; }));
     section.appendChild(controls.checkbox("Show message preview", draft.show_body, (v) => { draft = { ...draft, show_body: v }; }));
     section.appendChild(controls.checkbox("Show sender name", draft.show_sender, (v) => { draft = { ...draft, show_sender: v }; }));
+
+    // Push (mobile-only — desktop holds a live sync connection and reports
+    // unsupported). Like background sync below, the toggle applies immediately
+    // rather than waiting for [save]: turning it off unregisters the pusher,
+    // which is a homeserver-side effect, not a preference edit.
+    try {
+      const pushState = await getPushStatus();
+      if (pushState.supported) {
+        const pushSection = document.createElement("div");
+        pushSection.className = "settings-dialog__section";
+        pushSection.appendChild(controls.sectionTitle("Push notifications"));
+
+        const status = document.createElement("div");
+        status.className = "settings-dialog__hint";
+        const renderStatus = (s: PushStatus) => {
+          if (!s.enabled) {
+            status.textContent = "push: off · the app must stay running to notify";
+            return;
+          }
+          status.textContent = s.registered
+            ? `push: registered · gateway: ${s.gateway_url ?? "unknown"}`
+            : "push: waiting for a distributor — no pusher registered yet";
+        };
+        renderStatus(pushState);
+
+        pushSection.appendChild(controls.checkbox(
+          "Let your homeserver wake the app (saves battery)",
+          pushState.enabled,
+          (v) => {
+            void setPushEnabled(v)
+              .then(getPushStatus)
+              .then(renderStatus)
+              .catch((err) => showError(`Push toggle failed: ${err instanceof Error ? err.message : String(err)}`));
+          },
+        ));
+        pushSection.appendChild(status);
+
+        const pushHint = document.createElement("div");
+        pushHint.className = "settings-dialog__hint";
+        pushHint.textContent =
+          "Android needs a UnifiedPush distributor installed (ntfy, NextPush, …). " +
+          "Only a room ID and event ID ever reach the push gateway — never message content.";
+        pushSection.appendChild(pushHint);
+
+        content.appendChild(pushSection);
+      }
+    } catch {
+      // Non-critical — the rest of the tab still works.
+    }
 
     // Background sync (Android-only — desktop/iOS report unsupported). The
     // toggle applies immediately (starts/stops the foreground service) rather

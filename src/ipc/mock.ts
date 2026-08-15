@@ -451,9 +451,12 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         status_msg: "mock status — working on quark",
       };
     case "get_notification_config":
-      return { enabled: true, show_body: true, show_sender: true, mute_rooms: [], quiet_hours: null, background_sync: false };
+      return { enabled: true, show_body: true, show_sender: true, mute_rooms: [], quiet_hours: null, background_sync: false, push_enabled: false, push_gateway_override: null };
     case "get_background_sync_state":
       return { supported: false, enabled: false, running: false, battery_exempt: false };
+    // Browser dev mode has no push transport, same as desktop.
+    case "get_push_status":
+      return { supported: false, enabled: false, registered: false, app_id: null, gateway_url: null };
     case "set_avatar":
       return "mxc://matrix.org/mock-avatar-upload";
     case "get_home_data": {
@@ -480,6 +483,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     }
     case "set_background_sync":
     case "request_battery_exemption":
+    case "set_push_enabled":
       return null;
 
     // ─── Crypto ──────────────────────────────────────────────────────────

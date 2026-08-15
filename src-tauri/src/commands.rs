@@ -2451,6 +2451,56 @@ pub async fn get_background_sync_state(
     Ok(crate::mobile_sync::state(&app_handle, enabled))
 }
 
+/// Current push state for the Settings UI.
+#[tauri::command]
+pub async fn get_push_status(
+    config_state: State<'_, Mutex<NotificationConfig>>,
+    paths: State<'_, crate::Paths>,
+) -> Result<crate::push::PushStatus, String> {
+    let config = config_state
+        .lock()
+        .map_err(|_| "Notification config lock poisoned")?
+        .clone();
+    let state = crate::push::load_or_init_push_state(&paths.config_dir);
+    Ok(crate::push::status(&config, &state))
+}
+
+/// Turn push on or off.
+///
+/// Switching it off unregisters immediately — leaving the pusher in place
+/// would have the homeserver keep pushing to a device that has opted out.
+/// Switching it on only records the preference; the platform transport
+/// registers once it has an address to register (see the Android and iOS
+/// transports).
+#[tauri::command]
+pub async fn set_push_enabled(
+    state: State<'_, MatrixState>,
+    config_state: State<'_, Mutex<NotificationConfig>>,
+    paths: State<'_, crate::Paths>,
+    enabled: bool,
+) -> Result<(), String> {
+    {
+        let mut guard = config_state
+            .lock()
+            .map_err(|_| "Notification config lock poisoned")?;
+        guard.push_enabled = enabled;
+        let snapshot = guard.clone();
+        crate::notifications::save_notification_config_to(&paths.config_dir, &snapshot)?;
+    }
+
+    if !enabled {
+        // Best-effort: the preference is already saved, so a failed
+        // unregister must not report the toggle itself as failed. The stale
+        // pusher stays on record and the next attempt retries it.
+        if let Ok(client) = get_client(&state) {
+            if let Err(e) = crate::push::unregister(&client, &paths.config_dir).await {
+                tracing::warn!("Failed to unregister pusher: {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Surface the Android battery-optimization exemption prompt (no-op elsewhere).
 #[tauri::command]
 pub async fn request_battery_exemption(app_handle: AppHandle) -> Result<(), String> {
