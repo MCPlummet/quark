@@ -13,6 +13,7 @@ pub mod push;
 pub mod push_wake;
 pub mod search_index;
 pub mod secrets;
+pub mod unifiedpush;
 pub mod updater;
 
 use matrix::client::{MatrixState, PaginationLock, SearchState, SyncState, TimelineTokens};
