@@ -89,7 +89,35 @@ object PushNative {
     return specs
   }
 
+  /** Record a distributor endpoint and register it with the homeserver. */
+  fun onNewEndpoint(context: Context, endpoint: String) {
+    if (!libraryLoaded) return
+    logError("endpoint", runCatching { nativeOnNewEndpoint(endpoint, context.dataDir.absolutePath) })
+  }
+
+  /** Drop the endpoint and the pusher that pointed at it. */
+  fun onUnregistered(context: Context) {
+    if (!libraryLoaded) return
+    logError("unregister", runCatching { nativeOnUnregistered(context.dataDir.absolutePath) })
+  }
+
+  /** The endpoint callbacks return only an error, if anything went wrong. */
+  private fun logError(what: String, result: Result<String?>) {
+    val json = result.getOrElse {
+      Log.e(TAG, "Push $what callback failed", it)
+      return
+    } ?: return
+    runCatching { JSONObject(json).optString("error") }
+      .getOrNull()
+      ?.takeIf { it.isNotEmpty() }
+      ?.let { Log.w(TAG, "Push $what: $it") }
+  }
+
   private external fun nativeHandlePush(payload: String, dataDir: String): String?
+
+  private external fun nativeOnNewEndpoint(endpoint: String, dataDir: String): String?
+
+  private external fun nativeOnUnregistered(dataDir: String): String?
 }
 
 /**

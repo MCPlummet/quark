@@ -89,6 +89,82 @@ pub extern "system" fn Java_tel_quark_app_PushNative_nativeHandlePush<'local>(
         .unwrap_or(std::ptr::null_mut())
 }
 
+/// The distributor handed us a new endpoint (or re-announced the old one).
+///
+/// Separate from the message path because it is cheap and must not be skipped:
+/// it records the address that everything else depends on.
+#[no_mangle]
+pub extern "system" fn Java_tel_quark_app_PushNative_nativeOnNewEndpoint<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    endpoint: JString<'local>,
+    data_dir: JString<'local>,
+) -> jstring {
+    two_string_call(&mut env, endpoint, data_dir, |endpoint, data_dir| {
+        block_on(crate::unifiedpush::on_new_endpoint(data_dir, endpoint))
+    })
+}
+
+/// The distributor revoked our registration.
+#[no_mangle]
+pub extern "system" fn Java_tel_quark_app_PushNative_nativeOnUnregistered<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    data_dir: JString<'local>,
+) -> jstring {
+    let unused = JString::from(JObject::null());
+    two_string_call(&mut env, unused, data_dir, |_, data_dir| {
+        block_on(crate::unifiedpush::on_unregistered(data_dir))
+    })
+}
+
+/// Shared shape for the endpoint callbacks: read two strings, run the closure,
+/// hand back a `PushResult` carrying only an error (there is nothing to post).
+fn two_string_call<'local>(
+    env: &mut JNIEnv<'local>,
+    first: JString<'local>,
+    second: JString<'local>,
+    work: impl FnOnce(&str, &std::path::Path) -> Result<(), String>,
+) -> jstring {
+    init_logging();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let first: String = if first.is_null() {
+            String::new()
+        } else {
+            env.get_string(&first).map_err(|e| format!("Unreadable argument: {e}"))?.into()
+        };
+        let second: String = env
+            .get_string(&second)
+            .map_err(|e| format!("Unreadable data dir: {e}"))?
+            .into();
+        work(&first, std::path::Path::new(&second))
+    }));
+
+    let result = match outcome {
+        Ok(Ok(())) => PushResult::default(),
+        Ok(Err(e)) => PushResult::failed(e),
+        Err(_) => PushResult::failed("Push callback panicked"),
+    };
+    let json = serde_json::to_string(&result)
+        .unwrap_or_else(|_| r#"{"specs":[],"error":"unserialisable"}"#.to_owned());
+    env.new_string(json).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
+/// Run one future to completion on a runtime built for the purpose.
+///
+/// The endpoint callbacks are short — a file write and at most one HTTP
+/// round-trip — so a single-threaded runtime is enough.
+fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime.block_on(future),
+        Err(e) => {
+            // Only reachable if the OS refuses a reactor; nothing to fall back
+            // to, and the caller's own timeout will notice.
+            panic!("Could not start a runtime: {e}");
+        }
+    }
+}
+
 /// Blocking bridge into the async wake path.
 ///
 /// Builds its own runtime because there is no guarantee one exists — and when

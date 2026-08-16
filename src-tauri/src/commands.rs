@@ -88,6 +88,14 @@ fn settle_pending_pushers(client: matrix_sdk::Client, config_dir: std::path::Pat
         if let Err(e) = crate::push::retry_pending_deletes(&client, &config_dir).await {
             tracing::warn!("{e}");
         }
+        // Register whatever address the transport left on disk. This is the one
+        // path that recovers a distributor endpoint delivered to a process with
+        // no session to register it against — without it, an endpoint rotation
+        // while the user is logged out leaves push silently dead.
+        #[cfg(target_os = "android")]
+        if let Err(e) = crate::unifiedpush::register_stored_endpoint(&config_dir).await {
+            tracing::warn!("Could not register the stored push endpoint: {e}");
+        }
     });
 }
 

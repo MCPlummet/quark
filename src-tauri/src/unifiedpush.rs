@@ -129,6 +129,76 @@ pub async fn discover_gateway(endpoint: &str) -> String {
     gateway
 }
 
+// ─── Reacting to the distributor ─────────────────────────────────────────────
+
+/// The distributor handed us an endpoint. Record it, and register it with the
+/// homeserver if we can reach one.
+///
+/// Storing comes first and unconditionally, so an address survives even when
+/// registration fails — the next launch retries from what is on disk instead of
+/// waiting for the distributor to volunteer the endpoint again.
+///
+/// An unchanged endpoint stops here. Distributors re-announce on every app
+/// start, and turning that into a pusher round-trip per launch is exactly the
+/// kind of chatter this app has hurt its homeserver with before.
+pub async fn on_new_endpoint(data_dir: &std::path::Path, endpoint: &str) -> Result<(), String> {
+    if !crate::push::store_endpoint(data_dir, endpoint)? {
+        tracing::debug!("Distributor re-announced the endpoint we already had");
+        return Ok(());
+    }
+    register_stored_endpoint(data_dir).await
+}
+
+/// Register whatever endpoint is on disk with the homeserver.
+///
+/// Safe to call whenever a session appears — `push::register` returns without a
+/// round-trip when push is off or the address is already registered.
+pub async fn register_stored_endpoint(data_dir: &std::path::Path) -> Result<(), String> {
+    let state = crate::push::load_push_state(data_dir);
+    let Some(endpoint) = state.and_then(|s| s.endpoint) else {
+        return Ok(()); // No distributor has given us an address yet.
+    };
+    let config = crate::notifications::load_notification_config_from(data_dir);
+    if !config.push_enabled {
+        return Ok(());
+    }
+
+    let client = crate::push_wake::background_client(data_dir).await?;
+    let gateway = discover_gateway(&endpoint).await;
+    crate::push::register(
+        &client,
+        data_dir,
+        &config,
+        crate::push::PushTransport::UnifiedPush,
+        endpoint,
+        gateway,
+        device_display_name(),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// The distributor revoked our registration. Drop the address and the pusher
+/// that pointed at it — leaving the pusher would have the homeserver waking a
+/// gateway that no longer knows this device.
+pub async fn on_unregistered(data_dir: &std::path::Path) -> Result<(), String> {
+    crate::push::forget_endpoint(data_dir)?;
+    match crate::push_wake::background_client(data_dir).await {
+        Ok(client) => crate::push::unregister(&client, data_dir).await,
+        // No session to delete it with; the delete is owed and retried on the
+        // next authenticated start.
+        Err(e) => {
+            tracing::warn!("Deferring pusher removal after unregistration: {e}");
+            crate::push::defer_unregister(data_dir)
+        }
+    }
+}
+
+/// Label for this device in the user's pusher list on other clients.
+fn device_display_name() -> String {
+    "Quark (Android)".to_owned()
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

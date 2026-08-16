@@ -350,6 +350,12 @@ pub fn run() {
 
             app.manage(Paths { config_dir });
 
+            // Publish the handle for work that arrives from Kotlin rather than
+            // from a command — a push has no AppHandle of its own, and needs
+            // this one to reuse the app's Matrix client instead of opening a
+            // second one over the same store.
+            push_wake::set_app_handle(app.handle().clone());
+
             // Load persisted room-activity timestamps and start their
             // periodic flusher (flush() is a no-op while nothing changed).
             let recency_path: Option<std::path::PathBuf> = {

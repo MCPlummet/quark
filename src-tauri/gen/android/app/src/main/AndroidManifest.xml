@@ -59,6 +59,19 @@
                 android:value="Persistent Matrix sync connection; no push server is available for this self-hostable chat client" />
         </service>
 
+        <!-- Receives everything the UnifiedPush distributor sends: messages,
+             endpoints, revocations. The connector library binds it, so it must
+             not be exported and must answer PUSH_EVENT. The <queries> block
+             that makes distributors visible under Android 11+ package
+             visibility comes from the library's own manifest. -->
+        <service
+            android:name=".PushEventService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- Runs a single push to completion. shortService rather than
              specialUse: it lives for one sync and Android may stop it after
              ~3 minutes, which is exactly the contract we want. Not exported —

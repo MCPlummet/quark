@@ -132,6 +132,52 @@ impl Drop for WakeLease<'_> {
 
 // ─── Is the app already syncing? ─────────────────────────────────────────────
 
+/// The running app, if there is one.
+///
+/// Push work is reached from Kotlin, not from a Tauri command, so it arrives
+/// with no `AppHandle` and no way to ask what this process already has. Set once
+/// during app setup; absent means no Tauri is running here — which is itself the
+/// answer to the question that matters most, "could another `Client` exist?"
+static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// Publish the app handle for the push paths. Called once from app setup.
+pub fn set_app_handle(app: tauri::AppHandle) {
+    let _ = APP_HANDLE.set(app);
+}
+
+pub fn app_handle() -> Option<&'static tauri::AppHandle> {
+    APP_HANDLE.get()
+}
+
+/// A Matrix client for work with no `AppHandle` behind it.
+///
+/// Prefers the app's own client, and this is not an optimisation: two `Client`s
+/// over one store means two `OlmMachine`s, which is the documented cause of
+/// Olm-account corruption when an app and an extension share a store
+/// (element-ios#3817). Building a fresh one is safe only in the case this
+/// reaches it — no Tauri in the process, so no other client can exist.
+pub async fn background_client(data_dir: &std::path::Path) -> Result<matrix_sdk::Client, String> {
+    use tauri::Manager;
+
+    if let Some(app) = app_handle() {
+        let existing = app
+            .try_state::<crate::matrix::client::MatrixState>()
+            .and_then(|state| state.0.lock().ok().and_then(|guard| guard.clone()));
+        return existing.ok_or_else(|| "The app is running but not logged in".to_string());
+    }
+
+    let session = crate::secrets::load_session(data_dir)?.ok_or("No stored session")?;
+    let store_key = crate::secrets::get_store_key(data_dir)?.ok_or("No store-encryption key")?;
+    let client = crate::matrix::client::build_client(
+        &session.homeserver_url,
+        data_dir.to_path_buf(),
+        &store_key,
+    )
+    .await?;
+    crate::matrix::client::restore_session_from_info(&client, &session).await?;
+    Ok(client)
+}
+
 /// Set while the app's own sync loop is running.
 ///
 /// Process-wide rather than Tauri-managed on purpose: the push service runs in
@@ -214,16 +260,7 @@ async fn sync_and_collect(
 ) -> Result<Vec<crate::notify::NotificationSpec>, String> {
     use matrix_sdk::config::SyncSettings;
 
-    let session = crate::secrets::load_session(data_dir)?.ok_or("No stored session")?;
-    let store_key = crate::secrets::get_store_key(data_dir)?.ok_or("No store-encryption key")?;
-
-    let client = crate::matrix::client::build_client(
-        &session.homeserver_url,
-        data_dir.to_path_buf(),
-        &store_key,
-    )
-    .await?;
-    crate::matrix::client::restore_session_from_info(&client, &session).await?;
+    let client = background_client(data_dir).await?;
 
     let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     register_collectors(&client, Collector { config: std::sync::Arc::new(config), out: out.clone() });
