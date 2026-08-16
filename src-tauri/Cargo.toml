@@ -37,6 +37,14 @@ tiny_http = "0.12"
 # Allowlist sanitizer for remote `formatted_body` HTML (org.matrix.custom.html)
 # before it reaches the WebView. See matrix/html.rs.
 ammonia = "4"
+# Direct JNI, for the push path only (push_jni.rs). Everything else reaches
+# Kotlin through Tauri's mobile-plugin bridge, but a push wakes a process with
+# no Tauri in it, so `PushSyncService` calls Rust itself over a hand-written
+# entry point. Deliberately NOT android-only: PR CI type-checks Linux alone and
+# the Android APK is built only on release tags, so restricting this to the
+# Android target would mean a wrong JNI signature first surfacing at release.
+# It costs a small dep (jni-sys, cesu8, combine) on desktop and links nothing.
+jni = "0.21"
 
 # matrix-sdk and reqwest pick their TLS stack from features.
 # Desktop + iOS use native-tls (Security framework on Apple, OpenSSL on Linux);

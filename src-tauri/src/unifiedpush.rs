@@ -88,6 +88,47 @@ pub fn gateway_from_probe(candidate: &str, outcome: ProbeOutcome) -> String {
     }
 }
 
+// ─── Probing the endpoint's host ─────────────────────────────────────────────
+
+/// Ask the endpoint's host whether it translates Matrix, and pick a gateway.
+///
+/// Never fails: an endpoint we cannot even parse falls back to the public
+/// gateway, which is the one thing guaranteed to work with any endpoint.
+pub async fn discover_gateway(endpoint: &str) -> String {
+    let Ok(candidate) = gateway_url_for(endpoint) else {
+        tracing::warn!("Endpoint {endpoint} is not a URL; using the public gateway");
+        return PUBLIC_GATEWAY.to_owned();
+    };
+
+    // Short: this runs while the user waits for push to turn on, and an
+    // unreachable host keeps their own gateway anyway.
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!("Could not build the discovery client: {e}");
+            return gateway_from_probe(&candidate, ProbeOutcome::Unreachable);
+        }
+    };
+
+    let outcome = match client.get(&candidate).send().await {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            classify_probe(status, &body)
+        }
+        Err(e) => {
+            tracing::warn!("Gateway discovery for {candidate} failed: {e}");
+            ProbeOutcome::Unreachable
+        }
+    };
+    let gateway = gateway_from_probe(&candidate, outcome);
+    tracing::info!("Gateway discovery: {outcome:?} → {gateway}");
+    gateway
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

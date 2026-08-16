@@ -4484,6 +4484,7 @@ dependencies = [
  "chrono",
  "directories",
  "futures-util",
+ "jni",
  "keyring",
  "matrix-sdk",
  "mime",
