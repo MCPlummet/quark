@@ -37,6 +37,18 @@ Run a single test file: `pnpm test src/ui/Input.test.ts`
 
 Rust backend: `cargo build` / `cargo test` from `src-tauri/`.
 
+**Android** needs a second dev shell — the SDK is a ~2 GB unfree download the
+desktop shell has no use for:
+
+```bash
+nix develop .#android      # SDK + NDK (pinned to CI's) + JDK 17 + Rust android targets
+pnpm tauri android dev     # or: pnpm tauri android build --debug
+```
+
+The default shell carries `adb` alone, which is enough to drive an already
+installed build (`adb logcat -s quark`). Don't enter both shells at once — two
+`adb` clients on PATH keep restarting each other's server.
+
 **CI** (GitHub Actions): `.github/workflows/ci.yml` gates PRs and `main` with `pnpm test` + `cargo test` (hard) and `clippy` (advisory); `release.yml` builds platform installers on `v*` tags.
 
 ## Architecture
