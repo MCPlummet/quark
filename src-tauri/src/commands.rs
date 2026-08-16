@@ -312,6 +312,10 @@ pub async fn logout(
             handle.abort();
         }
     }
+    // Nothing is syncing now, so a push arriving mid-logout must not stand down
+    // waiting for a loop that is gone. (Its own session check is what stops it
+    // acting on a logged-out account.)
+    crate::push_wake::set_warm_sync_active(false);
     // Reset handler registration flag so a fresh login re-registers handlers
     // on the new client instance.
     {

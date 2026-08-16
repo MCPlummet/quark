@@ -130,6 +130,205 @@ impl Drop for WakeLease<'_> {
     }
 }
 
+// ─── Is the app already syncing? ─────────────────────────────────────────────
+
+/// Set while the app's own sync loop is running.
+///
+/// Process-wide rather than Tauri-managed on purpose: the push service runs in
+/// the same process as the app but has no `AppHandle` to ask, and this is the
+/// one question it must be able to answer before opening a second connection to
+/// the homeserver.
+static WARM_SYNC_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Record whether the long-lived sync loop is running. Called by `start_sync`
+/// and by the paths that abort it.
+pub fn set_warm_sync_active(active: bool) {
+    WARM_SYNC_ACTIVE.store(active, Ordering::Release);
+}
+
+pub fn warm_sync_active() -> bool {
+    WARM_SYNC_ACTIVE.load(Ordering::Acquire)
+}
+
+/// The one wake allowed to sync at a time, for the life of the process.
+pub static WAKE_GUARD: WakeGuard = WakeGuard::new();
+
+// ─── Running the wake ────────────────────────────────────────────────────────
+
+/// Wall-clock ceiling for the whole wake, from cold client to rendered specs.
+///
+/// Android's `shortService` allows about 30 s before it force-stops the service,
+/// and being force-stopped mid-sync is worse than returning nothing: it can
+/// interrupt a store write. Finish early and leave headroom for Kotlin to post
+/// what we found.
+const WAKE_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Everything the collecting event handlers need. No `AppHandle` — that is the
+/// entire point of this path.
+#[derive(Clone)]
+struct Collector {
+    config: std::sync::Arc<crate::notifications::NotificationConfig>,
+    out: std::sync::Arc<std::sync::Mutex<Vec<crate::notify::NotificationSpec>>>,
+}
+
+/// Wake up, sync once, and render whatever the notification pipeline selects.
+///
+/// `data_dir` is Android's `Context.dataDir`, which is what Tauri's
+/// `app_data_dir()` *and* `app_config_dir()` both resolve to there — so the
+/// store, the secrets and `notifications.toml` are all under this one path.
+///
+/// Deliberately runs a real (if bounded) sync rather than fetching the single
+/// event the push named. The SDK's `Vec<Action>` extractor hands the handler the
+/// server's own push-rule evaluation, which means `notify::evaluate` sees
+/// *identical* inputs to the warm path — same mute rules, same highlight
+/// decision, no second implementation to drift. It also picks up everything else
+/// that arrived in the same window, which is why a burst coalesces cleanly.
+pub async fn run_wake(
+    data_dir: &std::path::Path,
+    wake: &PushWake,
+) -> Result<Vec<crate::notify::NotificationSpec>, String> {
+    let config = crate::notifications::load_notification_config_from(data_dir);
+    match plan_wake(wake, config.push_enabled, warm_sync_active()) {
+        WakePlan::Sync => {}
+        WakePlan::Ignore(reason) => {
+            tracing::info!("Push wake ignored: {reason:?}");
+            return Ok(Vec::new());
+        }
+    }
+
+    // Losing this race is a success, not an error: the sync that holds the
+    // lease covers this event too.
+    let Some(_lease) = WAKE_GUARD.try_enter() else {
+        tracing::info!("Push wake coalesced into the sync already running");
+        return Ok(Vec::new());
+    };
+
+    tokio::time::timeout(WAKE_BUDGET, sync_and_collect(data_dir, config))
+        .await
+        .map_err(|_| "Push sync exceeded its time budget".to_string())?
+}
+
+async fn sync_and_collect(
+    data_dir: &std::path::Path,
+    config: crate::notifications::NotificationConfig,
+) -> Result<Vec<crate::notify::NotificationSpec>, String> {
+    use matrix_sdk::config::SyncSettings;
+
+    let session = crate::secrets::load_session(data_dir)?.ok_or("No stored session")?;
+    let store_key = crate::secrets::get_store_key(data_dir)?.ok_or("No store-encryption key")?;
+
+    let client = crate::matrix::client::build_client(
+        &session.homeserver_url,
+        data_dir.to_path_buf(),
+        &store_key,
+    )
+    .await?;
+    crate::matrix::client::restore_session_from_info(&client, &session).await?;
+
+    let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    register_collectors(&client, Collector { config: std::sync::Arc::new(config), out: out.clone() });
+
+    // `timeout(0)` asks the homeserver to answer with whatever it has instead of
+    // long-polling. The push already told us there is something there, and a
+    // long poll on a woken device is battery spent waiting for nothing.
+    let settings = SyncSettings::default().timeout(std::time::Duration::from_secs(0));
+    client
+        .sync_once(settings)
+        .await
+        .map_err(|e| format!("Push sync failed: {e}"))?;
+
+    let specs = out.lock().map_err(|_| "Collector lock poisoned")?.clone();
+    Ok(specs)
+}
+
+/// Register the same event handlers the warm path uses, differing only in where
+/// the rendered spec goes.
+fn register_collectors(client: &matrix_sdk::Client, collector: Collector) {
+    use matrix_sdk::{
+        event_handler::Ctx,
+        ruma::events::{
+            room::message::SyncRoomMessageEvent, sticker::StickerEventContent, SyncMessageLikeEvent,
+        },
+        Room,
+    };
+
+    client.add_event_handler_context(collector);
+
+    client.add_event_handler(
+        |ev: SyncRoomMessageEvent,
+         room: Room,
+         Ctx(collector): Ctx<Collector>,
+         push_actions: Vec<matrix_sdk::ruma::push::Action>| async move {
+            let SyncRoomMessageEvent::Original(original) = ev else { return };
+            let sender_id = original.sender.clone();
+            let Some(event) = crate::events::convert_room_message_event(original) else { return };
+            collect(&collector, &room, &sender_id, &event, &push_actions).await;
+        },
+    );
+
+    client.add_event_handler(
+        |ev: SyncMessageLikeEvent<StickerEventContent>,
+         room: Room,
+         Ctx(collector): Ctx<Collector>,
+         push_actions: Vec<matrix_sdk::ruma::push::Action>| async move {
+            let SyncMessageLikeEvent::Original(original) = ev else { return };
+            let sender_id = original.sender.clone();
+            let event = crate::matrix::timeline::convert_sync_sticker_event(original);
+            collect(&collector, &room, &sender_id, &event, &push_actions).await;
+        },
+    );
+}
+
+/// The cold-path twin of `events::maybe_notify`: identical inputs into
+/// `notify::evaluate`, but the spec is collected for Kotlin instead of posted
+/// through Tauri.
+async fn collect(
+    collector: &Collector,
+    room: &matrix_sdk::Room,
+    sender_id: &matrix_sdk::ruma::UserId,
+    event: &crate::matrix::timeline::TimelineEvent,
+    push_actions: &[matrix_sdk::ruma::push::Action],
+) {
+    let room_id = room.room_id().to_string();
+    let is_own = room.own_user_id() == sender_id;
+
+    let sender = if is_own {
+        event.sender.clone()
+    } else {
+        room.get_member_no_sync(sender_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|m| m.display_name().map(str::to_string))
+            .unwrap_or_else(|| event.sender.clone())
+    };
+
+    let input = crate::notify::NotificationInput {
+        room_id: room_id.clone(),
+        room_name: room.name().unwrap_or(room_id),
+        event_id: event.event_id.clone(),
+        sender,
+        body: event.body.clone(),
+        is_edit: event.is_edit,
+        is_own,
+        // No window exists on this path, and nothing here is catch-up replay:
+        // the stored sync token means these events have never been seen.
+        window_focused: false,
+        pre_startup: false,
+        push: crate::notify::PushEval::from_actions(push_actions),
+    };
+
+    let Some(spec) = crate::notify::evaluate(&input, &collector.config) else { return };
+    // Shares the warm path's dedup ring, so a push that arrives for an event the
+    // app already showed before its webview died does not show it twice.
+    if !crate::events::claim_notification(&spec.event_id) {
+        return;
+    }
+    if let Ok(mut out) = collector.out.lock() {
+        out.push(spec);
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -397,4 +397,10 @@ pub async fn start_sync(
     // Store the handle so future calls can abort this loop.
     let mut guard = sync_state.handle.lock().expect("SyncState lock poisoned");
     *guard = Some(handle);
+
+    // Tell the push path this process is already syncing. A push that wakes us
+    // now must stand down rather than open a second connection to the
+    // homeserver — the service runs in this same process but has no AppHandle
+    // to discover that through, so it reads a process-wide flag instead.
+    crate::push_wake::set_warm_sync_active(true);
 }

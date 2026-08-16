@@ -63,7 +63,7 @@ const MAX_NOTIFIED_IDS: usize = 256;
 /// re-delivers events from before the sync token advanced. Without this guard
 /// each re-delivery raises another OS notification, so one message can produce
 /// a burst of duplicates. Deduping by event ID collapses them to one.
-fn claim_notification(event_id: &str) -> bool {
+pub(crate) fn claim_notification(event_id: &str) -> bool {
     let mut ids = match NOTIFIED_EVENT_IDS.lock() {
         Ok(ids) => ids,
         // On a poisoned lock, fail open: better one possible duplicate than a
@@ -591,7 +591,7 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Option<TimelineEvent> {
+pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Option<TimelineEvent> {
     use matrix_sdk::ruma::events::room::{
         message::{MessageType, Relation},
         MediaSource,
