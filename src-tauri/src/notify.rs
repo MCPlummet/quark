@@ -74,7 +74,14 @@ pub struct NotificationInput {
 }
 
 /// A fully-rendered notification, ready for any delivery transport.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Serializable because delivery is not always Tauri's job: a push that wakes a
+/// cold process has no `AppHandle` to post through, so the spec crosses to
+/// Kotlin as JSON and `PushSyncService` posts it with `NotificationCompat`. The
+/// camelCase field names are that wire contract — they are read by name on the
+/// other side, where a rename fails silently rather than at compile time.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NotificationSpec {
     /// Stable per-event notification id (fnv1a of the event id), so a
     /// re-delivered event replaces rather than duplicates.
@@ -451,6 +458,25 @@ mod tests {
         let spec = evaluate(&input(), &c).expect("should notify");
         assert_eq!(spec.title, "New Message");
         assert_eq!(spec.body, "You have a new message");
+    }
+
+    #[test]
+    fn spec_serialises_for_a_non_tauri_notifier() {
+        // The cold push path has no AppHandle, so Kotlin posts the notification
+        // itself from this JSON. These key names are the wire contract with
+        // PushSyncService — renaming a field here silently drops it there.
+        let spec = evaluate(&input(), &config()).expect("should notify");
+        let json = serde_json::to_value(&spec).expect("spec must serialise");
+        assert_eq!(json["id"], spec.id);
+        assert_eq!(json["summaryId"], spec.summary_id);
+        assert_eq!(json["title"], "Alice in General");
+        assert_eq!(json["body"], "hello");
+        assert_eq!(json["channel"], CHANNEL_MESSAGES);
+        assert_eq!(json["group"], "!room:example.com");
+        assert_eq!(json["roomId"], "!room:example.com");
+        assert_eq!(json["eventId"], "$event1");
+        assert_eq!(json["roomName"], "General");
+        assert_eq!(json["highlight"], false);
     }
 
     #[test]
