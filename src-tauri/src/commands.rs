@@ -77,10 +77,25 @@ fn wipe_local_session(data_dir: &Path) {
 
 // ─── Auth Commands ────────────────────────────────────────────────────────────
 
+/// Pay off pusher deletes an earlier session could not complete — an opt-out
+/// taken while logged out, or a cleanup that failed offline.
+///
+/// Detached on purpose: this is a debt owed to the homeserver, not something a
+/// user waiting to see their rooms should block on, and nothing on screen
+/// depends on the outcome.
+fn settle_pending_pushers(client: matrix_sdk::Client, config_dir: std::path::PathBuf) {
+    tokio::spawn(async move {
+        if let Err(e) = crate::push::retry_pending_deletes(&client, &config_dir).await {
+            tracing::warn!("{e}");
+        }
+    });
+}
+
 #[tauri::command]
 pub async fn login(
     state: State<'_, MatrixState>,
     sync_state: State<'_, SyncState>,
+    paths: State<'_, crate::Paths>,
     app_handle: AppHandle,
     homeserver_url: String,
     username: String,
@@ -138,6 +153,7 @@ pub async fn login(
 
     open_search_index(&app_handle, data_path.clone(), store_key.clone()).await;
 
+    settle_pending_pushers(client.clone(), paths.config_dir.clone());
     crate::matrix::client::start_sync(client, Some(app_handle), &sync_state).await;
     Ok(())
 }
@@ -171,6 +187,7 @@ pub enum RestoreOutcome {
 pub async fn restore_session(
     state: State<'_, MatrixState>,
     sync_state: State<'_, SyncState>,
+    paths: State<'_, crate::Paths>,
     app_handle: AppHandle,
 ) -> Result<RestoreOutcome, String> {
     let data_path = app_handle.path().app_data_dir()
@@ -257,6 +274,7 @@ pub async fn restore_session(
 
     open_search_index(&app_handle, data_path.clone(), store_key.clone()).await;
 
+    settle_pending_pushers(client.clone(), paths.config_dir.clone());
     crate::matrix::client::start_sync(client, Some(app_handle), &sync_state).await;
     Ok(RestoreOutcome::Restored)
 }
@@ -284,6 +302,7 @@ pub async fn start_sync(
 pub async fn logout(
     state: State<'_, MatrixState>,
     sync_state: State<'_, SyncState>,
+    paths: State<'_, crate::Paths>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
     // Abort the sync loop before logging out to stop all background requests.
@@ -306,6 +325,14 @@ pub async fn logout(
     };
 
     if let Some(c) = client {
+        // Remove the pusher while the token that owns it still works. After
+        // revocation nothing can delete it, and the homeserver would go on
+        // pushing every message to an endpoint that no longer resolves to a
+        // logged-in session. Best-effort: a failure here is recorded as owed
+        // and retried on the next login, and must not block the logout.
+        if let Err(e) = crate::push::unregister(&c, &paths.config_dir).await {
+            tracing::warn!("Deferring pusher removal on logout: {e}");
+        }
         // Best-effort server-side token revocation; don't fail if the network is down.
         let _ = c.matrix_auth().logout().await;
     }
@@ -316,6 +343,11 @@ pub async fn logout(
     if let Ok(data_path) = app_handle.path().app_data_dir() {
         let _ = tokio::task::spawn_blocking(move || wipe_local_session(&data_path)).await;
     }
+    // push.json lives in the config dir, so `wipe_local_session` does not touch
+    // it. Whatever survived the unregister above belonged to the revoked token
+    // and is unreachable now — keeping it would only convince the next login it
+    // was already registered.
+    crate::push::forget_local_registrations(&paths.config_dir);
 
     Ok(())
 }
@@ -325,10 +357,18 @@ pub async fn logout(
 /// so the next launch starts from a clean login rather than looping on the bad
 /// session.
 #[tauri::command]
-pub async fn clear_session(app_handle: AppHandle) -> Result<(), String> {
+pub async fn clear_session(
+    paths: State<'_, crate::Paths>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
     if let Ok(data_path) = app_handle.path().app_data_dir() {
         let _ = tokio::task::spawn_blocking(move || wipe_local_session(&data_path)).await;
     }
+    // No usable token means no way to delete the pushers this session
+    // registered — and the homeserver drops them with the token anyway. Holding
+    // the records would only make the next login think it was already
+    // registered and skip registering at all.
+    crate::push::forget_local_registrations(&paths.config_dir);
     Ok(())
 }
 
@@ -2359,16 +2399,22 @@ pub async fn get_notification_config(
     Ok(guard.clone())
 }
 
-/// Replace the current notification configuration and persist it to disk.
+/// Apply a Settings edit to the notification configuration and persist it.
+///
+/// Only the fields Settings owns are taken from `config` — see
+/// [`NotificationConfig::with_preferences`]. Mutes, background sync and push
+/// each have their own command because each has a homeserver- or OS-side effect
+/// to keep in step, and a stale Settings draft must not be able to undo one.
 #[tauri::command]
 pub async fn set_notification_config(
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
     config: NotificationConfig,
 ) -> Result<(), String> {
-    crate::notifications::save_notification_config_to(&paths.config_dir, &config)?;
     let mut guard = config_state.lock().map_err(|_| "Notification config lock poisoned")?;
-    *guard = config;
+    let merged = guard.with_preferences(config);
+    crate::notifications::save_notification_config_to(&paths.config_dir, &merged)?;
+    *guard = merged;
     Ok(())
 }
 
@@ -2428,18 +2474,24 @@ async fn set_room_mute(state: &State<'_, MatrixState>, room_id: &str, mute: bool
         settings
             .set_room_notification_mode(&parsed, RoomNotificationMode::Mute)
             .await
-    } else {
+    } else if let Some(room) = client.get_room(&parsed) {
         // Unmuting needs the room's shape to know which default to restore.
-        let Some(room) = client.get_room(&parsed) else {
-            tracing::warn!("Room {room_id} not in store, skipping push rule");
-            return;
-        };
         let is_encrypted: IsEncrypted = room.is_encrypted().await.unwrap_or(false).into();
         // The SDK defines one-to-one as exactly two members, not as "is a DM" —
         // it selects between the `.m.rule.room_one_to_one` and `.m.rule.message`
         // defaults, so a DM that grew a third member is no longer one-to-one.
         let is_one_to_one: IsOneToOne = (room.active_members_count() == 2).into();
         settings.unmute_room(&parsed, is_encrypted, is_one_to_one).await
+    } else {
+        // Not synced yet (cold start), or left/forgotten. Bailing out here would
+        // strand the `.m.rule.override` Mute rule on the homeserver while the
+        // local list says unmuted — and a server-side Mute empties push_actions,
+        // so `notify::evaluate` would drop every event from the room forever
+        // with the UI insisting it was unmuted. Dropping the user-defined rules
+        // clears the override without needing the room's shape; the account
+        // default then applies, which is what unmuting means.
+        tracing::warn!("Room {room_id} not in store, clearing its push rules instead");
+        settings.delete_user_defined_room_rules(&parsed).await
     };
     if let Err(e) = result {
         tracing::warn!("Failed to set push rule for {room_id}: {e}");
@@ -2516,6 +2568,9 @@ pub async fn get_background_sync_state(
 }
 
 /// Current push state for the Settings UI.
+///
+/// Read-only: opening Settings must not be what mints `push.json`, which on
+/// desktop would create the file for a platform that can never use it.
 #[tauri::command]
 pub async fn get_push_status(
     config_state: State<'_, Mutex<NotificationConfig>>,
@@ -2525,8 +2580,8 @@ pub async fn get_push_status(
         .lock()
         .map_err(|_| "Notification config lock poisoned")?
         .clone();
-    let state = crate::push::load_or_init_push_state(&paths.config_dir);
-    Ok(crate::push::status(&config, &state))
+    let state = crate::push::load_push_state(&paths.config_dir);
+    Ok(crate::push::status(&config, state.as_ref()))
 }
 
 /// Turn push on or off.
@@ -2553,13 +2608,19 @@ pub async fn set_push_enabled(
     }
 
     if !enabled {
-        // Best-effort: the preference is already saved, so a failed
-        // unregister must not report the toggle itself as failed. The stale
-        // pusher stays on record and the next attempt retries it.
-        if let Ok(client) = get_client(&state) {
-            if let Err(e) = crate::push::unregister(&client, &paths.config_dir).await {
-                tracing::warn!("Failed to unregister pusher: {e}");
+        // Best-effort: the preference is already saved, so a failed unregister
+        // must not report the toggle itself as failed. Either way the delete is
+        // recorded as owed — with no session there is no token to delete with,
+        // and silently dropping it would leave the gateway holding a live
+        // address for a user who opted out, with nothing left in Settings to
+        // act on. `retry_pending_deletes` pays it off on the next login.
+        match get_client(&state) {
+            Ok(client) => {
+                if let Err(e) = crate::push::unregister(&client, &paths.config_dir).await {
+                    tracing::warn!("Deferring pusher removal: {e}");
+                }
             }
+            Err(_) => crate::push::defer_unregister(&paths.config_dir)?,
         }
     }
     Ok(())

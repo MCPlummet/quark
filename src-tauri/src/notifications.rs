@@ -64,6 +64,32 @@ impl Default for NotificationConfig {
     }
 }
 
+impl NotificationConfig {
+    /// Fold an edit from the Settings dialog into the live config.
+    ///
+    /// Settings sends the whole struct back, but it only ever edits the four
+    /// preference fields below — everything else is owned by a dedicated
+    /// command (`set_push_enabled`, `set_background_sync`, `mute_room`) that
+    /// has homeserver-side effects to match. The frontend builds its draft from
+    /// a config it cached when the dialog opened, so treating the incoming blob
+    /// as authoritative lets a stale draft silently undo any of those: a mute
+    /// made while the dialog was open, or a push opt-out that has already
+    /// unregistered the pusher. Taking only what Settings owns makes [save]
+    /// unable to contradict them.
+    pub fn with_preferences(&self, incoming: NotificationConfig) -> NotificationConfig {
+        NotificationConfig {
+            enabled: incoming.enabled,
+            show_body: incoming.show_body,
+            show_sender: incoming.show_sender,
+            quiet_hours: incoming.quiet_hours,
+            mute_rooms: self.mute_rooms.clone(),
+            background_sync: self.background_sync,
+            push_enabled: self.push_enabled,
+            push_gateway_override: self.push_gateway_override.clone(),
+        }
+    }
+}
+
 // ─── Public Functions ────────────────────────────────────────────────────────
 
 /// Returns `true` if an OS notification should be shown for the given room.
@@ -230,6 +256,97 @@ mod tests {
         assert!(loaded.push_enabled);
         assert_eq!(
             loaded.push_gateway_override.as_deref(),
+            Some("https://ntfy.example.org/_matrix/push/v1/notify")
+        );
+    }
+
+    // ── with_preferences ──────────────────────────────────────────────────────
+
+    fn edited() -> NotificationConfig {
+        NotificationConfig {
+            enabled: false,
+            show_body: false,
+            show_sender: false,
+            quiet_hours: Some(QuietHours {
+                start_hour: 22,
+                start_minute: 0,
+                end_hour: 7,
+                end_minute: 30,
+            }),
+            ..NotificationConfig::default()
+        }
+    }
+
+    #[test]
+    fn settings_edits_are_applied() {
+        let merged = default_config().with_preferences(edited());
+
+        assert!(!merged.enabled);
+        assert!(!merged.show_body);
+        assert!(!merged.show_sender);
+        assert_eq!(merged.quiet_hours.unwrap().start_hour, 22);
+    }
+
+    /// The Settings draft is built from a config cached when the dialog opened.
+    /// If [save] were authoritative it would re-enable push the user just
+    /// switched off — handing the gateway this device's address again, and
+    /// contradicting the unregister `set_push_enabled` already performed.
+    #[test]
+    fn a_stale_draft_cannot_re_enable_push() {
+        let live = NotificationConfig { push_enabled: false, ..default_config() };
+        let stale_draft = NotificationConfig { push_enabled: true, ..edited() };
+
+        assert!(!live.with_preferences(stale_draft).push_enabled);
+    }
+
+    /// Mirror case: [save] must not switch push off in config while the pusher
+    /// stays registered on the homeserver.
+    #[test]
+    fn a_stale_draft_cannot_disable_push() {
+        let live = NotificationConfig { push_enabled: true, ..default_config() };
+        let stale_draft = NotificationConfig { push_enabled: false, ..edited() };
+
+        assert!(live.with_preferences(stale_draft).push_enabled);
+    }
+
+    /// A mute made from RoomInfoDialog while Settings is open is exactly the
+    /// persistence `update_mute_list` exists to guarantee.
+    #[test]
+    fn a_stale_draft_cannot_resurrect_or_drop_mutes() {
+        let live = NotificationConfig {
+            mute_rooms: vec!["!muted-since:example.com".into()],
+            ..default_config()
+        };
+        let stale_draft = NotificationConfig {
+            mute_rooms: vec!["!unmuted-since:example.com".into()],
+            ..edited()
+        };
+
+        assert_eq!(
+            live.with_preferences(stale_draft).mute_rooms,
+            vec!["!muted-since:example.com".to_string()]
+        );
+    }
+
+    /// Background sync starts and stops an Android foreground service, so the
+    /// service state and the flag have to agree.
+    #[test]
+    fn a_stale_draft_cannot_flip_background_sync() {
+        let live = NotificationConfig { background_sync: true, ..default_config() };
+        let stale_draft = NotificationConfig { background_sync: false, ..edited() };
+
+        assert!(live.with_preferences(stale_draft).background_sync);
+    }
+
+    #[test]
+    fn the_gateway_override_is_not_settings_editable() {
+        let live = NotificationConfig {
+            push_gateway_override: Some("https://ntfy.example.org/_matrix/push/v1/notify".into()),
+            ..default_config()
+        };
+
+        assert_eq!(
+            live.with_preferences(edited()).push_gateway_override.as_deref(),
             Some("https://ntfy.example.org/_matrix/push/v1/notify")
         );
     }
