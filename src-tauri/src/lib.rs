@@ -114,10 +114,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init());
 
-    // Android: register the app-local Kotlin plugin driving the background-
-    // sync foreground service (see mobile_sync.rs).
+    // Android: register the app-local Kotlin plugins driving the background-
+    // sync foreground service (mobile_sync.rs) and UnifiedPush distributor
+    // selection (unifiedpush.rs).
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(mobile_sync::init());
+    let builder = builder.plugin(mobile_sync::init()).plugin(unifiedpush::init());
 
     // Desktop auto-updater (AppImage / macOS .app / Windows NSIS). Endpoints are
     // set per-channel at runtime in updater.rs; the config endpoint is a fallback.

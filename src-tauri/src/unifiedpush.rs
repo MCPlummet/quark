@@ -129,6 +129,126 @@ pub async fn discover_gateway(endpoint: &str) -> String {
     gateway
 }
 
+// ─── The Kotlin plugin (Activity-bound half) ─────────────────────────────────
+
+/// What the distributor side of things looks like right now.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributorStatus {
+    /// Every UnifiedPush distributor installed on the device.
+    pub distributors: Vec<String>,
+    /// The one we are registered with. Empty when none is chosen yet.
+    pub saved: String,
+}
+
+#[cfg(target_os = "android")]
+mod android {
+    use tauri::{
+        plugin::{Builder, PluginHandle, TauriPlugin},
+        AppHandle, Manager, Runtime, Wry,
+    };
+
+    pub struct UnifiedPushHandle(PluginHandle<Wry>);
+
+    #[derive(serde::Deserialize)]
+    pub struct Registered {
+        pub registered: bool,
+    }
+
+    pub fn init() -> TauriPlugin<Wry> {
+        Builder::<Wry>::new("quark-unifiedpush")
+            .setup(|app, api| {
+                let handle = api.register_android_plugin("tel.quark.app", "UnifiedPushPlugin")?;
+                app.manage(UnifiedPushHandle(handle));
+                Ok(())
+            })
+            .build()
+    }
+
+    fn handle<R: Runtime>(app: &AppHandle<R>) -> Option<&UnifiedPushHandle> {
+        app.try_state::<UnifiedPushHandle>().map(|s| s.inner())
+    }
+
+    pub fn status(app: &AppHandle<Wry>) -> Option<super::DistributorStatus> {
+        handle(app)?
+            .0
+            .run_mobile_plugin::<super::DistributorStatus>("status", ())
+            .ok()
+    }
+
+    pub fn register(app: &AppHandle<Wry>) -> Result<bool, String> {
+        handle(app)
+            .ok_or("UnifiedPush plugin not registered")?
+            .0
+            .run_mobile_plugin::<Registered>("register", ())
+            .map(|r| r.registered)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn unregister(app: &AppHandle<Wry>) -> Result<(), String> {
+        handle(app)
+            .ok_or("UnifiedPush plugin not registered")?
+            .0
+            .run_mobile_plugin::<()>("unregister", ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(target_os = "android")]
+pub use android::init;
+
+/// Transport state for the Settings snapshot.
+///
+/// `available` is "at least one distributor is installed" rather than "one is
+/// chosen": a user who installed ntfy but has not registered yet is a step
+/// further along than one who has installed nothing, and Settings tells them
+/// different things.
+pub fn transport_status(app: &tauri::AppHandle) -> crate::push::TransportStatus {
+    #[cfg(target_os = "android")]
+    {
+        let status = android::status(app).unwrap_or_default();
+        crate::push::TransportStatus {
+            available: !status.distributors.is_empty(),
+            distributor: Some(status.saved).filter(|s| !s.is_empty()),
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        crate::push::TransportStatus::default()
+    }
+}
+
+/// Ask a distributor to start pushing to us.
+///
+/// `Ok(false)` means no distributor could be chosen — almost always because
+/// none is installed. That is a state Settings has to explain, not an error.
+pub fn subscribe(app: &tauri::AppHandle) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        android::register(app)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(false)
+    }
+}
+
+/// Tell the distributor to stop. The homeserver-side pusher is removed
+/// separately — see [`on_unregistered`].
+pub fn unsubscribe(app: &tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        android::unregister(app)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
 // ─── Reacting to the distributor ─────────────────────────────────────────────
 
 /// The distributor handed us an endpoint. Record it, and register it with the

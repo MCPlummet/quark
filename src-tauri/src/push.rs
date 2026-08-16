@@ -372,10 +372,12 @@ pub const PLATFORM_SUPPORTS_PUSH: bool =
 ///
 /// Everything above this line is platform-agnostic: registration, persistence,
 /// planning and status all work without knowing where the address comes from.
-/// Nothing supplies one yet — UnifiedPush (Android) and APNs (iOS) do that, and
-/// each flips this when it lands. Until then a mobile build must not advertise
-/// push, or the toggle strands the user on "waiting for a distributor".
-pub const TRANSPORT_AVAILABLE: bool = false;
+/// Supplying one is a per-platform job, and the platforms are not in step —
+/// Android has UnifiedPush; iOS gets APNs in a later phase and must not
+/// advertise a toggle that can only ever say "waiting" until then. Hence a
+/// separate flag from [`PLATFORM_SUPPORTS_PUSH`]: capability and delivery are
+/// different claims, and this is the one that has to stay honest.
+pub const TRANSPORT_AVAILABLE: bool = cfg!(target_os = "android");
 
 /// Whether Settings should offer push at all.
 ///
@@ -412,6 +414,41 @@ pub const fn platform_transport() -> Option<PlatformTransport> {
     }
 }
 
+/// What the platform transport can tell us right now.
+///
+/// On Android this comes from the UnifiedPush plugin: which distributors are
+/// installed, and which one we settled on. On iOS the OS *is* the transport,
+/// so `available` is simply true and there is nothing to name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransportStatus {
+    /// Something on this device can deliver a push to us.
+    pub available: bool,
+    /// The transport in use, named for the UI. `None` when none is chosen.
+    pub distributor: Option<String>,
+}
+
+/// How far along push actually is.
+///
+/// Four states, because collapsing any two of them produces the one failure
+/// push cannot afford: telling a user it works while nothing delivers it.
+/// "Enabled" and "working" are genuinely different things here — every step
+/// between them involves software we do not control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PushReadiness {
+    /// The user has not switched it on.
+    Off,
+    /// Switched on, but nothing on this device can receive a push. On Android
+    /// that means no distributor is installed — the most common reason push
+    /// does nothing, and the only one the user can fix themselves.
+    NoTransport,
+    /// A transport exists but the chain is not complete: no address yet, or an
+    /// address the homeserver has not accepted.
+    Waiting,
+    /// The homeserver holds a pusher pointing at this device.
+    Ready,
+}
+
 /// What Settings shows about push. Distinct from [`PushState`], which is what
 /// we persist — this is derived, read-only, and safe to hand the frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,6 +468,10 @@ pub struct PushStatus {
     /// The gateway actually in use — so the user can tell whether discovery
     /// found their own server or fell back to the public one.
     pub gateway_url: Option<String>,
+    /// How far along push is. What the UI should actually render.
+    pub readiness: PushReadiness,
+    /// The transport in use, named for the UI (e.g. the distributor).
+    pub distributor: Option<String>,
 }
 
 /// Derive the Settings snapshot from the user's preference and what we last
@@ -443,6 +484,7 @@ pub struct PushStatus {
 pub fn status(
     config: &crate::notifications::NotificationConfig,
     state: Option<&PushState>,
+    transport_status: &TransportStatus,
 ) -> PushStatus {
     // A registration left over from before push was switched off is stale, not
     // live — reporting it as registered would tell the user they are receiving
@@ -451,6 +493,17 @@ pub fn status(
         .push_enabled
         .then(|| state.and_then(|s| s.last.as_ref()))
         .flatten();
+
+    let readiness = if !config.push_enabled {
+        PushReadiness::Off
+    } else if !transport_status.available {
+        PushReadiness::NoTransport
+    } else if live.is_some() {
+        PushReadiness::Ready
+    } else {
+        PushReadiness::Waiting
+    };
+
     PushStatus {
         supported: supports_push(PLATFORM_SUPPORTS_PUSH, TRANSPORT_AVAILABLE),
         enabled: config.push_enabled,
@@ -458,6 +511,8 @@ pub fn status(
         transport: platform_transport(),
         app_id: live.map(|p| p.app_id.clone()),
         gateway_url: live.map(|p| p.gateway_url.clone()),
+        readiness,
+        distributor: transport_status.distributor.clone(),
     }
 }
 
@@ -700,15 +755,15 @@ mod status_tests {
 
     #[test]
     fn reports_the_persisted_preference() {
-        assert!(status(&config(true), Some(&empty_state())).enabled);
-        assert!(!status(&config(false), Some(&empty_state())).enabled);
+        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default()).enabled);
+        assert!(!status(&config(false), Some(&empty_state()), &TransportStatus::default()).enabled);
     }
 
     /// Push can be switched on before the transport hands over an address —
     /// Settings has to distinguish "on" from "actually receiving pushes".
     #[test]
     fn is_not_registered_until_a_pusher_exists() {
-        let snapshot = status(&config(true), Some(&empty_state()));
+        let snapshot = status(&config(true), Some(&empty_state()), &TransportStatus::default());
         assert!(!snapshot.registered);
         assert_eq!(snapshot.gateway_url, None);
         assert_eq!(snapshot.app_id, None);
@@ -718,7 +773,7 @@ mod status_tests {
     /// answer without any state at all.
     #[test]
     fn reports_a_sane_status_with_nothing_persisted() {
-        let snapshot = status(&config(true), None);
+        let snapshot = status(&config(true), None, &TransportStatus::default());
         assert!(snapshot.enabled);
         assert!(!snapshot.registered);
         assert_eq!(snapshot.app_id, None);
@@ -728,7 +783,7 @@ mod status_tests {
     /// discovered rather than the public fallback.
     #[test]
     fn surfaces_the_gateway_and_app_id_actually_registered() {
-        let snapshot = status(&config(true), Some(&registered_state()));
+        let snapshot = status(&config(true), Some(&registered_state()), &TransportStatus::default());
         assert!(snapshot.registered);
         assert_eq!(
             snapshot.gateway_url.as_deref(),
@@ -741,7 +796,7 @@ mod status_tests {
     /// as "receiving pushes".
     #[test]
     fn a_disabled_pusher_does_not_read_as_registered() {
-        assert!(!status(&config(false), Some(&registered_state())).registered);
+        assert!(!status(&config(false), Some(&registered_state()), &TransportStatus::default()).registered);
     }
 
     /// A pusher whose delete is still owed is gone as far as the user is
@@ -751,17 +806,34 @@ mod status_tests {
         let mut state = registered_state();
         mark_for_deletion(&mut state);
 
-        assert!(!status(&config(true), Some(&state)).registered);
+        assert!(!status(&config(true), Some(&state), &TransportStatus::default()).registered);
         assert_eq!(state.pending_delete.len(), 1);
     }
 
-    /// The platform check alone is not enough. Phase 1 ships registration,
-    /// config and status with no transport behind them, so a mobile build
-    /// would offer a toggle that can never leave "waiting for a distributor" —
-    /// and the hint naming ntfy would send users chasing a fix that isn't one.
+    /// The platform check alone is not enough. iOS is push-capable but has no
+    /// transport until the APNs phase lands, so a build that advertised push
+    /// there would offer a toggle that can never leave "waiting" — with a hint
+    /// naming a distributor that iOS cannot use.
     #[test]
     fn a_platform_with_no_transport_does_not_offer_push() {
         assert!(!supports_push(true, false));
+    }
+
+    /// Android now has one. Only compiled there, but it is the assertion that
+    /// keeps the const honest when a future edit reaches for it.
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_has_a_transport_and_offers_push() {
+        assert!(TRANSPORT_AVAILABLE);
+        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
+    }
+
+    /// iOS is capable but not yet wired. Flipping this test is part of Phase 3.
+    #[cfg(target_os = "ios")]
+    #[test]
+    fn ios_does_not_offer_push_until_apns_lands() {
+        assert!(!TRANSPORT_AVAILABLE);
+        assert!(!status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
     }
 
     #[test]
@@ -776,10 +848,12 @@ mod status_tests {
         assert!(!supports_push(false, true));
     }
 
-    /// What the frontend mock mirrors: this build offers nothing.
+    /// What the frontend mock mirrors: desktop offers nothing, whatever the
+    /// transport flag says.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[test]
-    fn status_does_not_offer_push_on_this_build() {
-        assert!(!status(&config(true), Some(&empty_state())).supported);
+    fn desktop_builds_do_not_offer_push() {
+        assert!(!status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
     }
 
     /// The UI has to explain what push is waiting on *before* a pusher exists,
@@ -787,7 +861,7 @@ mod status_tests {
     /// an Android distributor sends them after a fix that doesn't exist.
     #[test]
     fn names_the_transport_even_with_nothing_registered() {
-        let snapshot = status(&config(true), Some(&empty_state()));
+        let snapshot = status(&config(true), Some(&empty_state()), &TransportStatus::default());
         assert!(!snapshot.registered);
         assert_eq!(snapshot.transport, platform_transport());
     }
@@ -1034,6 +1108,107 @@ mod pending_delete_tests {
             load_or_init_push_state(dir.path()).pending_delete,
             vec![registered()]
         );
+    }
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+    use crate::notifications::NotificationConfig;
+
+    fn config(push_enabled: bool) -> NotificationConfig {
+        NotificationConfig { push_enabled, ..NotificationConfig::default() }
+    }
+
+    fn state(endpoint: Option<&str>, registered: bool) -> PushState {
+        PushState {
+            profile_tag: "tag".into(),
+            last: registered.then(|| RegisteredPusher {
+                user_id: "@alice:example.com".into(),
+                app_id: "tel.quark.app.android".into(),
+                pushkey: "https://ntfy.example.org/up1".into(),
+                gateway_url: "https://ntfy.example.org/_matrix/push/v1/notify".into(),
+            }),
+            pending_delete: Vec::new(),
+            endpoint: endpoint.map(str::to_owned),
+        }
+    }
+
+    fn transport(distributor: Option<&str>, any_installed: bool) -> TransportStatus {
+        TransportStatus {
+            available: any_installed,
+            distributor: distributor.map(str::to_owned),
+        }
+    }
+
+    /// The four states Settings has to tell apart. Collapsing any two of them
+    /// produces the failure mode push cannot afford: a user who is told push is
+    /// working while nothing is delivering it.
+    #[test]
+    fn push_is_off_when_the_user_has_not_enabled_it() {
+        let status = status(&config(false), Some(&state(None, false)), &transport(None, true));
+        assert_eq!(status.readiness, PushReadiness::Off);
+    }
+
+    #[test]
+    fn without_a_distributor_installed_there_is_nothing_to_push_through() {
+        // The single most likely reason push does nothing on Android, and the
+        // only one the user can actually fix — so it must be its own state.
+        let status = status(&config(true), Some(&state(None, false)), &transport(None, false));
+        assert_eq!(status.readiness, PushReadiness::NoTransport);
+    }
+
+    #[test]
+    fn a_chosen_distributor_with_no_endpoint_yet_is_still_waiting() {
+        let status = status(&config(true), Some(&state(None, false)), &transport(Some("ntfy"), true));
+        assert_eq!(status.readiness, PushReadiness::Waiting);
+        assert_eq!(status.distributor.as_deref(), Some("ntfy"));
+    }
+
+    #[test]
+    fn an_endpoint_that_has_not_reached_the_homeserver_is_also_waiting() {
+        // The distributor has done its part; the pusher round-trip has not
+        // happened or failed. Reporting this as ready would be a lie.
+        let status = status(
+            &config(true),
+            Some(&state(Some("https://ntfy.example.org/up1"), false)),
+            &transport(Some("ntfy"), true),
+        );
+        assert_eq!(status.readiness, PushReadiness::Waiting);
+    }
+
+    #[test]
+    fn push_is_ready_once_the_homeserver_has_the_pusher() {
+        let status = status(
+            &config(true),
+            Some(&state(Some("https://ntfy.example.org/up1"), true)),
+            &transport(Some("ntfy"), true),
+        );
+        assert_eq!(status.readiness, PushReadiness::Ready);
+        assert!(status.registered);
+        assert_eq!(
+            status.gateway_url.as_deref(),
+            Some("https://ntfy.example.org/_matrix/push/v1/notify")
+        );
+    }
+
+    #[test]
+    fn a_registration_left_over_from_before_the_toggle_went_off_is_not_ready() {
+        // push.json still names a pusher, but the user has opted out and the
+        // delete may only be owed. Ready here would contradict the toggle.
+        let status = status(
+            &config(false),
+            Some(&state(Some("https://ntfy.example.org/up1"), true)),
+            &transport(Some("ntfy"), true),
+        );
+        assert_eq!(status.readiness, PushReadiness::Off);
+        assert!(!status.registered);
+    }
+
+    #[test]
+    fn a_fresh_install_with_push_on_is_waiting_not_ready() {
+        let status = status(&config(true), None, &transport(Some("ntfy"), true));
+        assert_eq!(status.readiness, PushReadiness::Waiting);
     }
 }
 

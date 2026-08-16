@@ -2587,27 +2587,37 @@ pub async fn get_background_sync_state(
 pub async fn get_push_status(
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
+    app_handle: AppHandle,
 ) -> Result<crate::push::PushStatus, String> {
     let config = config_state
         .lock()
         .map_err(|_| "Notification config lock poisoned")?
         .clone();
     let state = crate::push::load_push_state(&paths.config_dir);
-    Ok(crate::push::status(&config, state.as_ref()))
+    Ok(crate::push::status(
+        &config,
+        state.as_ref(),
+        &crate::unifiedpush::transport_status(&app_handle),
+    ))
 }
 
 /// Turn push on or off.
 ///
 /// Switching it off unregisters immediately — leaving the pusher in place
-/// would have the homeserver keep pushing to a device that has opted out.
-/// Switching it on only records the preference; the platform transport
-/// registers once it has an address to register (see the Android and iOS
-/// transports).
+/// would have the homeserver keep pushing to a device that has opted out — and
+/// stops the transport, so the distributor is no longer waking the device for a
+/// feature the user switched off.
+///
+/// Switching it on asks the transport for an address. On Android that address
+/// arrives asynchronously at `PushEventService`, so returning `Ok` means the
+/// request was made, not that pushes are flowing; `get_push_status` reports the
+/// difference.
 #[tauri::command]
 pub async fn set_push_enabled(
     state: State<'_, MatrixState>,
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
+    app_handle: AppHandle,
     enabled: bool,
 ) -> Result<(), String> {
     {
@@ -2634,6 +2644,35 @@ pub async fn set_push_enabled(
             }
             Err(_) => crate::push::defer_unregister(&paths.config_dir)?,
         }
+        // Stop the transport too. Leaving the distributor subscribed would keep
+        // waking the device for a feature the user just switched off.
+        if let Err(e) = crate::unifiedpush::unsubscribe(&app_handle) {
+            tracing::warn!("Could not unsubscribe from the distributor: {e}");
+        }
+        return Ok(());
+    }
+
+    // Turning push on asks the distributor for an address. The endpoint does not
+    // come back here — it arrives at PushEventService moments later and
+    // registers itself — so a `true` return means "asked", not "receiving".
+    // Settings reports the difference from `registered`.
+    match crate::unifiedpush::subscribe(&app_handle) {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::info!("Push enabled but no distributor is available");
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::warn!("Could not reach a distributor: {e}");
+            return Ok(());
+        }
+    }
+    // A distributor that already had an endpoint for us may not announce it
+    // again, so register whatever is on disk rather than waiting for a callback
+    // that is not coming.
+    #[cfg(target_os = "android")]
+    if let Err(e) = crate::unifiedpush::register_stored_endpoint(&paths.config_dir).await {
+        tracing::warn!("Could not register the stored push endpoint: {e}");
     }
     Ok(())
 }
