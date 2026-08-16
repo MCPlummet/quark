@@ -96,7 +96,27 @@ function serves the warm sync path and a push-woken one.
 know about still wakes the phone for every message, only for the device to
 discard it — the exact cost push exists to remove. So muting a room sets the
 Matrix push rule (`commands.rs::set_room_mute`), which also syncs the mute to the
-user's other clients; the local `mute_rooms` list remains as an offline fallback.
+user's other clients.
+
+**The push rule is the mute; `mute_rooms` is a cache of the attempt to set it.**
+Once the rule exists it empties `push_actions`, and `notify::evaluate` drops
+anything the push rules didn't select — so the room is already silenced without
+consulting the local list at all. The list earns its place on exactly one path:
+`set_room_mute` is best-effort, and if the rule write fails the local entry is
+what stops a mute appearing to do nothing on this device. That narrow job has
+three consequences worth stating, because treating the list as a general-purpose
+fallback gets each of them wrong:
+
+- **Nothing reconciles the two.** Both are written by the same command and never
+  compared afterwards, so a mute set from another client is invisible here and a
+  failed rule write leaves the list claiming a mute the homeserver never got.
+- **The list must not be read for display.** It answers "did we try to mute this
+  here", not "is this room muted", and those diverge whenever the above happens.
+  UI that asks the question must ask the ruleset.
+- **A failed rule write cannot stay silent.** Under push it means the homeserver
+  keeps waking the device for a room the user muted — the precise cost this
+  design exists to remove — so the failure has to reach the user or be retried,
+  not be swallowed as it is today.
 
 Unmuting must never be the half that fails. A server-side Mute rule empties
 `push_actions`, and `notify::evaluate` drops anything the push rules didn't
