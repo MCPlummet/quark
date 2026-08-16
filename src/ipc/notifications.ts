@@ -48,7 +48,18 @@ export interface PushStatus {
   app_id: string | null;
   /** The gateway actually in use — the user's own, or the public fallback. */
   gateway_url: string | null;
+  /**
+   * How far along push actually is. `enabled` says what the user asked for;
+   * this says what they are getting, and the two differ whenever the transport
+   * chain is incomplete.
+   */
+  readiness: PushReadiness;
+  /** The transport delivering pushes (the distributor, on Android). */
+  distributor: string | null;
 }
+
+/** How far push has got — matches push::PushReadiness */
+export type PushReadiness = "off" | "no_transport" | "waiting" | "ready";
 
 /** Background-sync snapshot — matches mobile_sync::BackgroundSyncState */
 export interface BackgroundSyncState {

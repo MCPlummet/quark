@@ -22,27 +22,47 @@ import type { SettingsTab } from "../types.js";
 /**
  * What push is currently doing, in the terms of the platform's own transport.
  *
- * The un-registered case is the one that has to be transport-specific: on
- * Android the user is genuinely waiting for a distributor they must install,
- * while on iOS the OS supplies the token and there is nothing to install — so
- * naming a distributor there sends them chasing an Android app that does not
- * exist on their phone.
+ * "Enabled" and "working" are different states, and the gap between them is
+ * filled with software Quark doesn't control — the distributor the user
+ * installs, the gateway that may decline, the homeserver round-trip that may
+ * fail. Each stall gets its own line, because the fix differs: nothing
+ * installed is the user's to solve, waiting is theirs to wait out.
+ *
+ * The stalled cases also have to be transport-specific. On iOS the OS supplies
+ * the token and there is nothing to install, so naming a distributor sends
+ * those users chasing an Android app that isn't on their phone.
  */
 export function pushStatusLine(s: PushStatus): string {
-  if (!s.enabled) return "push: off · the app must stay running to notify";
-  if (s.registered) return `push: registered · gateway: ${s.gateway_url ?? "unknown"}`;
-  return s.transport === "apns"
-    ? "push: waiting for a device token from iOS — no pusher registered yet"
-    : "push: waiting for a distributor — no pusher registered yet";
+  const ios = s.transport === "apns";
+  switch (s.readiness) {
+    case "off":
+      return "push: off · the app must stay running to notify";
+    case "ready":
+      return `push: registered · gateway: ${s.gateway_url ?? "unknown"}`;
+    case "no_transport":
+      return ios
+        ? "push: iOS has not provided a device token yet"
+        : "push: no distributor installed — nothing can wake the app";
+    case "waiting":
+      if (ios) return "push: waiting for a device token from iOS — no pusher registered yet";
+      return s.distributor
+        ? `push: waiting for ${s.distributor} — no pusher registered yet`
+        : "push: waiting for a distributor — no pusher registered yet";
+  }
 }
 
 /** What the user can do about it, likewise per transport. */
 export function pushHint(s: PushStatus): string {
   const privacy =
     "Only a room ID and event ID ever reach the push gateway — never message content.";
-  return s.transport === "apns"
-    ? `Delivered through Apple's push service and Quark's own gateway; nothing to install. ${privacy}`
-    : `Android needs a UnifiedPush distributor installed (ntfy, NextPush, …). ${privacy}`;
+  if (s.transport === "apns") {
+    return `Delivered through Apple's push service and Quark's own gateway; nothing to install. ${privacy}`;
+  }
+  if (s.readiness === "no_transport") {
+    // Somewhere to go, rather than a restatement of what's missing.
+    return `Install a UnifiedPush distributor — see unifiedpush.org/users/distributors. Until then Quark can only notify while it is running. ${privacy}`;
+  }
+  return `Android needs a UnifiedPush distributor installed (ntfy, NextPush, …). ${privacy}`;
 }
 
 export const notificationsTab: SettingsTab = {
