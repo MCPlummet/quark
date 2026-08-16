@@ -212,10 +212,27 @@ pub fn plan_registration(state: &PushState, next: &RegisteredPusher) -> PushActi
 
 // ─── Status snapshot ─────────────────────────────────────────────────────────
 
-/// Whether this platform has a push transport at all. Desktop holds a live
+/// Whether this platform could have a push transport. Desktop holds a live
 /// sync connection and has no use for one.
 pub const PLATFORM_SUPPORTS_PUSH: bool =
     cfg!(any(target_os = "android", target_os = "ios"));
+
+/// Whether this build actually wires a transport up to supply a pushkey.
+///
+/// Everything above this line is platform-agnostic: registration, persistence,
+/// planning and status all work without knowing where the address comes from.
+/// Nothing supplies one yet — UnifiedPush (Android) and APNs (iOS) do that, and
+/// each flips this when it lands. Until then a mobile build must not advertise
+/// push, or the toggle strands the user on "waiting for a distributor".
+pub const TRANSPORT_AVAILABLE: bool = false;
+
+/// Whether Settings should offer push at all.
+///
+/// Both halves are required: the platform has to be capable, and the build has
+/// to have something behind the switch.
+pub const fn supports_push(platform: bool, transport: bool) -> bool {
+    platform && transport
+}
 
 /// What Settings shows about push. Distinct from [`PushState`], which is what
 /// we persist — this is derived, read-only, and safe to hand the frontend.
@@ -243,7 +260,7 @@ pub fn status(config: &crate::notifications::NotificationConfig, state: &PushSta
     // pushes they have turned off.
     let live = config.push_enabled.then_some(state.last.as_ref()).flatten();
     PushStatus {
-        supported: PLATFORM_SUPPORTS_PUSH,
+        supported: supports_push(PLATFORM_SUPPORTS_PUSH, TRANSPORT_AVAILABLE),
         enabled: config.push_enabled,
         registered: live.is_some(),
         app_id: live.map(|p| p.app_id.clone()),
@@ -397,6 +414,34 @@ mod status_tests {
     #[test]
     fn a_disabled_pusher_does_not_read_as_registered() {
         assert!(!status(&config(false), &registered_state()).registered);
+    }
+
+    /// The platform check alone is not enough. Phase 1 ships registration,
+    /// config and status with no transport behind them, so a mobile build
+    /// would offer a toggle that can never leave "waiting for a distributor" —
+    /// and the hint naming ntfy would send users chasing a fix that isn't one.
+    #[test]
+    fn a_platform_with_no_transport_does_not_offer_push() {
+        assert!(!supports_push(true, false));
+    }
+
+    #[test]
+    fn push_is_offered_once_a_transport_backs_the_platform() {
+        assert!(supports_push(true, true));
+    }
+
+    /// Desktop holds a live sync connection, so no transport makes it eligible.
+    #[test]
+    fn desktop_never_offers_push() {
+        assert!(!supports_push(false, false));
+        assert!(!supports_push(false, true));
+    }
+
+    /// What the frontend mock mirrors: this build offers nothing.
+    #[test]
+    fn status_does_not_offer_push_on_this_build() {
+        let state = PushState { profile_tag: "tag".into(), last: None };
+        assert!(!status(&config(true), &state).supported);
     }
 }
 

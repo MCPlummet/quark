@@ -112,8 +112,13 @@ literally by that string: `tel.quark.app.android`, and `tel.quark.app.ios.dev` /
 push through the notification service extension.
 
 Push is opt-in and off by default (`push_enabled` in `notifications.toml`),
-toggled in Settings → Notifications. Where no transport is available — no
-UnifiedPush distributor installed — the foreground service remains the fallback.
+toggled in Settings → Notifications. That section appears only where the
+platform is capable *and* the build wires a transport up
+(`push.rs::supports_push`); the registration half is platform-agnostic and can
+land ahead of either transport, but advertising a toggle with nothing behind it
+would strand the user on "waiting for a distributor" with no way to progress.
+Where a capable platform has no transport at run time — no UnifiedPush
+distributor installed — the foreground service remains the fallback.
 
 ### Mobile touch behaviour
 
