@@ -84,13 +84,26 @@ export async function setNotificationConfig(
 }
 
 /** Add a room to the mute list. */
-export async function muteRoomIpc(roomId: string): Promise<void> {
-  return invoke<void>("mute_room", { roomId });
+export async function muteRoomIpc(roomId: string): Promise<MuteOutcome> {
+  return invoke<MuteOutcome>("mute_room", { roomId });
 }
 
 /** Remove a room from the mute list. */
-export async function unmuteRoomIpc(roomId: string): Promise<void> {
-  return invoke<void>("unmute_room", { roomId });
+export async function unmuteRoomIpc(roomId: string): Promise<MuteOutcome> {
+  return invoke<MuteOutcome>("unmute_room", { roomId });
+}
+
+/**
+ * Whether a mute/unmute reached the homeserver — matches
+ * notifications::MuteOutcome.
+ *
+ * Not an error, because the change did take effect on this device. But the
+ * mute that matters is the server-side push rule, and when only one of the two
+ * lands the user is the only one who can decide what to do about it.
+ */
+export interface MuteOutcome {
+  synced: boolean;
+  warning: string | null;
 }
 
 /** Send a test OS notification to verify the system is working. */

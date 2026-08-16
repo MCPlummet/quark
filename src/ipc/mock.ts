@@ -604,6 +604,10 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "clear_event_cache":
     case "mute_room":
     case "unmute_room":
+      // Browser dev mode has no homeserver, but the mute is "as synced as it
+      // gets" here — reporting a warning would train the UI on a failure the
+      // real backend only reports when the push rule genuinely didn't land.
+      return { synced: true, warning: null };
     case "init_notification_channels":
     case "clear_room_notifications":
       return null;

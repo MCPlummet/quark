@@ -2437,21 +2437,27 @@ pub async fn set_notification_config(
 /// for every message in a room the user muted, only for the device to discard
 /// it. The rule also syncs the mute to the user's other clients.
 ///
-/// The local list is kept as a fallback for when the rule can't be set (offline,
-/// or not logged in), and is what `should_notify` consults.
+/// The local list is kept as a record that the rule write was attempted, and is
+/// what `should_notify` consults on this device.
+///
+/// Returns whether the rule reached the homeserver. It is deliberately not an
+/// `Err`: the mute *did* take effect locally, so failing the whole call would
+/// misreport it. What the caller must not do is ignore the outcome — see
+/// `notifications::mute_outcome`.
 #[tauri::command]
 pub async fn mute_room(
     state: State<'_, MatrixState>,
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
     room_id: String,
-) -> Result<(), String> {
-    set_room_mute(&state, &room_id, true).await;
+) -> Result<crate::notifications::MuteOutcome, String> {
+    let rule = set_room_mute(&state, &room_id, true).await;
     update_mute_list(&config_state, &paths, |rooms| {
         if !rooms.contains(&room_id) {
             rooms.push(room_id.clone());
         }
-    })
+    })?;
+    Ok(crate::notifications::mute_outcome(rule, true))
 }
 
 /// Unmute a room: clear the Matrix push rule, and drop it from the local list.
@@ -2461,25 +2467,31 @@ pub async fn unmute_room(
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
     room_id: String,
-) -> Result<(), String> {
-    set_room_mute(&state, &room_id, false).await;
+) -> Result<crate::notifications::MuteOutcome, String> {
+    let rule = set_room_mute(&state, &room_id, false).await;
     update_mute_list(&config_state, &paths, |rooms| {
         rooms.retain(|r| r != &room_id);
-    })
+    })?;
+    Ok(crate::notifications::mute_outcome(rule, false))
 }
 
-/// Apply the mute to the homeserver's push rules. Best-effort: the local list
-/// still suppresses the notification on this device if it fails, so a mute
-/// never appears to do nothing.
-async fn set_room_mute(state: &State<'_, MatrixState>, room_id: &str, mute: bool) {
+/// Apply the mute to the homeserver's push rules, reporting whether it landed.
+///
+/// Used to swallow every failure into a `tracing::warn!`, which was survivable
+/// while the local list could still silence the room here. Under push it is
+/// not: the homeserver goes on waking the device for a room the user muted,
+/// and a failed *unmute* leaves a rule that keeps the room silent everywhere
+/// while the UI says otherwise. Neither is something to discover from a log.
+async fn set_room_mute(
+    state: &State<'_, MatrixState>,
+    room_id: &str,
+    mute: bool,
+) -> Result<(), String> {
     use matrix_sdk::notification_settings::{IsEncrypted, IsOneToOne, RoomNotificationMode};
     use matrix_sdk::ruma::RoomId;
 
-    let Ok(client) = get_client(state) else { return };
-    let Ok(parsed) = RoomId::parse(room_id) else {
-        tracing::warn!("Not a room id, skipping push rule: {room_id}");
-        return;
-    };
+    let client = get_client(state)?;
+    let parsed = RoomId::parse(room_id).map_err(|e| format!("Not a room id: {e}"))?;
 
     let settings = client.notification_settings().await;
     let result = if mute {
@@ -2505,9 +2517,10 @@ async fn set_room_mute(state: &State<'_, MatrixState>, room_id: &str, mute: bool
         tracing::warn!("Room {room_id} not in store, clearing its push rules instead");
         settings.delete_user_defined_room_rules(&parsed).await
     };
-    if let Err(e) = result {
+    result.map_err(|e| {
         tracing::warn!("Failed to set push rule for {room_id}: {e}");
-    }
+        e.to_string()
+    })
 }
 
 /// Mutate the local mute list and persist it. Persisting is the point: without
