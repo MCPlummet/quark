@@ -154,12 +154,59 @@ pub struct PushState {
     /// pusher that never existed is a no-op, so retrying is always safe.
     #[serde(default)]
     pub pending_delete: Vec<RegisteredPusher>,
+    /// The transport address the platform last handed us — a UnifiedPush
+    /// endpoint URL, or an APNs token.
+    ///
+    /// Kept apart from `last.pushkey`, which records what the *homeserver* was
+    /// told. The two differ exactly when registration has not caught up: the
+    /// distributor rotates an endpoint while the app is not running, or the user
+    /// enables push before a pusher exists. Storing the address the moment it
+    /// arrives is what lets registration happen later, on the next launch,
+    /// instead of being lost with the process that heard about it.
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 impl PushState {
     fn fresh() -> Self {
-        PushState { profile_tag: new_profile_tag(), last: None, pending_delete: Vec::new() }
+        PushState {
+            profile_tag: new_profile_tag(),
+            last: None,
+            pending_delete: Vec::new(),
+            endpoint: None,
+        }
     }
+}
+
+/// Record the transport address, returning whether it changed.
+///
+/// `false` means "already knew" — distributors re-announce the same endpoint on
+/// every app start, and treating that as news would re-register a pusher per
+/// launch. Everything else in the state is preserved: an endpoint rotation is
+/// precisely when a stale pusher is owed a delete.
+pub fn store_endpoint(config_dir: &std::path::Path, endpoint: &str) -> Result<bool, String> {
+    let mut state = load_or_init_push_state(config_dir);
+    if state.endpoint.as_deref() == Some(endpoint) {
+        return Ok(false);
+    }
+    state.endpoint = Some(endpoint.to_owned());
+    save_push_state_to(config_dir, &state)?;
+    Ok(true)
+}
+
+/// Forget the transport address, on `onUnregistered` or a transport opt-out.
+///
+/// Deliberately does not touch `pending_delete`: losing the address does not
+/// remove the pusher already pointing at it, and that delete is still owed.
+pub fn forget_endpoint(config_dir: &std::path::Path) -> Result<(), String> {
+    let Some(mut state) = load_push_state(config_dir) else {
+        return Ok(());
+    };
+    if state.endpoint.is_none() {
+        return Ok(());
+    }
+    state.endpoint = None;
+    save_push_state_to(config_dir, &state)
 }
 
 /// Read push state without creating or modifying anything.
@@ -643,11 +690,12 @@ mod status_tests {
                 gateway_url: "https://ntfy.example.org/_matrix/push/v1/notify".into(),
             }),
             pending_delete: Vec::new(),
+            endpoint: None,
         }
     }
 
     fn empty_state() -> PushState {
-        PushState { profile_tag: "tag".into(), last: None, pending_delete: Vec::new() }
+        PushState { profile_tag: "tag".into(), last: None, pending_delete: Vec::new(), endpoint: None }
     }
 
     #[test]
@@ -813,7 +861,7 @@ mod plan_tests {
     const ALICE: &str = "@alice:example.com";
 
     fn state_with(last: Option<RegisteredPusher>) -> PushState {
-        PushState { profile_tag: "tag".into(), last, pending_delete: Vec::new() }
+        PushState { profile_tag: "tag".into(), last, pending_delete: Vec::new(), endpoint: None }
     }
 
     fn pusher(app_id: &str, pushkey: &str, gateway: &str) -> RegisteredPusher {
@@ -935,7 +983,7 @@ mod pending_delete_tests {
     }
 
     fn state_with(last: Option<RegisteredPusher>) -> PushState {
-        PushState { profile_tag: "tag".into(), last, pending_delete: Vec::new() }
+        PushState { profile_tag: "tag".into(), last, pending_delete: Vec::new(), endpoint: None }
     }
 
     /// Turning push off while logged out has to leave a record: the pusher is
@@ -986,6 +1034,83 @@ mod pending_delete_tests {
             load_or_init_push_state(dir.path()).pending_delete,
             vec![registered()]
         );
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    fn registered() -> RegisteredPusher {
+        RegisteredPusher {
+            user_id: "@alice:example.com".into(),
+            app_id: "tel.quark.app.android".into(),
+            pushkey: "https://ntfy.example.org/old".into(),
+            gateway_url: "https://ntfy.example.org/_matrix/push/v1/notify".into(),
+        }
+    }
+
+    #[test]
+    fn an_endpoint_survives_a_reload() {
+        // The distributor hands the endpoint over once. Losing it means push is
+        // dead until the user notices and re-registers by hand.
+        let dir = tempfile::tempdir().unwrap();
+        store_endpoint(dir.path(), "https://ntfy.example.org/UPabc").unwrap();
+        assert_eq!(
+            load_push_state(dir.path()).unwrap().endpoint.as_deref(),
+            Some("https://ntfy.example.org/UPabc")
+        );
+    }
+
+    #[test]
+    fn storing_an_endpoint_keeps_what_the_state_already_owed() {
+        // An endpoint rotation is exactly when a stale pusher needs deleting, so
+        // clobbering the debts here would strand the pusher it names forever.
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = load_or_init_push_state(dir.path());
+        let tag = state.profile_tag.clone();
+        state.pending_delete.push(registered());
+        save_push_state_to(dir.path(), &state).unwrap();
+
+        store_endpoint(dir.path(), "https://ntfy.example.org/UPnew").unwrap();
+
+        let reloaded = load_push_state(dir.path()).unwrap();
+        assert_eq!(reloaded.pending_delete, vec![registered()]);
+        assert_eq!(reloaded.profile_tag, tag, "the tag must not be reminted");
+        assert_eq!(reloaded.endpoint.as_deref(), Some("https://ntfy.example.org/UPnew"));
+    }
+
+    #[test]
+    fn re_storing_the_same_endpoint_reports_no_change() {
+        // Distributors re-announce the same endpoint on every app start. Acting
+        // on that as if it were new would re-register a pusher per launch.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(store_endpoint(dir.path(), "https://ntfy.example.org/UPabc").unwrap());
+        assert!(!store_endpoint(dir.path(), "https://ntfy.example.org/UPabc").unwrap());
+        assert!(store_endpoint(dir.path(), "https://ntfy.example.org/UPother").unwrap());
+    }
+
+    #[test]
+    fn forgetting_the_endpoint_leaves_the_owed_deletes_behind() {
+        // onUnregistered means the address is gone, not that the pusher already
+        // pointing at it is. That delete still has to happen.
+        let dir = tempfile::tempdir().unwrap();
+        store_endpoint(dir.path(), "https://ntfy.example.org/UPabc").unwrap();
+        let mut state = load_push_state(dir.path()).unwrap();
+        state.pending_delete.push(registered());
+        save_push_state_to(dir.path(), &state).unwrap();
+
+        forget_endpoint(dir.path()).unwrap();
+
+        let reloaded = load_push_state(dir.path()).unwrap();
+        assert_eq!(reloaded.endpoint, None);
+        assert_eq!(reloaded.pending_delete, vec![registered()]);
+    }
+
+    #[test]
+    fn a_fresh_install_has_no_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load_or_init_push_state(dir.path()).endpoint, None);
     }
 }
 
@@ -1148,7 +1273,7 @@ mod state_tests {
     fn saving_creates_the_config_dir_if_it_is_missing() {
         let dir = tempfile::tempdir().unwrap();
         let nested = dir.path().join("does/not/exist");
-        let state = PushState { profile_tag: "tag".into(), last: None, pending_delete: Vec::new() };
+        let state = PushState { profile_tag: "tag".into(), last: None, pending_delete: Vec::new(), endpoint: None };
 
         save_push_state_to(&nested, &state).unwrap();
 
