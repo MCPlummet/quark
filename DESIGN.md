@@ -98,12 +98,33 @@ discard it — the exact cost push exists to remove. So muting a room sets the
 Matrix push rule (`commands.rs::set_room_mute`), which also syncs the mute to the
 user's other clients; the local `mute_rooms` list remains as an offline fallback.
 
+Unmuting must never be the half that fails. A server-side Mute rule empties
+`push_actions`, and `notify::evaluate` drops anything the push rules didn't
+select — so a rule left behind after the local list says "unmuted" silences the
+room permanently while the UI insists otherwise. Unmuting normally needs the
+room's shape (encrypted? one-to-one?) to know which default to restore, which a
+room not yet synced can't supply; rather than skip the rule, that case clears the
+room's user-defined rules outright so the account default applies.
+
+Because these each have an effect outside the config file, **`set_notification_config`
+only accepts the fields Settings owns** (`NotificationConfig::with_preferences`):
+enabled, preview, sender, quiet hours. Mutes, background sync and push have
+dedicated commands, and the Settings dialog builds its draft from a config it
+cached when it opened — so treating that draft as authoritative would let [save]
+silently undo a mute or a push opt-out taken while the dialog was open.
+
 The transports differ, and so does what each costs to run:
 
 | Platform | Transport | Gateway | Infrastructure |
 | --- | --- | --- | --- |
 | Android | UnifiedPush (ntfy, NextPush, …) | the distributor's own, found by discovery, else `matrix.gateway.unifiedpush.org` | none — the UnifiedPush gateway is a protocol translator holding no secrets, so any client may use it |
 | iOS | APNs | self-hosted Sygnal at `push.quark.tel` | required — only the holder of the APNs key for `tel.quark.app` can push to it |
+
+`push_gateway_override` in `notifications.toml` beats discovery
+(`push.rs::resolve_gateway`) — the escape hatch for a distributor that
+advertises no Matrix gateway. It is deliberately not editable from Settings:
+pointing a device at the wrong gateway silently stops push, and nothing in the
+UI could explain the failure.
 
 `app_id` is part of the deployment contract, since Sygnal keys its config
 literally by that string: `tel.quark.app.android`, and `tel.quark.app.ios.dev` /
@@ -118,7 +139,43 @@ platform is capable *and* the build wires a transport up
 land ahead of either transport, but advertising a toggle with nothing behind it
 would strand the user on "waiting for a distributor" with no way to progress.
 Where a capable platform has no transport at run time — no UnifiedPush
-distributor installed — the foreground service remains the fallback.
+distributor installed — the foreground service remains the fallback. The opt-in
+is enforced inside `push::register`, not by each transport remembering to check:
+registration is what hands a third-party gateway this device's address, so the
+gate belongs on the handing over.
+
+**A pusher can outlive everything that knows about it.** It is server-side
+state created by an access token, and once no local record names it, nothing can
+delete it — the homeserver goes on waking a dead endpoint forever. So
+`push.json` is not treated as a mirror of the homeserver but as a ledger of what
+is owed:
+
+- Registrations are keyed by `(user_id, app_id, pushkey)`. Only the account that
+  created a pusher can replace or delete it, and one install can serve several
+  accounts offering the *same* transport address — so without the user id a
+  re-login or account switch reads its own address as already registered and
+  never registers at all.
+- An address is written down as a **pending delete before** the round-trip that
+  creates it, and promoted to `last` only once the homeserver acknowledges. The
+  window where a pusher exists that nothing remembers is what makes one
+  undeletable, and a timeout cannot say which side of it we are on. Deleting a
+  pusher that was never created is a no-op, so owing the delete is safe both ways.
+- Deletes that can't be performed — offline, or push switched off while logged
+  out — stay on the pending list rather than being dropped, and are paid off by
+  `retry_pending_deletes` at the next login. Dropping them leaves a gateway
+  holding a live address for a user who opted out, with nothing in the UI left to
+  act on.
+- `logout` unregisters *before* revoking the token, since afterwards there is
+  nothing to delete with. `clear_session` can't, so it forgets the records
+  instead: they went with the token, and keeping them would convince the next
+  login it was already registered.
+- Writes are atomic (temp file + rename) and an unreadable `push.json` is moved
+  to `push.json.corrupt` rather than overwritten — it may be the only surviving
+  record of a live pusher.
+
+Reads never mint state: `get_push_status` uses `load_push_state`, so opening
+Settings on desktop doesn't create a `push.json` for a platform that can never
+use one.
 
 ### Mobile touch behaviour
 

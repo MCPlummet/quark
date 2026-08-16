@@ -27,6 +27,9 @@ export interface NotificationConfig {
   push_gateway_override: string | null;
 }
 
+/** How a platform pushes — matches push::PlatformTransport */
+export type PlatformTransport = "unified_push" | "apns";
+
 /** Push snapshot for the Settings UI — matches push::PushStatus */
 export interface PushStatus {
   /** This platform has a push transport (mobile only). */
@@ -35,6 +38,12 @@ export interface PushStatus {
   enabled: boolean;
   /** A pusher is registered with the homeserver right now. */
   registered: boolean;
+  /**
+   * How this platform pushes, set whether or not a pusher exists yet — so the
+   * UI can say what push is still waiting on without inferring it from
+   * `app_id`, which is null in exactly that case.
+   */
+  transport: PlatformTransport | null;
   /** app_id of the registered pusher, if any. */
   app_id: string | null;
   /** The gateway actually in use — the user's own, or the public fallback. */

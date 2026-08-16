@@ -456,7 +456,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       return { supported: false, enabled: false, running: false, battery_exempt: false };
     // Browser dev mode has no push transport, same as desktop.
     case "get_push_status":
-      return { supported: false, enabled: false, registered: false, app_id: null, gateway_url: null };
+      return { supported: false, enabled: false, registered: false, transport: null, app_id: null, gateway_url: null };
     case "set_avatar":
       return "mxc://matrix.org/mock-avatar-upload";
     case "get_home_data": {

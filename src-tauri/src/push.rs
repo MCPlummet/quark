@@ -338,6 +338,33 @@ pub const fn supports_push(platform: bool, transport: bool) -> bool {
     platform && transport
 }
 
+/// Which transport this platform pushes through, named for the UI.
+///
+/// Distinct from [`PushTransport`], which carries registration detail (the APNs
+/// sandbox flag) that Settings has no use for. What Settings needs is what the
+/// user has to have working — a distributor on Android, nothing on iOS — and it
+/// needs it *before* a pusher exists, which is exactly when `app_id` is `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformTransport {
+    /// Android: the user supplies the endpoint by installing a distributor.
+    UnifiedPush,
+    /// iOS: the OS supplies the token and the gateway is our own Sygnal, so
+    /// there is nothing for the user to install.
+    Apns,
+}
+
+/// The transport this build would register through, if any.
+pub const fn platform_transport() -> Option<PlatformTransport> {
+    if cfg!(target_os = "android") {
+        Some(PlatformTransport::UnifiedPush)
+    } else if cfg!(target_os = "ios") {
+        Some(PlatformTransport::Apns)
+    } else {
+        None
+    }
+}
+
 /// What Settings shows about push. Distinct from [`PushState`], which is what
 /// we persist — this is derived, read-only, and safe to hand the frontend.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,6 +376,9 @@ pub struct PushStatus {
     /// A pusher is currently registered with the homeserver. False while push
     /// is on but the transport has not yet supplied an address.
     pub registered: bool,
+    /// How this platform pushes. Set whether or not a pusher exists yet, so
+    /// the UI can explain what is still missing without guessing.
+    pub transport: Option<PlatformTransport>,
     /// The `app_id` of the registered pusher, if any.
     pub app_id: Option<String>,
     /// The gateway actually in use — so the user can tell whether discovery
@@ -378,6 +408,7 @@ pub fn status(
         supported: supports_push(PLATFORM_SUPPORTS_PUSH, TRANSPORT_AVAILABLE),
         enabled: config.push_enabled,
         registered: live.is_some(),
+        transport: platform_transport(),
         app_id: live.map(|p| p.app_id.clone()),
         gateway_url: live.map(|p| p.gateway_url.clone()),
     }
@@ -701,6 +732,35 @@ mod status_tests {
     #[test]
     fn status_does_not_offer_push_on_this_build() {
         assert!(!status(&config(true), Some(&empty_state())).supported);
+    }
+
+    /// The UI has to explain what push is waiting on *before* a pusher exists,
+    /// which is exactly when `app_id` is None. Telling an iOS user to install
+    /// an Android distributor sends them after a fix that doesn't exist.
+    #[test]
+    fn names_the_transport_even_with_nothing_registered() {
+        let snapshot = status(&config(true), Some(&empty_state()));
+        assert!(!snapshot.registered);
+        assert_eq!(snapshot.transport, platform_transport());
+    }
+
+    /// Desktop has no transport at all, so the UI has nothing to explain.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn desktop_names_no_transport() {
+        assert_eq!(platform_transport(), None);
+    }
+
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_pushes_through_unified_push() {
+        assert_eq!(platform_transport(), Some(PlatformTransport::UnifiedPush));
+    }
+
+    #[cfg(target_os = "ios")]
+    #[test]
+    fn ios_pushes_through_apns() {
+        assert_eq!(platform_transport(), Some(PlatformTransport::Apns));
     }
 }
 

@@ -77,8 +77,29 @@ export { downloadMedia, getThumbnail, uploadMedia, sendPastedImage, sendFile, se
 export type { CacheStats, UrlPreview } from "./media.js";
 
 // ─── Notifications ────────────────────────────────────────────────────────────
-export { getNotificationConfig, setNotificationConfig, muteRoomIpc, unmuteRoomIpc, testNotification } from "./notifications.js";
-export type { NotificationConfig, QuietHours } from "./notifications.js";
+export {
+  getNotificationConfig,
+  setNotificationConfig,
+  muteRoomIpc,
+  unmuteRoomIpc,
+  testNotification,
+  initNotificationChannels,
+  clearRoomNotificationsIpc,
+  takePendingNotificationAction,
+  setBackgroundSync,
+  getBackgroundSyncState,
+  requestBatteryExemption,
+  getPushStatus,
+  setPushEnabled,
+} from "./notifications.js";
+export type {
+  NotificationConfig,
+  QuietHours,
+  PushStatus,
+  PlatformTransport,
+  BackgroundSyncState,
+  PendingNotificationAction,
+} from "./notifications.js";
 
 // ─── Crypto ───────────────────────────────────────────────────────────────────
 export {
