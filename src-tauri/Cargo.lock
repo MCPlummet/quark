@@ -4478,7 +4478,7 @@ dependencies = [
 
 [[package]]
 name = "quark"
-version = "0.17.2"
+version = "0.18.0"
 dependencies = [
  "ammonia",
  "chrono",
