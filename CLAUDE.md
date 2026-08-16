@@ -41,9 +41,18 @@ Rust backend: `cargo build` / `cargo test` from `src-tauri/`.
 desktop shell has no use for:
 
 ```bash
-nix develop .#android      # SDK + NDK (pinned to CI's) + JDK 17 + Rust android targets
-pnpm tauri android dev     # or: pnpm tauri android build --debug
+nix develop .#android           # SDK + NDK (pinned to CI's) + JDK 17 + Rust android targets
+pnpm tauri android dev          # or: pnpm tauri android build --debug
+
+nix develop .#android-emulator  # the above plus an x86_64 emulator (~800 MB more)
+quark-create-avd                # then: emulator -avd quark -gpu swiftshader_indirect
 ```
+
+The emulator image is API 35 `default` (Google-free) while the build compiles
+against 36 — Google publishes no `default` image for 36, and an F-Droid,
+UnifiedPush-only app should not be tested on one carrying Play services. API 35
+still covers everything push depends on: `shortService` + `onTimeout` (34+),
+background foreground-service limits (12+), notification permission (13+).
 
 The default shell carries `adb` alone, which is enough to drive an already
 installed build (`adb logcat -s quark`). Don't enter both shells at once — two

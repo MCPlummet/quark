@@ -40,15 +40,38 @@
         # read-only, so anything the build needs has to be composed in here.
         androidPlatformVersion = "36";
         androidBuildToolsVersion = "36.0.0";
+        # The emulator runs one API level below what we compile against, because
+        # Google publishes no Google-free ("default") system image for 36 — only
+        # google_apis variants. Quark is F-Droid-distributed and UnifiedPush-only
+        # precisely so it needs no Google services, and testing push on an image
+        # that has them would be testing a device its users are not on. API 35
+        # still covers everything the push path depends on: shortService and its
+        # onTimeout (34+), background foreground-service limits (12+) and runtime
+        # notification permission (13+). minSdk is 24, so a 36-targeted build
+        # installs and runs on it normally.
+        androidEmulatorApi = "35";
 
-        androidComposition = androidPkgs.androidenv.composeAndroidPackages {
-          platformVersions = [ androidPlatformVersion "34" ];
-          buildToolsVersions = [ androidBuildToolsVersion "34.0.0" ];
-          ndkVersions = [ androidNdkVersion ];
-          includeNDK = true;
-          includeEmulator = false;
-          includeSystemImages = false;
-        };
+        # `withEmulator` adds the emulator binary and an x86_64 system image,
+        # which is why it is not in the build-only shell.
+        mkAndroidComposition = { withEmulator }:
+          androidPkgs.androidenv.composeAndroidPackages {
+            # System images are composed per requested platform, so the emulator
+            # API has to be listed here to get one at all — the build itself only
+            # ever needs the platform it compiles against.
+            platformVersions = [ androidPlatformVersion ]
+              ++ pkgs.lib.optional withEmulator androidEmulatorApi;
+            buildToolsVersions = [ androidBuildToolsVersion ];
+            ndkVersions = [ androidNdkVersion ];
+            includeNDK = true;
+            includeEmulator = withEmulator;
+            includeSystemImages = withEmulator;
+            systemImageTypes = [ "default" ];
+            # Host-arch image: an arm64 image on an x86_64 host has to emulate
+            # the CPU and is far too slow to be worth the disk.
+            abiVersions = [ "x86_64" ];
+          };
+
+        androidComposition = mkAndroidComposition { withEmulator = false; };
         androidSdkRoot = "${androidComposition.androidsdk}/libexec/android-sdk";
 
         # The installable package (nix/package.nix). Built with nixpkgs'
@@ -152,6 +175,78 @@
         ];
 
         buildInputs = tauriDeps;
+
+        mkAndroidShell = { withEmulator }:
+          let
+            composition = mkAndroidComposition { inherit withEmulator; };
+            sdkRoot = "${composition.androidsdk}/libexec/android-sdk";
+          in
+          pkgs.mkShell {
+            nativeBuildInputs =
+              # The SDK ships its own adb under platform-tools; two adb clients
+              # on PATH restart each other's server on every version mismatch,
+              # so the default shell's `android-tools` is dropped rather than
+              # added to. Same for the host-only Rust toolchain.
+              (pkgs.lib.remove pkgs.android-tools
+                (pkgs.lib.remove rustToolchain nativeBuildInputs))
+              ++ [
+                rustToolchainAndroid
+                composition.androidsdk
+                # AGP 8.x requires 17; a newer JDK fails with an obscure Gradle
+                # toolchain error rather than a version complaint.
+                pkgs.jdk17
+              ];
+            inherit buildInputs;
+
+            shellHook = ''
+              export PKG_CONFIG_PATH="${pkgs.lib.makeSearchPathOutput "dev" "lib/pkgconfig" buildInputs}:$PKG_CONFIG_PATH"
+              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath buildInputs}:$LD_LIBRARY_PATH"
+
+              export ANDROID_HOME="${sdkRoot}"
+              export ANDROID_SDK_ROOT="$ANDROID_HOME"
+              export JAVA_HOME="${pkgs.jdk17}"
+              # `tauri android` reads NDK_HOME; cargo needs it to find the
+              # cross-linkers for aarch64-linux-android.
+              export NDK_HOME="$ANDROID_HOME/ndk/${androidNdkVersion}"
+              if [ ! -d "$NDK_HOME" ]; then
+                echo "warning: NDK not at $NDK_HOME — the composed SDK layout changed" >&2
+              fi
+              export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/${androidBuildToolsVersion}:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+
+              # AGP downloads aapt2 from Maven as a prebuilt ELF that assumes a
+              # standard dynamic loader, so it dies on NixOS. Point it at the one
+              # in the composed build-tools, which is already patched.
+              export GRADLE_OPTS="-Dorg.gradle.project.android.aapt2FromMavenOverride=$ANDROID_HOME/build-tools/${androidBuildToolsVersion}/aapt2 $GRADLE_OPTS"
+              # Gradle writes into the SDK dir for licences and caches; the Nix
+              # store is read-only, so give it somewhere of its own.
+              export GRADLE_USER_HOME="''${GRADLE_USER_HOME:-$HOME/.gradle}"
+            '' + pkgs.lib.optionalString withEmulator ''
+
+              export PATH="$ANDROID_HOME/emulator:$PATH"
+              # AVDs are mutable state; the SDK they are composed from is not.
+              export ANDROID_AVD_HOME="''${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+              export ANDROID_USER_HOME="''${ANDROID_USER_HOME:-$HOME/.android}"
+              mkdir -p "$ANDROID_AVD_HOME"
+
+              if [ ! -e /dev/kvm ]; then
+                echo "warning: /dev/kvm is missing — the emulator will fall back to" >&2
+                echo "         software CPU emulation, which is too slow to be useful." >&2
+              elif [ ! -w /dev/kvm ]; then
+                echo "warning: /dev/kvm is not writable by you. Add yourself to the" >&2
+                echo "         'kvm' group, or the emulator cannot use hardware acceleration." >&2
+              fi
+
+              quark-create-avd() {
+                local name="''${1:-quark}"
+                avdmanager create avd --force --name "$name" \
+                  --package "system-images;android-${androidEmulatorApi};default;x86_64" \
+                  --device pixel_6
+              }
+              echo "android-emulator shell (API ${androidEmulatorApi} image, builds against ${androidPlatformVersion}):"
+              echo "  quark-create-avd [name]"
+              echo "  emulator -avd quark -gpu swiftshader_indirect"
+            '';
+          };
       in
       {
         packages = {
@@ -187,51 +282,13 @@
 
         # Everything the default shell has, plus the Android SDK/NDK and a JDK.
         #
-        #   nix develop .#android
-        #   pnpm tauri android dev        # or `android build --debug`
+        #   nix develop .#android            # build + sideload to a real device
+        #   nix develop .#android-emulator   # the above, plus an x86_64 emulator
         #
-        # Kept separate because the SDK is a multi-gigabyte unfree download that
-        # desktop work has no use for.
-        devShells.android = pkgs.mkShell {
-          nativeBuildInputs =
-            # The SDK ships its own adb under platform-tools; two adb clients on
-            # PATH restart each other's server on every version mismatch, so the
-            # default shell's `android-tools` is dropped here rather than added to.
-            (pkgs.lib.remove pkgs.android-tools
-              (pkgs.lib.remove rustToolchain nativeBuildInputs))
-            ++ [
-              rustToolchainAndroid
-              androidComposition.androidsdk
-              # AGP 8.x requires 17; a newer JDK fails with an obscure Gradle
-              # toolchain error rather than a version complaint.
-              pkgs.jdk17
-            ];
-          buildInputs = buildInputs;
-
-          shellHook = ''
-            export PKG_CONFIG_PATH="${pkgs.lib.makeSearchPathOutput "dev" "lib/pkgconfig" buildInputs}:$PKG_CONFIG_PATH"
-            export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath buildInputs}:$LD_LIBRARY_PATH"
-
-            export ANDROID_HOME="${androidSdkRoot}"
-            export ANDROID_SDK_ROOT="$ANDROID_HOME"
-            export JAVA_HOME="${pkgs.jdk17}"
-            # `tauri android` reads NDK_HOME; cargo needs it to find the
-            # cross-linkers for aarch64-linux-android.
-            export NDK_HOME="$ANDROID_HOME/ndk/${androidNdkVersion}"
-            if [ ! -d "$NDK_HOME" ]; then
-              echo "warning: NDK not at $NDK_HOME — the composed SDK layout changed" >&2
-            fi
-            export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/${androidBuildToolsVersion}:$PATH"
-
-            # AGP downloads aapt2 from Maven as a prebuilt ELF that assumes a
-            # standard dynamic loader, so it dies on NixOS. Point it at the one
-            # in the composed build-tools, which is already patched.
-            export GRADLE_OPTS="-Dorg.gradle.project.android.aapt2FromMavenOverride=$ANDROID_HOME/build-tools/${androidBuildToolsVersion}/aapt2 $GRADLE_OPTS"
-            # Gradle writes into the SDK dir for licences and caches; the Nix
-            # store is read-only, so give it somewhere of its own.
-            export GRADLE_USER_HOME="''${GRADLE_USER_HOME:-$HOME/.gradle}"
-          '';
-        };
+        # Kept out of the default shell because the SDK is a multi-gigabyte
+        # unfree download that desktop work has no use for.
+        devShells.android = mkAndroidShell { withEmulator = false; };
+        devShells.android-emulator = mkAndroidShell { withEmulator = true; };
       }
     )
     // {
