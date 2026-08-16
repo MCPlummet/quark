@@ -54,6 +54,44 @@ pub fn parse_wake(payload: &str) -> Result<PushWake, String> {
     }
 }
 
+// ─── Deciding whether to act ─────────────────────────────────────────────────
+
+/// What a wake-up should do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WakePlan {
+    /// Run a bounded sync and let the notification pipeline decide the rest.
+    Sync,
+    /// Stand down. The reason is kept because these are the interesting lines
+    /// in a bug report about push that "does nothing".
+    Ignore(IgnoreReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IgnoreReason {
+    /// The user turned push off. A pusher can outlive the preference — an
+    /// opt-out we could not deliver to the homeserver is owed, not applied —
+    /// so pushes keep arriving for a while afterwards.
+    PushDisabled,
+    /// The app's own sync loop is live and will deliver this event itself.
+    WarmSyncRunning,
+    /// A counts-only push. There is nothing to render.
+    NothingToShow,
+}
+
+/// Decide what to do about a wake-up, before any network or store access.
+pub fn plan_wake(wake: &PushWake, push_enabled: bool, warm_sync_active: bool) -> WakePlan {
+    if !push_enabled {
+        return WakePlan::Ignore(IgnoreReason::PushDisabled);
+    }
+    if warm_sync_active {
+        return WakePlan::Ignore(IgnoreReason::WarmSyncRunning);
+    }
+    match wake {
+        PushWake::Event { .. } => WakePlan::Sync,
+        PushWake::Clear => WakePlan::Ignore(IgnoreReason::NothingToShow),
+    }
+}
+
 // ─── Coalescing concurrent wakes ─────────────────────────────────────────────
 
 /// Admits one push sync at a time, process-wide.
@@ -171,6 +209,45 @@ mod tests {
     fn empty_ids_are_treated_as_absent() {
         let payload = r#"{"notification": {"room_id": "", "event_id": ""}}"#;
         assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear);
+    }
+
+    #[test]
+    fn an_event_push_syncs() {
+        let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
+        assert_eq!(plan_wake(&wake, true, false), WakePlan::Sync);
+    }
+
+    #[test]
+    fn a_push_arriving_after_the_user_turned_push_off_is_ignored() {
+        // The pusher outlives the preference: an opt-out we could not deliver to
+        // the homeserver (offline, broken session) leaves it pushing for a
+        // while. Syncing here would be doing the exact work they switched off.
+        let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
+        assert_eq!(plan_wake(&wake, false, false), WakePlan::Ignore(IgnoreReason::PushDisabled));
+    }
+
+    #[test]
+    fn a_push_is_ignored_while_the_app_is_already_syncing() {
+        // The warm loop will deliver this event through the same pipeline. A
+        // second sync would duplicate the notification and — worse — put two
+        // concurrent syncs on the homeserver from one device.
+        let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
+        assert_eq!(plan_wake(&wake, true, true), WakePlan::Ignore(IgnoreReason::WarmSyncRunning));
+    }
+
+    #[test]
+    fn the_preference_is_checked_before_the_sync_state() {
+        // Both apply; the user's explicit "off" is the more informative reason
+        // to report, and it holds whether or not the app happens to be running.
+        let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
+        assert_eq!(plan_wake(&wake, false, true), WakePlan::Ignore(IgnoreReason::PushDisabled));
+    }
+
+    #[test]
+    fn a_clear_push_does_not_wake_the_network() {
+        // Nothing to show, and no room id to dismiss against — spending a sync
+        // on it would burn battery for a push whose whole meaning is "less".
+        assert_eq!(plan_wake(&PushWake::Clear, true, false), WakePlan::Ignore(IgnoreReason::NothingToShow));
     }
 
     #[test]
