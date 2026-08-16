@@ -7,6 +7,10 @@
     <!-- Background sync foreground service (Settings → Notifications). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Push wake-ups (PushSyncService). Separate from the special-use grant
+         above: this one is short-lived and typed, so it carries none of the
+         long-running exemption's obligations. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
     <!-- Lets the app ask the user to exempt it from battery optimization so
          Doze doesn't strangle the persistent sync connection. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -54,6 +58,15 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Persistent Matrix sync connection; no push server is available for this self-hostable chat client" />
         </service>
+
+        <!-- Runs a single push to completion. shortService rather than
+             specialUse: it lives for one sync and Android may stop it after
+             ~3 minutes, which is exactly the contract we want. Not exported —
+             only PushReceiver, in this app, ever starts it. -->
+        <service
+            android:name=".PushSyncService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
 
         <provider
           android:name="androidx.core.content.FileProvider"

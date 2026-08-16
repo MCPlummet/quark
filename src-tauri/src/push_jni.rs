@@ -37,15 +37,20 @@ impl PushResult {
 
 /// Handle a push delivered to a cold (or merely Tauri-less) process.
 ///
-/// Declared as an *instance* method on `PushSyncService` so the symbol is this
-/// plain name — a `companion object` would mangle it to `…_00024Companion_…`
-/// and fail to link at call time rather than at build time.
+/// Bound to `PushNative` rather than to the service that usually calls it:
+/// Android can refuse to start a foreground service from the background, and
+/// the fallback path then has to make this same call from the broadcast
+/// receiver. A class whose only job is the binding can be called from both.
+///
+/// `PushNative` is a Kotlin `object`, whose members are instance methods on the
+/// singleton — so the symbol is this plain name. A `companion object` would
+/// mangle it to `…_00024Companion_…` and fail at call time, not at build time.
 ///
 /// Returns a JSON `PushResult` string. Errors travel in the payload rather than
-/// as a Java exception because the caller is a service with ~30 s to live and
-/// nothing useful to do with a throwable except log it.
+/// as a Java exception because the caller has ~30 s to live and nothing useful
+/// to do with a throwable except log it.
 #[no_mangle]
-pub extern "system" fn Java_tel_quark_app_PushSyncService_nativeHandlePush<'local>(
+pub extern "system" fn Java_tel_quark_app_PushNative_nativeHandlePush<'local>(
     mut env: JNIEnv<'local>,
     _this: JObject<'local>,
     payload: JString<'local>,
