@@ -10,6 +10,7 @@ pub mod net_guard;
 pub mod notifications;
 pub mod notify;
 pub mod push;
+pub mod push_wake;
 pub mod search_index;
 pub mod secrets;
 pub mod updater;
