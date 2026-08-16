@@ -47,8 +47,10 @@ struct KlipyFile {
     /// Fallback GIF when `hd` is absent.
     #[serde(default)]
     gif: Option<KlipyGifFormat>,
-    /// Small JPEG thumbnail used for previews.
+    /// Small JPEG thumbnail. Deliberately unread — see `search`, which prefers
+    /// the full GIF for previews so the grid animates; kept to document the shape.
     #[serde(default)]
+    #[allow(dead_code)]
     xs: Option<KlipyXs>,
 }
 
@@ -68,11 +70,13 @@ struct KlipyGifFormat {
 
 #[derive(Debug, Deserialize)]
 struct KlipyXs {
+    #[allow(dead_code)]
     jpg: KlipyJpgFormat,
 }
 
 #[derive(Debug, Deserialize)]
 struct KlipyJpgFormat {
+    #[allow(dead_code)]
     url: String,
 }
 
@@ -83,19 +87,7 @@ impl GifProvider for KlipyClient {
         limit: u32,
         rating: &str,
     ) -> Result<Vec<GifResult>, String> {
-        // Klipy uses the same rating values as the app (g, pg, pg-13, r).
-        let klipy_rating = match rating {
-            r @ ("g" | "pg" | "pg-13" | "r") => r,
-            _ => "pg",
-        };
-
-        let url = format!(
-            "https://api.klipy.com/api/v1/{}/gifs/search?q={}&per_page={}&rating={}",
-            self.api_key,
-            gif::encode_query(query),
-            limit,
-            klipy_rating,
-        );
+        let url = build_search_url(query, &self.api_key, limit, rating);
 
         let response = gif::fetch_response(&self.http, "Klipy", &url).await?;
 
@@ -156,6 +148,7 @@ impl GifProvider for KlipyClient {
 
 /// Build a Klipy search URL from parts (without making an HTTP request).
 pub(crate) fn build_search_url(query: &str, api_key: &str, limit: u32, rating: &str) -> String {
+    // Klipy uses the same rating values as the app (g, pg, pg-13, r).
     let klipy_rating = match rating {
         r @ ("g" | "pg" | "pg-13" | "r") => r,
         _ => "pg",

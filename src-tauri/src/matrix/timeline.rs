@@ -4,8 +4,7 @@ use matrix_sdk::{
         events::{
             relation::InReplyTo,
             room::message::{
-                MessageType, OriginalSyncRoomMessageEvent, Relation,
-                RoomMessageEventContent, TextMessageEventContent,
+                MessageType, OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
             },
             sticker::StickerEventContent,
             AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
@@ -1058,6 +1057,28 @@ pub async fn send_message(
     Ok(event_id)
 }
 
+/// Build the `m.replace` content for an edit.
+///
+/// `make_replacement` clones the given content into `m.new_content` and only
+/// then derives the `* `-prefixed fallback body — so the clean body must be
+/// passed in. Prefixing here instead would put `* text` in `m.new_content`
+/// (which is what readers, including our own, display) and `* * text` in the
+/// fallback, and would drop any HTML formatting.
+fn build_edit_content(
+    event_id: &EventId,
+    new_body: &str,
+    new_formatted_body: Option<&str>,
+) -> RoomMessageEventContent {
+    let new_content = if let Some(formatted) = new_formatted_body {
+        RoomMessageEventContent::text_html(new_body, formatted)
+    } else {
+        RoomMessageEventContent::text_plain(new_body)
+    };
+
+    use matrix_sdk::ruma::events::room::message::ReplacementMetadata;
+    new_content.make_replacement(ReplacementMetadata::new(event_id.to_owned(), None), None)
+}
+
 /// Edit an existing message.
 pub async fn edit_message(
     client: &Client,
@@ -1073,19 +1094,7 @@ pub async fn edit_message(
         .get_room(&room_id)
         .ok_or_else(|| format!("Room {} not found", room_id))?;
 
-    let new_content = if let Some(formatted) = new_formatted_body {
-        RoomMessageEventContent::text_html(new_body, formatted)
-    } else {
-        RoomMessageEventContent::text_plain(new_body)
-    };
-
-    use matrix_sdk::ruma::events::room::message::ReplacementMetadata;
-    let metadata = ReplacementMetadata::new(event_id.clone(), None);
-    let edit_content =
-        RoomMessageEventContent::new(MessageType::Text(TextMessageEventContent::plain(
-            format!("* {}", new_body),
-        )))
-        .make_replacement(metadata, None);
+    let edit_content = build_edit_content(&event_id, new_body, new_formatted_body);
 
     let response = room
         .send(edit_content)
@@ -1764,6 +1773,51 @@ mod tests {
         assert_eq!(
             build_image_body("cat.png", Some("   ")),
             ("cat.png".to_string(), None)
+        );
+    }
+
+    /// `m.new_content` must carry the clean body — it is the field readers
+    /// (including `convert_sync_message`) display. The `* ` prefix belongs only
+    /// on the top-level fallback, and ruma adds it itself.
+    #[test]
+    fn test_build_edit_content_new_content_is_unprefixed() {
+        let event_id = EventId::parse("$original:example.org").unwrap();
+        let content = super::build_edit_content(&event_id, "fixed text", None);
+
+        let Some(Relation::Replacement(r)) = &content.relates_to else {
+            panic!("edit content must carry an m.replace relation");
+        };
+        assert_eq!(r.event_id, event_id);
+
+        let MessageType::Text(new_text) = &r.new_content.msgtype else {
+            panic!("expected a text m.new_content");
+        };
+        assert_eq!(new_text.body, "fixed text");
+
+        // Fallback body gets exactly one `* ` prefix, not two.
+        let MessageType::Text(fallback) = &content.msgtype else {
+            panic!("expected a text fallback");
+        };
+        assert_eq!(fallback.body, "* fixed text");
+    }
+
+    /// A formatted edit must keep its HTML in `m.new_content`.
+    #[test]
+    fn test_build_edit_content_preserves_formatted_body() {
+        let event_id = EventId::parse("$original:example.org").unwrap();
+        let content =
+            super::build_edit_content(&event_id, "bold text", Some("<b>bold text</b>"));
+
+        let Some(Relation::Replacement(r)) = &content.relates_to else {
+            panic!("edit content must carry an m.replace relation");
+        };
+        let MessageType::Text(new_text) = &r.new_content.msgtype else {
+            panic!("expected a text m.new_content");
+        };
+        assert_eq!(new_text.body, "bold text");
+        assert_eq!(
+            new_text.formatted.as_ref().map(|f| f.body.as_str()),
+            Some("<b>bold text</b>")
         );
     }
 

@@ -1,10 +1,6 @@
 use matrix_sdk::{
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
-    ruma::{
-        api::client::media::get_content_thumbnail::v3::Method,
-        events::room::MediaSource,
-        MxcUri, UInt,
-    },
+    ruma::{events::room::MediaSource, MxcUri, UInt},
     Client,
 };
 use serde::{Deserialize, Serialize};
@@ -31,7 +27,7 @@ fn to_base64(data: &[u8]) -> String {
         let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
         let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
 
-        result.push(CHARS[(b0 >> 2)] as char);
+        result.push(CHARS[b0 >> 2] as char);
         result.push(CHARS[((b0 & 3) << 4) | (b1 >> 4)] as char);
         if chunk.len() > 1 {
             result.push(CHARS[((b1 & 0xf) << 2) | (b2 >> 6)] as char);
