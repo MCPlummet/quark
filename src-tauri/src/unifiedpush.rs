@@ -192,6 +192,20 @@ mod android {
             .run_mobile_plugin::<()>("unregister", ())
             .map_err(|e| e.to_string())
     }
+
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RoomArg<'a> {
+        room_id: &'a str,
+    }
+
+    pub fn cancel_room(app: &AppHandle<Wry>, room_id: &str) -> Result<(), String> {
+        handle(app)
+            .ok_or("UnifiedPush plugin not registered")?
+            .0
+            .run_mobile_plugin::<()>("cancelRoom", RoomArg { room_id })
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -217,6 +231,22 @@ pub fn transport_status(app: &tauri::AppHandle) -> crate::push::TransportStatus 
         let _ = app;
         crate::push::TransportStatus::default()
     }
+}
+
+/// Dismiss every notification on screen for a room.
+///
+/// Goes through Kotlin because only the OS knows the full set: a push posts
+/// notifications from a process that is usually gone by the time the user reads
+/// the room, so anything Rust remembers is a subset at best.
+pub fn cancel_room_notifications(app: &tauri::AppHandle, room_id: &str) {
+    #[cfg(target_os = "android")]
+    {
+        if let Err(e) = android::cancel_room(app, room_id) {
+            tracing::warn!("Failed to clear notifications for {room_id}: {e}");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = (app, room_id);
 }
 
 /// Ask a distributor to start pushing to us.

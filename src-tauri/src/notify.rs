@@ -259,15 +259,29 @@ fn deliver_mobile(app: &tauri::AppHandle, spec: &NotificationSpec) {
 
 /// Dismiss all live notifications for a room (read locally or on another
 /// device). No-op on desktop — the plugin has no removal API there.
+///
+/// On Android this asks the OS what is on screen rather than trusting the
+/// registry. The registry only knows what *this process* posted, and push
+/// notifications routinely outlive the process that posted them — so after a
+/// cold push the registry is empty while the shade is not, and the notification
+/// a user just read elsewhere would survive being read.
 pub fn cancel_room(app: &tauri::AppHandle, room_id: &str) {
     use tauri::Manager;
 
+    // Clear our own bookkeeping either way, so a later count doesn't include
+    // notifications that are already gone.
     let ids = app.state::<NotificationRegistry>().take_room(room_id);
-    if ids.is_empty() {
-        return;
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+
+    #[cfg(target_os = "android")]
     {
+        let _ = ids;
+        crate::unifiedpush::cancel_room_notifications(app, room_id);
+    }
+    #[cfg(target_os = "ios")]
+    {
+        if ids.is_empty() {
+            return;
+        }
         if let Err(e) = app.notification().remove_active(ids) {
             tracing::warn!("Failed to clear notifications for {room_id}: {e}");
         }

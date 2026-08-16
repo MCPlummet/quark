@@ -47,16 +47,18 @@
             </intent-filter>
         </activity>
 
-        <!-- Keeps the Rust sync loop alive while backgrounded. specialUse:
-             dataSync is runtime-capped on Android 15, and nothing else fits a
-             persistent Matrix connection with no push server. -->
+        <!-- Keeps the Rust sync loop alive while backgrounded, for devices with
+             no UnifiedPush distributor installed. Off by default now that push
+             exists; it is the fallback, not the mechanism. specialUse because
+             dataSync is runtime-capped on Android 15 and nothing else fits a
+             persistent Matrix connection. -->
         <service
             android:name=".SyncForegroundService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Persistent Matrix sync connection; no push server is available for this self-hostable chat client" />
+                android:value="Persistent Matrix sync connection, used only when the user has no UnifiedPush distributor installed to deliver push notifications" />
         </service>
 
         <!-- Receives everything the UnifiedPush distributor sends: messages,

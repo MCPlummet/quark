@@ -90,6 +90,29 @@ class UnifiedPushPlugin(private val activity: Activity) : Plugin(activity) {
    * directly from the Settings command — whichever gets there first, since
    * deleting a pusher twice is a no-op.
    */
+  /**
+   * Dismiss every notification on screen for a room.
+   *
+   * Lives here rather than on the Rust registry because a push posts
+   * notifications from a process that is usually gone by the time the user
+   * reads the room — only the OS still knows about those.
+   */
+  @Command
+  fun cancelRoom(invoke: Invoke) {
+    val roomId = invoke.parseArgs(RoomArgs::class.java).roomId
+    if (roomId.isNullOrEmpty()) {
+      invoke.resolve()
+      return
+    }
+    PushNotifier.cancelRoom(activity, roomId)
+    invoke.resolve()
+  }
+
+  /** Argument shape for [cancelRoom]; Tauri deserialises into it by field name. */
+  class RoomArgs {
+    var roomId: String? = null
+  }
+
   @Command
   fun unregister(invoke: Invoke) {
     try {
