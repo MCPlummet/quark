@@ -1,4 +1,5 @@
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
@@ -79,11 +80,18 @@ android {
             )
         }
     }
-    kotlinOptions {
-        jvmTarget = "1.8"
-    }
     buildFeatures {
         buildConfig = true
+    }
+}
+
+// Kotlin 2.x removed `android { kotlinOptions { jvmTarget = "..." } }`. Same
+// target as before (1.8) so the bytecode level and desugaring behaviour are
+// unchanged — this is a DSL migration, not a toolchain change. It has to stay
+// aligned with AGP's Java sourceCompatibility, which also defaults to 8.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_1_8)
     }
 }
 

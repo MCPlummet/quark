@@ -39,7 +39,14 @@
         # normally download a missing platform itself; under Nix the SDK is
         # read-only, so anything the build needs has to be composed in here.
         androidPlatformVersion = "36";
-        androidBuildToolsVersion = "36.0.0";
+        # AGP pins the build-tools version it wants independently of compileSdk —
+        # 8.11.0 (gen/android/build.gradle.kts) asks for 35.0.0. On a normal SDK
+        # install Gradle just downloads whatever is missing, which is why CI's
+        # `build-tools;34.0.0` pin appears to work and why this mismatch is
+        # invisible there. Under Nix the SDK is read-only, so anything the build
+        # asks for has to be composed in up front.
+        androidBuildToolsVersions = [ "35.0.0" "36.0.0" ];
+        androidBuildToolsVersion = "36.0.0"; # the one put on PATH (apksigner, aapt2)
         # The emulator runs one API level below what we compile against, because
         # Google publishes no Google-free ("default") system image for 36 — only
         # google_apis variants. Quark is F-Droid-distributed and UnifiedPush-only
@@ -60,7 +67,7 @@
             # ever needs the platform it compiles against.
             platformVersions = [ androidPlatformVersion ]
               ++ pkgs.lib.optional withEmulator androidEmulatorApi;
-            buildToolsVersions = [ androidBuildToolsVersion ];
+            buildToolsVersions = androidBuildToolsVersions;
             ndkVersions = [ androidNdkVersion ];
             includeNDK = true;
             includeEmulator = withEmulator;

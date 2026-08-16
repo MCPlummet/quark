@@ -25,10 +25,16 @@ import android.util.Log
  *     adb shell am broadcast -n tel.quark.app/.PushDebugReceiver --es mode selftest
  *
  * **push** (the default) is the real thing, and needs a signed-in device with
- * push enabled — a wake declines before touching the network otherwise:
+ * push enabled — a wake declines before touching the network otherwise.
  *
- *     adb shell am broadcast -n tel.quark.app/.PushDebugReceiver \
- *       --es payload '{"notification":{"room_id":"!ROOM:server","event_id":"$EVENT","counts":{"unread":1}}}'
+ * Note the doubled quoting. `adb shell` hands the command to a shell *on the
+ * device*, which strips one layer, so JSON quoted only for your own shell
+ * arrives with its double quotes gone and fails to parse ("key must be a
+ * string at line 1 column 2"). Wrapping it in single quotes as well is what
+ * survives the second shell:
+ *
+ *     JSON='{"notification":{"room_id":"!ROOM:server","event_id":"$EVENT","counts":{"unread":1}}}'
+ *     adb shell am broadcast -n tel.quark.app/.PushDebugReceiver --es payload "'$JSON'"
  *
  * Then watch it work (or not):
  *
