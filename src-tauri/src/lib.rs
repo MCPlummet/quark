@@ -9,6 +9,7 @@ pub mod mobile_sync;
 pub mod net_guard;
 pub mod notifications;
 pub mod notify;
+pub mod push;
 pub mod search_index;
 pub mod secrets;
 pub mod updater;
@@ -270,6 +271,8 @@ pub fn run() {
             commands::take_pending_notification_action,
             commands::set_background_sync,
             commands::get_background_sync_state,
+            commands::get_push_status,
+            commands::set_push_enabled,
             commands::request_battery_exemption,
             // Shell
             commands::open_external_url,

@@ -51,8 +51,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.17.2
-        CFBundleVersion: "0.17.2"
+        CFBundleShortVersionString: 0.18.0
+        CFBundleVersion: "0.18.0"
     entitlements:
       path: quark_iOS/quark_iOS.entitlements
     scheme:

@@ -74,6 +74,129 @@ iOS reclaims memory by killing the WKWebView's *content* process while an app is
 
 Recovery is a full page reload, so it costs the user their scroll position and any unsent draft. The reloaded page re-runs the normal startup path — `restore_session` reads the session back out of the keyring and lands on the room list — and because `start_sync` aborts any running loop before spawning one, a reload can never leave two sync loops polling the homeserver.
 
+### Push notifications
+
+Desktop holds a live sync connection, so it never needs push. Mobile does: iOS
+suspends a backgrounded app outright, and on Android the alternative is
+`SyncForegroundService` holding the connection open — which costs battery, shows
+a permanent shade entry, and loses to Doze and OEM task-killers. Push inverts
+that: the homeserver POSTs to a **push gateway**, the gateway wakes the device
+through the platform transport, and the device runs a bounded sync.
+
+Two invariants shape the design.
+
+**Nothing readable leaves the homeserver.** Every pusher registers with
+`format: event_id_only` (`push.rs`), so a push carries a room id, an event id
+and an unread count — no ciphertext, no sender, no room name. Turning that back
+into a notification happens on-device through the existing `notify` pipeline,
+which is why `notify::evaluate` is pure and transport-agnostic: the same
+function serves the warm sync path and a push-woken one.
+
+**Filtering has to be server-side.** A locally-muted room the homeserver doesn't
+know about still wakes the phone for every message, only for the device to
+discard it — the exact cost push exists to remove. So muting a room sets the
+Matrix push rule (`commands.rs::set_room_mute`), which also syncs the mute to the
+user's other clients.
+
+**The push rule is the mute; `mute_rooms` is a cache of the attempt to set it.**
+Once the rule exists it empties `push_actions`, and `notify::evaluate` drops
+anything the push rules didn't select — so the room is already silenced without
+consulting the local list at all. The list earns its place on exactly one path:
+`set_room_mute` is best-effort, and if the rule write fails the local entry is
+what stops a mute appearing to do nothing on this device. That narrow job has
+three consequences worth stating, because treating the list as a general-purpose
+fallback gets each of them wrong:
+
+- **Nothing reconciles the two.** Both are written by the same command and never
+  compared afterwards, so a mute set from another client is invisible here and a
+  failed rule write leaves the list claiming a mute the homeserver never got.
+- **The list must not be read for display.** It answers "did we try to mute this
+  here", not "is this room muted", and those diverge whenever the above happens.
+  UI that asks the question must ask the ruleset.
+- **A failed rule write cannot stay silent.** Under push it means the homeserver
+  keeps waking the device for a room the user muted — the precise cost this
+  design exists to remove — so the failure has to reach the user or be retried,
+  not be swallowed as it is today.
+
+Unmuting must never be the half that fails. A server-side Mute rule empties
+`push_actions`, and `notify::evaluate` drops anything the push rules didn't
+select — so a rule left behind after the local list says "unmuted" silences the
+room permanently while the UI insists otherwise. Unmuting normally needs the
+room's shape (encrypted? one-to-one?) to know which default to restore, which a
+room not yet synced can't supply; rather than skip the rule, that case clears the
+room's user-defined rules outright so the account default applies.
+
+Because these each have an effect outside the config file, **`set_notification_config`
+only accepts the fields Settings owns** (`NotificationConfig::with_preferences`):
+enabled, preview, sender, quiet hours. Mutes, background sync and push have
+dedicated commands, and the Settings dialog builds its draft from a config it
+cached when it opened — so treating that draft as authoritative would let [save]
+silently undo a mute or a push opt-out taken while the dialog was open.
+
+The transports differ, and so does what each costs to run:
+
+| Platform | Transport | Gateway | Infrastructure |
+| --- | --- | --- | --- |
+| Android | UnifiedPush (ntfy, NextPush, …) | the distributor's own, found by discovery, else `matrix.gateway.unifiedpush.org` | none — the UnifiedPush gateway is a protocol translator holding no secrets, so any client may use it |
+| iOS | APNs | self-hosted Sygnal at `push.quark.tel` | required — only the holder of the APNs key for `tel.quark.app` can push to it |
+
+`push_gateway_override` in `notifications.toml` beats discovery
+(`push.rs::resolve_gateway`) — the escape hatch for a distributor that
+advertises no Matrix gateway. It is deliberately not editable from Settings:
+pointing a device at the wrong gateway silently stops push, and nothing in the
+UI could explain the failure.
+
+`app_id` is part of the deployment contract, since Sygnal keys its config
+literally by that string: `tel.quark.app.android`, and `tel.quark.app.ios.dev` /
+`.ios.prod` for the two APNs environments. iOS registrations also carry a
+`default_payload` with `mutable-content: 1`, without which iOS never routes the
+push through the notification service extension.
+
+Push is opt-in and off by default (`push_enabled` in `notifications.toml`),
+toggled in Settings → Notifications. That section appears only where the
+platform is capable *and* the build wires a transport up
+(`push.rs::supports_push`); the registration half is platform-agnostic and can
+land ahead of either transport, but advertising a toggle with nothing behind it
+would strand the user on "waiting for a distributor" with no way to progress.
+Where a capable platform has no transport at run time — no UnifiedPush
+distributor installed — the foreground service remains the fallback. The opt-in
+is enforced inside `push::register`, not by each transport remembering to check:
+registration is what hands a third-party gateway this device's address, so the
+gate belongs on the handing over.
+
+**A pusher can outlive everything that knows about it.** It is server-side
+state created by an access token, and once no local record names it, nothing can
+delete it — the homeserver goes on waking a dead endpoint forever. So
+`push.json` is not treated as a mirror of the homeserver but as a ledger of what
+is owed:
+
+- Registrations are keyed by `(user_id, app_id, pushkey)`. Only the account that
+  created a pusher can replace or delete it, and one install can serve several
+  accounts offering the *same* transport address — so without the user id a
+  re-login or account switch reads its own address as already registered and
+  never registers at all.
+- An address is written down as a **pending delete before** the round-trip that
+  creates it, and promoted to `last` only once the homeserver acknowledges. The
+  window where a pusher exists that nothing remembers is what makes one
+  undeletable, and a timeout cannot say which side of it we are on. Deleting a
+  pusher that was never created is a no-op, so owing the delete is safe both ways.
+- Deletes that can't be performed — offline, or push switched off while logged
+  out — stay on the pending list rather than being dropped, and are paid off by
+  `retry_pending_deletes` at the next login. Dropping them leaves a gateway
+  holding a live address for a user who opted out, with nothing in the UI left to
+  act on.
+- `logout` unregisters *before* revoking the token, since afterwards there is
+  nothing to delete with. `clear_session` can't, so it forgets the records
+  instead: they went with the token, and keeping them would convince the next
+  login it was already registered.
+- Writes are atomic (temp file + rename) and an unreadable `push.json` is moved
+  to `push.json.corrupt` rather than overwritten — it may be the only surviving
+  record of a live pusher.
+
+Reads never mint state: `get_push_status` uses `load_push_state`, so opening
+Settings on desktop doesn't create a `push.json` for a platform that can never
+use one.
+
 ### Mobile touch behaviour
 
 **Nothing the user composes on pans the viewport.** With the keyboard up, iOS keeps the layout viewport at full height and lets the visual viewport be panned within it, so any drag the page doesn't consume pans the shell — including drags on a compose bar, which has nothing of its own to scroll (#33). `touch-action` handles the leaves it can, but it cannot express the rule for a region: it intersects down the tree, so `none` on `.input-bar` or the compose box would take the text field's own `pan-y` with it. `guardViewportPan` (`src/app/mobile.ts`) is the enforcement — a non-passive `touchmove` listener on a container that swallows every drag except the one element with something of its own to scroll. Three surfaces carry one, because each is a container the others don't reach into:
@@ -441,7 +564,6 @@ When the user types `:` followed by characters in insert mode, an inline autocom
 ### Not in Scope (v1)
 - VoIP / MatrixRTC (group calls) — fundamentally incompatible with CLI aesthetic
 - Widgets — no iframe support in terminal-styled UI
-- Mobile targets — Tauri v2 supports them, but defer to future
 
 ---
 

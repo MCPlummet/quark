@@ -7,6 +7,45 @@
 // Intentionally decoupled from DialogBase — tab modules must not depend on
 // any class instance to stay independently testable and lazy-loadable.
 
+import { showError } from "../NotificationToast.js";
+
+/**
+ * A backend-owned switch: something with a live state the backend reports, that
+ * applies the moment it is flipped rather than on [save].
+ *
+ * Push and background sync are both this shape — a supported/enabled snapshot,
+ * a toggle with an immediate side effect (registering a pusher, starting a
+ * foreground service), and a status line describing what the backend actually
+ * did. Any further mobile switch would be a third copy of the same forty lines.
+ */
+export interface ToggleState {
+  /** This platform/build can do it at all. False hides the whole section. */
+  supported: boolean;
+  /** The user's persisted preference. */
+  enabled: boolean;
+}
+
+export interface ToggleSectionSpec<S extends ToggleState> {
+  title: string;
+  label: string;
+  /** Fetch the current state. Called once to build, and after every flip. */
+  get: () => Promise<S>;
+  /** Apply the new preference. */
+  set: (enabled: boolean) => Promise<void>;
+  /** The live status line under the toggle. */
+  status: (state: S) => string;
+  /** Explanatory text under the section. */
+  hint: (state: S) => string;
+  /**
+   * Anything bespoke this section needs (Android's battery-exemption button).
+   * `refresh` re-reads the backend and repaints the status, returning the new
+   * state so the caller can react to it.
+   */
+  extra?: (state: S, refresh: () => Promise<S>) => HTMLElement | null;
+  /** Prefix for the toast shown when a flip fails. */
+  failureLabel: string;
+}
+
 export interface SettingsControls {
   checkbox(label: string, checked: boolean, onChange: (v: boolean) => void): HTMLElement;
   numberRow(label: string, value: number, min: number, max: number, onChange: (v: number) => void): HTMLElement;
@@ -17,6 +56,7 @@ export interface SettingsControls {
   dispatchButton(label: string, ariaLabel: string, onClick: () => void): HTMLElement;
   sectionTitle(text: string): HTMLElement;
   loadingSection(content: HTMLElement): { section: HTMLElement; loading: HTMLElement };
+  toggleSection<S extends ToggleState>(spec: ToggleSectionSpec<S>): Promise<HTMLElement | null>;
 }
 
 export function makeControls(): SettingsControls {
@@ -175,5 +215,62 @@ export function makeControls(): SettingsControls {
       content.appendChild(section);
       return { section, loading };
     },
+
+    /**
+     * Build a section for a backend-owned switch, or return null when this
+     * platform doesn't support it (or the backend can't be reached).
+     *
+     * The toggle applies immediately: these switches have homeserver- or
+     * OS-side effects, so deferring them to [save] would let a stale draft
+     * contradict what already happened.
+     */
+    async toggleSection<S extends ToggleState>(spec: ToggleSectionSpec<S>): Promise<HTMLElement | null> {
+      let state: S;
+      try {
+        state = await spec.get();
+      } catch (err) {
+        // The rest of the tab still works, but stay noisy about it: an
+        // unsupported platform reports `supported: false`, it does not throw,
+        // so a rejection here is a real IPC failure and not a normal absence.
+        showError(`${spec.failureLabel} unavailable: ${errorText(err)}`);
+        return null;
+      }
+      if (!state.supported) return null;
+
+      const section = document.createElement("div");
+      section.className = "settings-dialog__section";
+      section.appendChild(this.sectionTitle(spec.title));
+
+      const status = document.createElement("div");
+      status.className = "settings-dialog__hint";
+      status.textContent = spec.status(state);
+
+      const refresh = async (): Promise<S> => {
+        const next = await spec.get();
+        status.textContent = spec.status(next);
+        return next;
+      };
+
+      section.appendChild(this.checkbox(spec.label, state.enabled, (v) => {
+        void spec.set(v)
+          .then(refresh)
+          .catch((err) => showError(`${spec.failureLabel} failed: ${errorText(err)}`));
+      }));
+      section.appendChild(status);
+
+      const extra = spec.extra?.(state, refresh);
+      if (extra) section.appendChild(extra);
+
+      const hint = document.createElement("div");
+      hint.className = "settings-dialog__hint";
+      hint.textContent = spec.hint(state);
+      section.appendChild(hint);
+
+      return section;
+    },
   };
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

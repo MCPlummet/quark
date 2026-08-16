@@ -12,9 +12,38 @@ import {
   getBackgroundSyncState,
   setBackgroundSync,
   requestBatteryExemption,
+  getPushStatus,
+  setPushEnabled,
 } from "../../../ipc/notifications.js";
+import type { PushStatus, BackgroundSyncState } from "../../../ipc/notifications.js";
 import { showSuccess, showError } from "../../NotificationToast.js";
 import type { SettingsTab } from "../types.js";
+
+/**
+ * What push is currently doing, in the terms of the platform's own transport.
+ *
+ * The un-registered case is the one that has to be transport-specific: on
+ * Android the user is genuinely waiting for a distributor they must install,
+ * while on iOS the OS supplies the token and there is nothing to install — so
+ * naming a distributor there sends them chasing an Android app that does not
+ * exist on their phone.
+ */
+export function pushStatusLine(s: PushStatus): string {
+  if (!s.enabled) return "push: off · the app must stay running to notify";
+  if (s.registered) return `push: registered · gateway: ${s.gateway_url ?? "unknown"}`;
+  return s.transport === "apns"
+    ? "push: waiting for a device token from iOS — no pusher registered yet"
+    : "push: waiting for a distributor — no pusher registered yet";
+}
+
+/** What the user can do about it, likewise per transport. */
+export function pushHint(s: PushStatus): string {
+  const privacy =
+    "Only a room ID and event ID ever reach the push gateway — never message content.";
+  return s.transport === "apns"
+    ? `Delivered through Apple's push service and Quark's own gateway; nothing to install. ${privacy}`
+    : `Android needs a UnifiedPush distributor installed (ntfy, NextPush, …). ${privacy}`;
+}
 
 export const notificationsTab: SettingsTab = {
   id: "notifications",
@@ -39,66 +68,48 @@ export const notificationsTab: SettingsTab = {
     section.appendChild(controls.checkbox("Show message preview", draft.show_body, (v) => { draft = { ...draft, show_body: v }; }));
     section.appendChild(controls.checkbox("Show sender name", draft.show_sender, (v) => { draft = { ...draft, show_sender: v }; }));
 
-    // Background sync (Android-only — desktop/iOS report unsupported). The
-    // toggle applies immediately (starts/stops the foreground service) rather
-    // than waiting for [save], since the service state is what users come
-    // here to flip.
-    try {
-      const bgState = await getBackgroundSyncState();
-      if (bgState.supported) {
-        const bgSection = document.createElement("div");
-        bgSection.className = "settings-dialog__section";
-        bgSection.appendChild(controls.sectionTitle("Background sync"));
+    // Push and background sync are both backend-owned switches: mobile-only,
+    // with a side effect that lands the moment they are flipped (registering a
+    // pusher, starting the foreground service) rather than on [save]. Deferring
+    // them would let a stale draft contradict what already happened.
+    const pushSection = await controls.toggleSection<PushStatus>({
+      title: "Push notifications",
+      label: "Let your homeserver wake the app (saves battery)",
+      get: getPushStatus,
+      set: setPushEnabled,
+      status: pushStatusLine,
+      hint: pushHint,
+      failureLabel: "Push",
+    });
+    if (pushSection) content.appendChild(pushSection);
 
-        const status = document.createElement("div");
-        status.className = "settings-dialog__hint";
-        const renderStatus = (s: { running: boolean; battery_exempt: boolean }) => {
-          status.textContent =
-            `service: ${s.running ? "running" : "stopped"} · ` +
-            `battery optimization: ${s.battery_exempt ? "unrestricted" : "restricted"}`;
-        };
-        renderStatus(bgState);
-
-        bgSection.appendChild(controls.checkbox(
-          "Stay connected in the background (uses more battery)",
-          bgState.enabled,
-          (v) => {
-            void setBackgroundSync(v)
-              .then(getBackgroundSyncState)
-              .then(renderStatus)
-              .catch((err) => showError(`Background sync toggle failed: ${err instanceof Error ? err.message : String(err)}`));
-          },
-        ));
-        bgSection.appendChild(status);
-
-        if (!bgState.battery_exempt) {
-          const exemptBtn = document.createElement("button");
-          exemptBtn.type = "button";
-          exemptBtn.className = "settings-dialog__save-btn";
-          exemptBtn.textContent = "[ allow unrestricted battery ]";
-          exemptBtn.addEventListener("click", () => {
-            void requestBatteryExemption()
-              .then(getBackgroundSyncState)
-              .then((s) => {
-                renderStatus(s);
-                if (s.battery_exempt) exemptBtn.remove();
-              })
-              .catch(() => {/* user dismissed the system dialog */});
-          });
-          bgSection.appendChild(exemptBtn);
-        }
-
-        const hint = document.createElement("div");
-        hint.className = "settings-dialog__hint";
-        hint.textContent =
-          "Per-category sound & importance (Messages / Mentions) is configured in Android Settings → Notifications.";
-        bgSection.appendChild(hint);
-
-        content.appendChild(bgSection);
-      }
-    } catch {
-      // Non-critical — the rest of the tab still works.
-    }
+    const bgSection = await controls.toggleSection<BackgroundSyncState>({
+      title: "Background sync",
+      label: "Stay connected in the background (uses more battery)",
+      get: getBackgroundSyncState,
+      set: setBackgroundSync,
+      status: (s) =>
+        `service: ${s.running ? "running" : "stopped"} · ` +
+        `battery optimization: ${s.battery_exempt ? "unrestricted" : "restricted"}`,
+      hint: () =>
+        "Per-category sound & importance (Messages / Mentions) is configured in Android Settings → Notifications.",
+      extra: (state, refresh) => {
+        if (state.battery_exempt) return null;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "settings-dialog__save-btn";
+        btn.textContent = "[ allow unrestricted battery ]";
+        btn.addEventListener("click", () => {
+          void requestBatteryExemption()
+            .then(refresh)
+            .then((s) => { if (s.battery_exempt) btn.remove(); })
+            .catch(() => {/* user dismissed the system dialog */});
+        });
+        return btn;
+      },
+      failureLabel: "Background sync",
+    });
+    if (bgSection) content.appendChild(bgSection);
 
     // Quiet hours
     const qhSection = document.createElement("div");
