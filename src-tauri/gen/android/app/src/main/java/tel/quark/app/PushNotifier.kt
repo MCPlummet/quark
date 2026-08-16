@@ -1,5 +1,6 @@
 package tel.quark.app
 
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -36,6 +37,7 @@ object PushNotifier {
   fun post(context: Context, specs: List<PushSpec>) {
     if (specs.isEmpty()) return
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    ensureChannels(manager)
 
     for (spec in specs) {
       try {
@@ -76,6 +78,45 @@ object PushNotifier {
       }
     } catch (e: Throwable) {
       Log.w(TAG, "Failed to clear notifications for $roomId", e)
+    }
+  }
+
+  /**
+   * Make sure the channels a spec can name exist.
+   *
+   * They are normally created by the frontend at startup
+   * (`notify::setup_channels`), but a push can post before that has ever run —
+   * on a fresh install, or into a process the webview never started in. On API
+   * 26+ a notification sent to an unknown channel is dropped without an error,
+   * which would look exactly like a broken JNI bridge.
+   *
+   * Definitions mirror `notify::setup_channels`. Creating one that exists is a
+   * no-op — Android keeps the user's own importance and sound choices — so this
+   * cannot override what they have configured.
+   */
+  private fun ensureChannels(manager: NotificationManager) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    try {
+      val messages = NotificationChannel(
+        "messages",
+        "Messages",
+        NotificationManager.IMPORTANCE_HIGH,
+      ).apply {
+        description = "New messages in your rooms"
+        enableVibration(true)
+      }
+      val mentions = NotificationChannel(
+        "mentions",
+        "Mentions",
+        NotificationManager.IMPORTANCE_HIGH,
+      ).apply {
+        description = "Messages that mention you"
+        enableVibration(true)
+        enableLights(true)
+      }
+      manager.createNotificationChannels(listOf(messages, mentions))
+    } catch (e: Throwable) {
+      Log.w(TAG, "Could not create notification channels", e)
     }
   }
 

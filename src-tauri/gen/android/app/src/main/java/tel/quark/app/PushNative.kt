@@ -89,6 +89,36 @@ object PushNative {
     return specs
   }
 
+  /**
+   * Render a notification from a synthetic event — no session, no network.
+   *
+   * Present only in debug builds (the Rust symbol is gated on
+   * `debug_assertions`), so this reports the failure rather than assuming it
+   * will resolve. Used by PushDebugReceiver to exercise the render-and-post
+   * half of the cold path on a device that has never logged in.
+   */
+  fun selfTest(context: Context): List<PushSpec> {
+    if (!libraryLoaded) return emptyList()
+    val json = try {
+      nativeSelfTest(context.dataDir.absolutePath)
+    } catch (e: UnsatisfiedLinkError) {
+      Log.e(TAG, "nativeSelfTest is missing — this is not a debug build", e)
+      return emptyList()
+    } catch (e: Throwable) {
+      Log.e(TAG, "Push self-test failed", e)
+      return emptyList()
+    } ?: return emptyList()
+
+    return try {
+      val result = JSONObject(json)
+      result.optString("error").takeIf { it.isNotEmpty() }?.let { Log.w(TAG, "Self-test: $it") }
+      parseSpecs(result.optJSONArray("specs"))
+    } catch (e: Throwable) {
+      Log.e(TAG, "Unreadable self-test result", e)
+      emptyList()
+    }
+  }
+
   /** Record a distributor endpoint and register it with the homeserver. */
   fun onNewEndpoint(context: Context, endpoint: String) {
     if (!libraryLoaded) return
@@ -118,6 +148,9 @@ object PushNative {
   private external fun nativeOnNewEndpoint(endpoint: String, dataDir: String): String?
 
   private external fun nativeOnUnregistered(dataDir: String): String?
+
+  /** Debug builds only — absent from release, hence the UnsatisfiedLinkError catch. */
+  private external fun nativeSelfTest(dataDir: String): String?
 }
 
 /**

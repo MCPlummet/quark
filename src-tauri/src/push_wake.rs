@@ -366,6 +366,43 @@ async fn collect(
     }
 }
 
+// ─── Self-test ───────────────────────────────────────────────────────────────
+
+/// Render a notification from a synthetic event, touching neither the network
+/// nor the session store.
+///
+/// A real wake needs a logged-in device, and until one exists the whole
+/// render-and-post half of the cold path — spec serialisation, the JSON
+/// crossing back to Kotlin, `NotificationCompat`, the channel ids, the tap
+/// intent — is unexercised. This makes that half provable on its own, which
+/// matters because the JNI boundary is the part with no test coverage at all.
+///
+/// It deliberately reads the *real* config and runs the *real* `evaluate`, so a
+/// notification that fails to appear because of quiet hours or a disabled master
+/// switch reports that rather than looking like a broken bridge.
+pub fn self_test_spec(
+    data_dir: &std::path::Path,
+) -> Result<crate::notify::NotificationSpec, String> {
+    let config = crate::notifications::load_notification_config_from(data_dir);
+    let input = crate::notify::NotificationInput {
+        room_id: "!quark-self-test:localhost".to_owned(),
+        room_name: "Quark self-test".to_owned(),
+        event_id: "$quark-self-test".to_owned(),
+        sender: "Quark".to_owned(),
+        body: "Push reached this device and rendered a notification.".to_owned(),
+        is_edit: false,
+        is_own: false,
+        window_focused: false,
+        pre_startup: false,
+        push: crate::notify::PushEval { notify: true, highlight: false },
+    };
+    crate::notify::evaluate(&input, &config).ok_or_else(|| {
+        "The push bridge worked, but your notification settings suppressed the result \
+         (notifications disabled, quiet hours, or this room muted)."
+            .to_owned()
+    })
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -484,6 +521,31 @@ mod tests {
         // Nothing to show, and no room id to dismiss against — spending a sync
         // on it would burn battery for a push whose whole meaning is "less".
         assert_eq!(plan_wake(&PushWake::Clear, true, false), WakePlan::Ignore(IgnoreReason::NothingToShow));
+    }
+
+    #[test]
+    fn the_self_test_renders_a_notification_without_a_session() {
+        // The point of the self-test: prove the render-and-post half works on a
+        // device that has never logged in, where a real wake declines long
+        // before it would reach a notification.
+        let dir = tempfile::tempdir().unwrap();
+        let spec = self_test_spec(dir.path()).expect("a default config should notify");
+        assert!(spec.title.contains("Quark"), "got: {}", spec.title);
+        assert_eq!(spec.channel, crate::notify::CHANNEL_MESSAGES);
+    }
+
+    #[test]
+    fn the_self_test_explains_a_config_that_suppresses_it() {
+        // Otherwise "I ran the self-test and nothing appeared" is independently
+        // consistent with a broken JNI boundary and with notifications simply
+        // being switched off — and those need opposite investigations.
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::notifications::NotificationConfig::default();
+        config.enabled = false;
+        crate::notifications::save_notification_config_to(dir.path(), &config).unwrap();
+
+        let err = self_test_spec(dir.path()).expect_err("a disabled config must not notify");
+        assert!(err.contains("notifications"), "got: {err}");
     }
 
     #[test]

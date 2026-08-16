@@ -89,6 +89,41 @@ pub extern "system" fn Java_tel_quark_app_PushNative_nativeHandlePush<'local>(
         .unwrap_or(std::ptr::null_mut())
 }
 
+/// Render a notification from a synthetic event, with no session and no
+/// network — the other half of what `PushDebugReceiver` can prove.
+///
+/// Debug builds only, so a release APK does not export a symbol that
+/// manufactures notifications. `PushDebugReceiver` is the sole caller and is
+/// itself debug-only, but the two gates are independent and both are cheap.
+#[cfg(debug_assertions)]
+#[no_mangle]
+pub extern "system" fn Java_tel_quark_app_PushNative_nativeSelfTest<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    data_dir: JString<'local>,
+) -> jstring {
+    init_logging();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let data_dir: String = env
+            .get_string(&data_dir)
+            .map_err(|e| format!("Unreadable data dir: {e}"))?
+            .into();
+        crate::push_wake::self_test_spec(std::path::Path::new(&data_dir))
+    }));
+
+    let result = match outcome {
+        Ok(Ok(spec)) => {
+            tracing::info!("Push self-test rendered: {}", spec.title);
+            PushResult { specs: vec![spec], error: None }
+        }
+        Ok(Err(e)) => PushResult::failed(e),
+        Err(_) => PushResult::failed("Push self-test panicked"),
+    };
+    let json = serde_json::to_string(&result)
+        .unwrap_or_else(|_| r#"{"specs":[],"error":"unserialisable"}"#.to_owned());
+    env.new_string(json).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
+}
+
 /// The distributor handed us a new endpoint (or re-announced the old one).
 ///
 /// Separate from the message path because it is cheap and must not be skipped:

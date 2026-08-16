@@ -16,6 +16,17 @@ import android.util.Log
  *
  * Debug builds only — see src/debug/AndroidManifest.xml for why.
  *
+ * Two modes, because they prove different halves and need different setups.
+ *
+ * **selftest** needs no account at all. It renders a synthetic notification
+ * through the real `notify::evaluate` and posts it, which covers the JNI
+ * boundary, the spec's trip back through JSON, the channels and the tap intent:
+ *
+ *     adb shell am broadcast -n tel.quark.app/.PushDebugReceiver --es mode selftest
+ *
+ * **push** (the default) is the real thing, and needs a signed-in device with
+ * push enabled — a wake declines before touching the network otherwise:
+ *
  *     adb shell am broadcast -n tel.quark.app/.PushDebugReceiver \
  *       --es payload '{"notification":{"room_id":"!ROOM:server","event_id":"$EVENT","counts":{"unread":1}}}'
  *
@@ -29,9 +40,16 @@ import android.util.Log
  */
 class PushDebugReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
+    if (intent.getStringExtra("mode") == "selftest") {
+      runSelfTest(context)
+      return
+    }
     val payload = intent.getStringExtra("payload")
     if (payload.isNullOrEmpty()) {
-      Log.w("quark", "PushDebugReceiver: pass a payload with --es payload '<json>'")
+      Log.w(
+        "quark",
+        "PushDebugReceiver: pass --es payload '<json>', or --es mode selftest",
+      )
       return
     }
     Log.i("quark", "PushDebugReceiver: injecting a push payload")
@@ -49,5 +67,30 @@ class PushDebugReceiver : BroadcastReceiver() {
         }
       }.start()
     }
+  }
+
+  /**
+   * Render and post a synthetic notification. No service: there is no sync to
+   * outlive a receiver's ten seconds, only a config read and a `notify` call.
+   */
+  private fun runSelfTest(context: Context) {
+    Log.i("quark", "PushDebugReceiver: running the push self-test")
+    val pending = goAsync()
+    Thread {
+      try {
+        val app = context.applicationContext
+        val specs = PushNative.selfTest(app)
+        if (specs.isEmpty()) {
+          Log.w("quark", "Self-test produced no notification — see the reason logged above")
+        } else {
+          PushNotifier.post(app, specs)
+          Log.i("quark", "Self-test posted ${specs.size} notification(s)")
+        }
+      } catch (e: Throwable) {
+        Log.e("quark", "Self-test failed", e)
+      } finally {
+        pending.finish()
+      }
+    }.start()
   }
 }
