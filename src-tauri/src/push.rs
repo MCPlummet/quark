@@ -194,6 +194,17 @@ pub fn store_endpoint(config_dir: &std::path::Path, endpoint: &str) -> Result<bo
     Ok(true)
 }
 
+/// Whether a session start should ask the transport for an address.
+///
+/// Registration is otherwise driven entirely by the transport volunteering an
+/// endpoint, which it only does when asked — and the ask can fail. Enabling push
+/// before installing a distributor is the ordinary way that happens, and without
+/// this the user is left with a switch that reads "on" and a transport nobody
+/// ever asked again.
+pub fn should_request_endpoint(push_enabled: bool, has_endpoint: bool) -> bool {
+    push_enabled && !has_endpoint
+}
+
 /// Forget the transport address, on `onUnregistered` or a transport opt-out.
 ///
 /// Deliberately does not touch `pending_delete`: losing the address does not
@@ -1209,6 +1220,32 @@ mod readiness_tests {
     fn a_fresh_install_with_push_on_is_waiting_not_ready() {
         let status = status(&config(true), None, &transport(Some("ntfy"), true));
         assert_eq!(status.readiness, PushReadiness::Waiting);
+    }
+}
+
+#[cfg(test)]
+mod endpoint_request_tests {
+    use super::*;
+
+    /// The case this exists for: push switched on before any distributor was
+    /// installed. `subscribe` failed then and nothing ever asked again, so
+    /// installing one afterwards left push silently dead forever.
+    #[test]
+    fn a_session_start_asks_again_when_push_is_on_but_no_address_arrived() {
+        assert!(should_request_endpoint(true, false));
+    }
+
+    #[test]
+    fn an_address_we_already_have_is_not_re_requested() {
+        // Re-registering on every launch would churn the distributor and the
+        // homeserver for an address that has not changed.
+        assert!(!should_request_endpoint(true, true));
+    }
+
+    #[test]
+    fn push_switched_off_asks_for_nothing() {
+        assert!(!should_request_endpoint(false, false));
+        assert!(!should_request_endpoint(false, true));
     }
 }
 

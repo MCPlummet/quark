@@ -83,10 +83,29 @@ fn wipe_local_session(data_dir: &Path) {
 /// Detached on purpose: this is a debt owed to the homeserver, not something a
 /// user waiting to see their rooms should block on, and nothing on screen
 /// depends on the outcome.
-fn settle_pending_pushers(client: matrix_sdk::Client, config_dir: std::path::PathBuf) {
+fn settle_pending_pushers(
+    client: matrix_sdk::Client,
+    config_dir: std::path::PathBuf,
+    app_handle: AppHandle,
+) {
     tokio::spawn(async move {
         if let Err(e) = crate::push::retry_pending_deletes(&client, &config_dir).await {
             tracing::warn!("{e}");
+        }
+
+        // Ask the transport for an address if push is on and none ever arrived.
+        // Enabling push before installing a distributor is the ordinary way that
+        // happens, and nothing else would ever ask again.
+        let config = crate::notifications::load_notification_config_from(&config_dir);
+        let has_endpoint = crate::push::load_push_state(&config_dir)
+            .and_then(|state| state.endpoint)
+            .is_some();
+        if crate::push::should_request_endpoint(config.push_enabled, has_endpoint) {
+            match crate::unifiedpush::subscribe(&app_handle) {
+                Ok(true) => tracing::info!("Asked the distributor for a push endpoint"),
+                Ok(false) => tracing::info!("Push is on but no distributor is installed"),
+                Err(e) => tracing::warn!("Could not reach a distributor: {e}"),
+            }
         }
         // Register whatever address the transport left on disk. This is the one
         // path that recovers a distributor endpoint delivered to a process with
@@ -161,7 +180,7 @@ pub async fn login(
 
     open_search_index(&app_handle, data_path.clone(), store_key.clone()).await;
 
-    settle_pending_pushers(client.clone(), paths.config_dir.clone());
+    settle_pending_pushers(client.clone(), paths.config_dir.clone(), app_handle.clone());
     crate::matrix::client::start_sync(client, Some(app_handle), &sync_state).await;
     Ok(())
 }
@@ -282,7 +301,7 @@ pub async fn restore_session(
 
     open_search_index(&app_handle, data_path.clone(), store_key.clone()).await;
 
-    settle_pending_pushers(client.clone(), paths.config_dir.clone());
+    settle_pending_pushers(client.clone(), paths.config_dir.clone(), app_handle.clone());
     crate::matrix::client::start_sync(client, Some(app_handle), &sync_state).await;
     Ok(RestoreOutcome::Restored)
 }
