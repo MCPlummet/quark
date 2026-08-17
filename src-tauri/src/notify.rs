@@ -131,6 +131,31 @@ pub fn evaluate(input: &NotificationInput, config: &NotificationConfig) -> Optio
     })
 }
 
+/// Pick the room title a notification should carry.
+///
+/// Kept separate from the store lookups so the precedence is testable: an
+/// explicit `m.room.name` wins, then the members-derived name, and the room id
+/// only when there is genuinely nothing else. A blank name is treated as absent
+/// — an empty `m.room.name` is legal and means "unnamed", not "titled nothing".
+pub fn room_title(name: Option<String>, computed: Option<String>, room_id: &str) -> String {
+    let usable = |s: Option<String>| s.filter(|v| !v.trim().is_empty());
+    usable(name)
+        .or_else(|| usable(computed))
+        .unwrap_or_else(|| room_id.to_owned())
+}
+
+/// Resolve a room's notification title, consulting the store when it has no
+/// explicit name. DMs and small unnamed rooms have none, and titling their
+/// notifications with a raw room id tells the reader nothing.
+pub async fn resolve_room_title(room: &matrix_sdk::Room) -> String {
+    let computed = match room.cached_display_name() {
+        Some(cached) => Some(cached.to_string()),
+        // Not cached yet — a cold push is exactly when that happens.
+        None => room.compute_display_name().await.ok().map(|n| n.to_string()),
+    };
+    room_title(room.name(), computed, room.room_id().as_str())
+}
+
 /// FNV-1a 32-bit over the string, as an `i32` notification id. The Android
 /// plugin uses `Int.MIN_VALUE` as its "no notification" intent sentinel, so
 /// that one value is remapped.
@@ -491,6 +516,36 @@ mod tests {
         assert_eq!(json["eventId"], "$event1");
         assert_eq!(json["roomName"], "General");
         assert_eq!(json["highlight"], false);
+    }
+
+    #[test]
+    fn a_named_room_titles_the_notification_with_its_name() {
+        assert_eq!(room_title(Some("General".into()), None, "!r:x"), "General");
+        // An explicit name wins over the computed one even when both exist.
+        assert_eq!(
+            room_title(Some("General".into()), Some("Alice, Bob".into()), "!r:x"),
+            "General"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_room_falls_back_to_its_computed_name() {
+        // DMs and small unnamed rooms have no m.room.name at all; their title
+        // is derived from the members. Without this a notification is headed
+        // with a raw room id, which tells the user nothing about who wrote.
+        assert_eq!(room_title(None, Some("Alice".into()), "!r:x"), "Alice");
+    }
+
+    #[test]
+    fn a_room_id_is_the_last_resort_not_the_first() {
+        assert_eq!(room_title(None, None, "!r:x"), "!r:x");
+    }
+
+    #[test]
+    fn a_blank_name_counts_as_no_name() {
+        // `m.room.name` set to an empty string is legal and means "unnamed".
+        assert_eq!(room_title(Some("".into()), Some("Alice".into()), "!r:x"), "Alice");
+        assert_eq!(room_title(Some("  ".into()), None, "!r:x"), "!r:x");
     }
 
     #[test]

@@ -209,12 +209,72 @@ pub static WAKE_GUARD: WakeGuard = WakeGuard::new();
 /// what we found.
 const WAKE_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// Most notifications one wake will post.
+///
+/// A wake syncs a *batch*, not the single event the push named, so a device
+/// that has been off for a while can come back to a great many notifiable
+/// events at once. Past a handful they stop being information and start being
+/// a wall to swipe away; the room list and unread counts carry the rest.
+const MAX_WAKE_NOTIFICATIONS: usize = 8;
+
+/// Whether an event predates the user's read marker in its room.
+///
+/// The marker moves when the room is read on *any* device, which is what makes
+/// this the right question to ask: "never delivered to this phone" and "never
+/// seen by this person" are different things, and only the second one should
+/// produce a notification.
+///
+/// No marker means no evidence either way, so the event still notifies —
+/// suppressing there would silence precisely the rooms never opened.
+pub fn already_seen(event_ts: u64, read_marker_ts: Option<u64>) -> bool {
+    read_marker_ts.is_some_and(|marker| event_ts <= marker)
+}
+
+/// Trim a wake to [`MAX_WAKE_NOTIFICATIONS`], keeping the newest, and report
+/// how many were dropped so the caller can say so rather than silently truncate.
+pub fn cap_wake_notifications(
+    mut specs: Vec<crate::notify::NotificationSpec>,
+) -> (Vec<crate::notify::NotificationSpec>, usize) {
+    if specs.len() <= MAX_WAKE_NOTIFICATIONS {
+        return (specs, 0);
+    }
+    // Sync order is chronological, so the tail is the most recent.
+    let dropped = specs.len() - MAX_WAKE_NOTIFICATIONS;
+    specs.drain(..dropped);
+    (specs, dropped)
+}
+
 /// Everything the collecting event handlers need. No `AppHandle` — that is the
 /// entire point of this path.
 #[derive(Clone)]
 struct Collector {
     config: std::sync::Arc<crate::notifications::NotificationConfig>,
     out: std::sync::Arc<std::sync::Mutex<Vec<crate::notify::NotificationSpec>>>,
+    /// Read-marker timestamp per room, so a batch of events in one room costs
+    /// one store lookup rather than one per event.
+    read_markers:
+        std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, Option<u64>>>>,
+}
+
+impl Collector {
+    /// When the user last read this room, on any device.
+    async fn read_marker(&self, room: &matrix_sdk::Room) -> Option<u64> {
+        use matrix_sdk::ruma::events::receipt::{ReceiptThread, ReceiptType};
+
+        let room_id = room.room_id().to_string();
+        if let Some(cached) = self.read_markers.lock().await.get(&room_id) {
+            return *cached;
+        }
+        let marker = room
+            .load_user_receipt(ReceiptType::Read, ReceiptThread::Unthreaded, room.own_user_id())
+            .await
+            .ok()
+            .flatten()
+            .and_then(|(_, receipt)| receipt.ts)
+            .map(|ts| u64::from(ts.0));
+        self.read_markers.lock().await.insert(room_id, marker);
+        marker
+    }
 }
 
 /// Wake up, sync once, and render whatever the notification pipeline selects.
@@ -263,7 +323,14 @@ async fn sync_and_collect(
     let client = background_client(data_dir).await?;
 
     let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    register_collectors(&client, Collector { config: std::sync::Arc::new(config), out: out.clone() });
+    register_collectors(
+        &client,
+        Collector {
+            config: std::sync::Arc::new(config),
+            out: out.clone(),
+            read_markers: Default::default(),
+        },
+    );
 
     // `timeout(0)` asks the homeserver to answer with whatever it has instead of
     // long-polling. The push already told us there is something there, and a
@@ -274,7 +341,12 @@ async fn sync_and_collect(
         .await
         .map_err(|e| format!("Push sync failed: {e}"))?;
 
-    let specs = out.lock().map_err(|_| "Collector lock poisoned")?.clone();
+    let collected = out.lock().map_err(|_| "Collector lock poisoned")?.clone();
+    let (specs, dropped) = cap_wake_notifications(collected);
+    if dropped > 0 {
+        tracing::info!("Push wake capped at {MAX_WAKE_NOTIFICATIONS}; dropped {dropped} older");
+    }
+    tracing::info!("Push wake rendered {} notification(s)", specs.len());
     Ok(specs)
 }
 
@@ -329,6 +401,13 @@ async fn collect(
     let room_id = room.room_id().to_string();
     let is_own = room.own_user_id() == sender_id;
 
+    // A wake syncs a batch, so most of what arrives may already have been read
+    // on another device. Delivered-to-this-phone and seen-by-this-person are
+    // different things, and only the second earns silence.
+    if already_seen(event.timestamp, collector.read_marker(room).await) {
+        return;
+    }
+
     let sender = if is_own {
         event.sender.clone()
     } else {
@@ -342,7 +421,7 @@ async fn collect(
 
     let input = crate::notify::NotificationInput {
         room_id: room_id.clone(),
-        room_name: room.name().unwrap_or(room_id),
+        room_name: crate::notify::resolve_room_title(room).await,
         event_id: event.event_id.clone(),
         sender,
         body: event.body.clone(),
@@ -546,6 +625,65 @@ mod tests {
 
         let err = self_test_spec(dir.path()).expect_err("a disabled config must not notify");
         assert!(err.contains("notifications"), "got: {err}");
+    }
+
+    #[test]
+    fn an_event_the_user_already_read_elsewhere_is_not_notified() {
+        // The whole point. A cold wake syncs a batch, not one event, so without
+        // this it re-notifies everything read on another device since the app
+        // last ran — the flood this filter exists to stop.
+        assert!(already_seen(1_000, Some(2_000)));
+        assert!(already_seen(1_000, Some(1_000)), "read marker on the event itself");
+    }
+
+    #[test]
+    fn an_event_newer_than_the_read_marker_still_notifies() {
+        assert!(!already_seen(2_000, Some(1_000)));
+    }
+
+    #[test]
+    fn a_room_that_was_never_read_still_notifies() {
+        // No marker is not evidence of having seen anything. Suppressing here
+        // would silence exactly the rooms the user has never opened.
+        assert!(!already_seen(1_000, None));
+    }
+
+    #[test]
+    fn a_wake_keeps_the_newest_notifications_when_there_are_too_many() {
+        // Sync order is chronological, so the tail is the most recent — the
+        // part a person woken by their phone actually wants.
+        let specs: Vec<_> = (0..MAX_WAKE_NOTIFICATIONS + 3)
+            .map(|i| spec_named(&format!("$e{i}")))
+            .collect();
+
+        let (kept, dropped) = cap_wake_notifications(specs);
+
+        assert_eq!(kept.len(), MAX_WAKE_NOTIFICATIONS);
+        assert_eq!(dropped, 3);
+        assert_eq!(kept.last().unwrap().event_id, format!("$e{}", MAX_WAKE_NOTIFICATIONS + 2));
+    }
+
+    #[test]
+    fn a_wake_under_the_cap_is_left_alone() {
+        let specs = vec![spec_named("$a"), spec_named("$b")];
+        let (kept, dropped) = cap_wake_notifications(specs);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(dropped, 0);
+    }
+
+    fn spec_named(event_id: &str) -> crate::notify::NotificationSpec {
+        crate::notify::NotificationSpec {
+            id: 1,
+            summary_id: 2,
+            title: "t".into(),
+            body: "b".into(),
+            channel: crate::notify::CHANNEL_MESSAGES,
+            group: "!r:x".into(),
+            room_id: "!r:x".into(),
+            event_id: event_id.into(),
+            room_name: "r".into(),
+            highlight: false,
+        }
     }
 
     #[test]

@@ -257,7 +257,7 @@ async fn maybe_notify(
 
     let input = crate::notify::NotificationInput {
         room_id: room_id.clone(),
-        room_name: room.name().unwrap_or_else(|| room_id.clone()),
+        room_name: crate::notify::resolve_room_title(room).await,
         event_id: timeline_event.event_id.clone(),
         sender: sender_label,
         body: timeline_event.body.clone(),
