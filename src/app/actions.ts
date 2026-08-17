@@ -53,6 +53,8 @@ export {
   refreshRooms,
   bumpRoomActivity,
   applyLocalRoomMeta,
+  setRoomDirectness,
+  convertRoomDirectness,
   openOrCreateDm,
   loadRoomMembers,
   applyReadReceiptVisibility,

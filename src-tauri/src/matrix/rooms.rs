@@ -1133,6 +1133,27 @@ pub async fn set_room_join_rule(client: &Client, room_id: &str, rule: &str) -> R
     Ok(())
 }
 
+/// Mark a room as a DM (or unmark it).
+///
+/// This is purely account-data (`m.direct`) — no state event is sent, so it
+/// needs no power level and works in rooms we don't moderate. Marking adds the
+/// room under every other active member; unmarking strips it from every entry.
+pub async fn set_room_direct(
+    client: &Client,
+    room_id: &str,
+    is_direct: bool,
+) -> Result<(), String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {room_id} not found"))?;
+
+    room.set_is_direct(is_direct)
+        .await
+        .map_err(|e| format!("Failed to set direct flag: {e}"))?;
+    Ok(())
+}
+
 /// Set the history visibility: "invited" | "joined" | "shared" | "world_readable".
 pub async fn set_room_history_visibility(
     client: &Client,

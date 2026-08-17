@@ -696,6 +696,8 @@ Scoped maps (`tmap`, `rmap`, `pmap`) take precedence over global `nmap` when tha
 :search [query]              Search messages in the current room
 :source <path>               Reload quarkrc or source a file
 :roomsettings                Open room settings (name/topic/access/permissions)
+:converttodm                 Mark the current room as a DM (m.direct)
+:converttoroom               Unmark the current room as a DM
 :spacesettings               Open space settings (name/topic/children)
 :debug                       Open debug viewer for current room state events
 :debug $eventId              Open debug viewer for a specific event

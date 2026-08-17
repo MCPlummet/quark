@@ -37,6 +37,14 @@ export async function setRoomHistoryVisibility(roomId: string, visibility: strin
   return invoke<void>("set_room_history_visibility", { roomId, visibility });
 }
 
+/**
+ * Mark the room as a DM (or unmark it) in the `m.direct` account data.
+ * Account data only — no power level required.
+ */
+export async function setRoomDirect(roomId: string, isDirect: boolean): Promise<void> {
+  return invoke<void>("set_room_direct", { roomId, isDirect });
+}
+
 // ─── Debug Viewer ─────────────────────────────────────────────────────────────
 
 /** Fetch all key state events for a room as raw JSON blobs. */

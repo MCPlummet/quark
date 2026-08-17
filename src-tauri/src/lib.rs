@@ -174,6 +174,7 @@ pub fn run() {
             commands::set_room_topic,
             commands::set_room_join_rule,
             commands::set_room_history_visibility,
+            commands::set_room_direct,
             // Debug viewer
             commands::get_room_state_events,
             commands::get_raw_event,

@@ -143,6 +143,7 @@ export {
   setRoomTopic,
   setRoomJoinRule,
   setRoomHistoryVisibility,
+  setRoomDirect,
   getRoomStateEvents,
   getRawEvent,
 } from "./room_settings.js";

@@ -12,7 +12,7 @@ import {
   setRoomHistoryVisibility,
 } from "../ipc/room_settings.js";
 import { DialogBase } from "./DialogBase.js";
-import { applyLocalRoomMeta } from "../app/actions.js";
+import { applyLocalRoomMeta, setRoomDirectness } from "../app/actions.js";
 
 type RoomSettingsTab = "general" | "access" | "permissions";
 
@@ -191,7 +191,7 @@ export class RoomSettingsDialog extends DialogBase {
 
     const infoSection = this._makeSection();
     infoSection.appendChild(this._makeTitle("Room Info"));
-    const addInfo = (label: string, value: string): void => {
+    const addInfo = (label: string, value: string): HTMLElement => {
       const row = document.createElement("div");
       row.className = "settings-dialog__row";
       const lbl = document.createElement("span");
@@ -203,11 +203,14 @@ export class RoomSettingsDialog extends DialogBase {
       row.appendChild(lbl);
       row.appendChild(val);
       infoSection.appendChild(row);
+      return val;
     };
     addInfo("room id", roomId);
     addInfo("members", String(room?.member_count ?? "?"));
     addInfo("encrypted", room?.is_encrypted ? "yes" : "no");
-    addInfo("direct", room?.is_direct ? "yes" : "no");
+    const directValueEl = addInfo("direct", room?.is_direct ? "yes" : "no");
+
+    this._buildConversionSection(roomId, room?.is_direct ?? false, directValueEl);
 
     const actions = this._makeSection();
     actions.className += " settings-dialog__actions";
@@ -226,6 +229,60 @@ export class RoomSettingsDialog extends DialogBase {
         applyLocalRoomMeta(roomId, { name: draft.name, topic: draft.topic });
       }
     }));
+  }
+
+  /**
+   * "Conversation Type" — the `:converttodm` / `:converttoroom` pair as a single
+   * contextual button, since only one of the two ever applies to a given room.
+   * Updates in place (label, hint, and the "direct" info row) rather than
+   * rebuilding the tab, so the button keeps focus across a conversion.
+   */
+  private _buildConversionSection(
+    roomId: string,
+    initialIsDirect: boolean,
+    directValueEl: HTMLElement,
+  ): void {
+    const section = this._makeSection();
+    section.appendChild(this._makeTitle("Conversation Type"));
+
+    let isDirect = initialIsDirect;
+
+    const hint = document.createElement("div");
+    hint.className = "settings-dialog__hint";
+    section.appendChild(hint);
+
+    const row = document.createElement("div");
+    row.className = "settings-dialog__row";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "settings-dialog__btn";
+    row.appendChild(btn);
+    section.appendChild(row);
+
+    const render = (): void => {
+      hint.textContent = isDirect
+        ? "Listed under Direct Messages. Converting back files it under Group Rooms."
+        : "Listed under Group Rooms. Converting marks it a DM with the other members.";
+      btn.textContent = isDirect ? "[convert to room]" : "[convert to dm]";
+      directValueEl.textContent = isDirect ? "yes" : "no";
+    };
+    render();
+
+    btn.addEventListener("click", async () => {
+      const target = !isDirect;
+      btn.disabled = true;
+      btn.textContent = target ? "[converting to dm...]" : "[converting to room...]";
+      try {
+        isDirect = await setRoomDirectness(roomId, target);
+        render();
+      } catch (err) {
+        btn.textContent = "[error]";
+        console.error("Room conversion error:", err);
+        setTimeout(render, 2000);
+      } finally {
+        btn.disabled = false;
+      }
+    });
   }
 
   // ── Access tab ────────────────────────────────────────────────────────────────
