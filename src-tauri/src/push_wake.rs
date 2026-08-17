@@ -254,6 +254,10 @@ struct Collector {
     /// one store lookup rather than one per event.
     read_markers:
         std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, Option<u64>>>>,
+    /// How many events this wake dropped as already read elsewhere. Reported
+    /// afterwards, so "the filter did something" is visible rather than
+    /// inferred from an absence.
+    suppressed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Collector {
@@ -272,6 +276,10 @@ impl Collector {
             .flatten()
             .and_then(|(_, receipt)| receipt.ts)
             .map(|ts| u64::from(ts.0));
+        // Logged because a marker that is always absent turns this filter into a
+        // permanent no-op, and a no-op filter is indistinguishable from a
+        // working one whenever nothing happens to be already-read.
+        tracing::debug!("Read marker for {room_id}: {marker:?}");
         self.read_markers.lock().await.insert(room_id, marker);
         marker
     }
@@ -323,12 +331,14 @@ async fn sync_and_collect(
     let client = background_client(data_dir).await?;
 
     let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let suppressed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     register_collectors(
         &client,
         Collector {
             config: std::sync::Arc::new(config),
             out: out.clone(),
             read_markers: Default::default(),
+            suppressed: suppressed.clone(),
         },
     );
 
@@ -345,6 +355,10 @@ async fn sync_and_collect(
     let (specs, dropped) = cap_wake_notifications(collected);
     if dropped > 0 {
         tracing::info!("Push wake capped at {MAX_WAKE_NOTIFICATIONS}; dropped {dropped} older");
+    }
+    let suppressed = suppressed.load(Ordering::Relaxed);
+    if suppressed > 0 {
+        tracing::info!("Push wake skipped {suppressed} event(s) already read elsewhere");
     }
     tracing::info!("Push wake rendered {} notification(s)", specs.len());
     Ok(specs)
@@ -405,6 +419,7 @@ async fn collect(
     // on another device. Delivered-to-this-phone and seen-by-this-person are
     // different things, and only the second earns silence.
     if already_seen(event.timestamp, collector.read_marker(room).await) {
+        collector.suppressed.fetch_add(1, Ordering::Relaxed);
         return;
     }
 
