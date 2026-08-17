@@ -259,6 +259,30 @@ pub async fn set_avatar(
 /// Maximum backoff duration on sync errors (2 minutes).
 const MAX_BACKOFF_SECS: u64 = 120;
 
+/// The sync filter used by **every** sync this app performs.
+///
+/// Shared rather than duplicated because a sync token is produced *under a
+/// filter*, and presenting that token with a different filter makes the server
+/// treat each room's timeline as limited and re-send a chunk of history. When
+/// the push path used `SyncSettings::default()` here, one wake pulled 274
+/// events spanning six months across every joined room — invisible to the user
+/// (the read-marker filter dropped them all) but paid for in battery and in
+/// load on a homeserver this app has overwhelmed before.
+///
+/// The timeline limit bounds a genuine initial sync; incremental syncs only
+/// carry new events regardless.
+pub fn sync_filter() -> FilterDefinition {
+    let mut timeline_filter = RoomEventFilter::default();
+    timeline_filter.limit = Some(UInt::from(20u32));
+
+    let mut room_filter = RoomFilter::default();
+    room_filter.timeline = timeline_filter;
+
+    let mut filter = FilterDefinition::default();
+    filter.room = room_filter;
+    filter
+}
+
 /// Start a background sync task. Returns immediately; sync runs in background.
 ///
 /// If a sync loop is already running (tracked via `SyncState`), it is aborted
@@ -338,22 +362,10 @@ pub async fn start_sync(
     }
 
     let handle = tokio::spawn(async move {
-        // Limit timeline events per room to avoid large initial-sync payloads.
-        // Incremental syncs only send new events regardless, so this only
-        // affects the first sync after login or a cache miss.
-        let mut timeline_filter = RoomEventFilter::default();
-        timeline_filter.limit = Some(UInt::from(20u32));
-
-        let mut room_filter = RoomFilter::default();
-        room_filter.timeline = timeline_filter;
-
-        let mut filter = FilterDefinition::default();
-        filter.room = room_filter;
-
         // Use Unavailable so Synapse does not write a presence update on every
         // sync poll — avoids lock contention on the presence table.
         let sync_settings = SyncSettings::default()
-            .filter(filter.into())
+            .filter(sync_filter().into())
             .set_presence(PresenceState::Unavailable);
         let mut was_connected = false;
         let mut backoff_secs: u64 = 1;

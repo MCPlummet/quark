@@ -258,6 +258,11 @@ struct Collector {
     /// afterwards, so "the filter did something" is visible rather than
     /// inferred from an absence.
     suppressed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Oldest and newest event timestamp this wake saw. A wake is supposed to
+    /// carry what arrived since the last one; a span of days means the sync is
+    /// re-delivering history, which costs the homeserver and the battery even
+    /// when the read-marker filter stops it reaching the user.
+    span: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>,
 }
 
 impl Collector {
@@ -332,6 +337,7 @@ async fn sync_and_collect(
 
     let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let suppressed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let span: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>> = Default::default();
     register_collectors(
         &client,
         Collector {
@@ -339,22 +345,54 @@ async fn sync_and_collect(
             out: out.clone(),
             read_markers: Default::default(),
             suppressed: suppressed.clone(),
+            span: span.clone(),
         },
     );
 
     // `timeout(0)` asks the homeserver to answer with whatever it has instead of
     // long-polling. The push already told us there is something there, and a
     // long poll on a woken device is battery spent waiting for nothing.
-    let settings = SyncSettings::default().timeout(std::time::Duration::from_secs(0));
-    client
+    //
+    // The filter must match the warm loop's exactly. A sync token is produced
+    // under a filter, and presenting it under a different one makes the server
+    // re-send a chunk of each room's history: syncing unfiltered here pulled 274
+    // events spanning six months, every wake that followed a warm sync.
+    let settings = SyncSettings::default()
+        .timeout(std::time::Duration::from_secs(0))
+        .filter(crate::matrix::client::sync_filter().into())
+        .set_presence(matrix_sdk::ruma::presence::PresenceState::Unavailable);
+    let response = client
         .sync_once(settings)
         .await
         .map_err(|e| format!("Push sync failed: {e}"))?;
+
+    // A room comes back `limited` when the server could not give a delta and
+    // resent a chunk of timeline instead. One or two is ordinary; all of them
+    // means this wake did an initial-sync's worth of work, which the
+    // read-marker filter would hide by dropping every event it produced.
+    let limited = response.rooms.join.values().filter(|r| r.timeline.limited).count();
+    if limited > 0 {
+        tracing::info!(
+            "Push wake: {limited} of {} joined rooms returned a limited timeline",
+            response.rooms.join.len()
+        );
+    }
 
     let collected = out.lock().map_err(|_| "Collector lock poisoned")?.clone();
     let (specs, dropped) = cap_wake_notifications(collected);
     if dropped > 0 {
         tracing::info!("Push wake capped at {MAX_WAKE_NOTIFICATIONS}; dropped {dropped} older");
+    }
+    if let Some((oldest, newest)) = span.lock().ok().and_then(|s| *s) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        tracing::info!(
+            "Push wake saw events spanning {}s, oldest {}s before now",
+            (newest.saturating_sub(oldest)) / 1000,
+            (now.saturating_sub(oldest)) / 1000,
+        );
     }
     let suppressed = suppressed.load(Ordering::Relaxed);
     if suppressed > 0 {
@@ -414,6 +452,14 @@ async fn collect(
 ) {
     let room_id = room.room_id().to_string();
     let is_own = room.own_user_id() == sender_id;
+
+    if let Ok(mut span) = collector.span.lock() {
+        let ts = event.timestamp;
+        *span = Some(match *span {
+            Some((lo, hi)) => (lo.min(ts), hi.max(ts)),
+            None => (ts, ts),
+        });
+    }
 
     // A wake syncs a batch, so most of what arrives may already have been read
     // on another device. Delivered-to-this-phone and seen-by-this-person are
