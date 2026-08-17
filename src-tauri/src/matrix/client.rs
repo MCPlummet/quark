@@ -259,6 +259,23 @@ pub async fn set_avatar(
 /// Maximum backoff duration on sync errors (2 minutes).
 const MAX_BACKOFF_SECS: u64 = 120;
 
+/// The sync token persisted in the state store, if any.
+///
+/// Read straight from the store rather than trusting the client's in-memory
+/// copy: when that copy is unset, `sync` and `sync_once` silently fall back to
+/// an *initial* sync. On the push path that was the difference between a 42-byte
+/// response and 2.6 MiB, and nothing about the outcome revealed which had
+/// happened.
+pub async fn stored_sync_token(client: &Client) -> Option<String> {
+    client
+        .store()
+        .get_kv_data(matrix_sdk_base::StateStoreDataKey::SyncToken)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.into_sync_token())
+}
+
 /// The sync filter used by **every** sync this app performs.
 ///
 /// Shared rather than duplicated because a sync token is produced *under a
@@ -364,9 +381,17 @@ pub async fn start_sync(
     let handle = tokio::spawn(async move {
         // Use Unavailable so Synapse does not write a presence update on every
         // sync poll — avoids lock contention on the presence table.
-        let sync_settings = SyncSettings::default()
+        let mut sync_settings = SyncSettings::default()
             .filter(sync_filter().into())
             .set_presence(PresenceState::Unavailable);
+        // Same reason as the push path: without an explicit token the first
+        // sync of a freshly-built client is a full initial sync. The loop then
+        // carries its own token forward, so this is paid once per launch —
+        // which is exactly often enough to matter on a homeserver this app has
+        // overloaded before.
+        if let Some(token) = stored_sync_token(&client).await {
+            sync_settings = sync_settings.token(token);
+        }
         let mut was_connected = false;
         let mut backoff_secs: u64 = 1;
 

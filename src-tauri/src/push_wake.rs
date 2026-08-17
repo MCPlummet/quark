@@ -357,10 +357,26 @@ async fn sync_and_collect(
     // under a filter, and presenting it under a different one makes the server
     // re-send a chunk of each room's history: syncing unfiltered here pulled 274
     // events spanning six months, every wake that followed a warm sync.
-    let settings = SyncSettings::default()
+    // Whether this wake resumes or starts over is worth an initial sync's
+    // traffic and is invisible from outside: the read-marker filter renders
+    // zero either way. Logged as a short fingerprint — the token is not a
+    // secret, but it is long and only its identity matters here.
+    let token_before = crate::matrix::client::stored_sync_token(&client).await;
+    tracing::info!("Push wake starting from sync token: {}", describe_token(&token_before));
+
+    let mut settings = SyncSettings::default()
         .timeout(std::time::Duration::from_secs(0))
         .filter(crate::matrix::client::sync_filter().into())
         .set_presence(matrix_sdk::ruma::presence::PresenceState::Unavailable);
+
+    // Pass the stored token explicitly rather than trusting the client to have
+    // loaded it into memory. `sync_once` falls back to an *initial* sync when
+    // its in-memory token is unset — a silent, 2.6 MiB difference that looks
+    // identical from the outside once the read-marker filter drops the result.
+    // The token on disk is the authoritative one; if it exists, say so.
+    if let Some(token) = token_before.clone() {
+        settings = settings.token(token);
+    }
     let response = client
         .sync_once(settings)
         .await
@@ -376,6 +392,17 @@ async fn sync_and_collect(
             "Push wake: {limited} of {} joined rooms returned a limited timeline",
             response.rooms.join.len()
         );
+    }
+
+    let token_after = crate::matrix::client::stored_sync_token(&client).await;
+    if token_before == token_after {
+        tracing::warn!(
+            "Push wake did not advance the stored sync token ({}) — the next wake \
+             will ask the homeserver for the same window again",
+            describe_token(&token_after)
+        );
+    } else {
+        tracing::info!("Push wake advanced the sync token to {}", describe_token(&token_after));
     }
 
     let collected = out.lock().map_err(|_| "Collector lock poisoned")?.clone();
@@ -400,6 +427,25 @@ async fn sync_and_collect(
     }
     tracing::info!("Push wake rendered {} notification(s)", specs.len());
     Ok(specs)
+}
+
+/// A short, stable fingerprint of a sync token for logs.
+///
+/// Hashed rather than truncated: a Synapse token's trailing characters are its
+/// least variable part, so a suffix makes two genuinely different tokens look
+/// identical — which is exactly the question this is asked to answer.
+fn describe_token(token: &Option<String>) -> String {
+    match token {
+        None => "<none>".to_owned(),
+        Some(token) => {
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for byte in token.as_bytes() {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            format!("#{hash:012x}")
+        }
+    }
 }
 
 /// Register the same event handlers the warm path uses, differing only in where

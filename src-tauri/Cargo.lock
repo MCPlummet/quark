@@ -4487,6 +4487,7 @@ dependencies = [
  "jni",
  "keyring",
  "matrix-sdk",
+ "matrix-sdk-base",
  "mime",
  "rand 0.8.5",
  "reqwest 0.12.28",

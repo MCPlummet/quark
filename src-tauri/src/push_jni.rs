@@ -277,8 +277,11 @@ mod logcat {
 ///
 /// `try_init` failing is the expected case in a warm process — the app already
 /// installed its own subscriber — so the result is deliberately discarded.
+/// Public so the app's own startup can install it too: `run()`'s subscriber
+/// writes to stdout, which Android discards, so without this the warm app
+/// produces no logs on a device at all.
 #[cfg(target_os = "android")]
-fn init_logging() {
+pub fn init_logging() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -287,7 +290,16 @@ fn init_logging() {
             .with_ansi(false)
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("quark=debug".parse().expect("static directive")),
+                    .add_directive("quark=debug".parse().expect("static directive"))
+                    // matrix-sdk explains its own sync decisions at info — including
+                    // "Got the same sync response twice", which is the difference
+                    // between a real incremental sync and a short-circuited one.
+                    // Without this the cold path only ever sees our side of it.
+                    .add_directive("matrix_sdk_base=info".parse().expect("static directive")),
+                    // For request-level detail (URIs, response sizes — how the
+                    // oversized-sync bug was found) set RUST_LOG to include
+                    // `matrix_sdk::http_client=debug`. Left off by default: it
+                    // logs a line per request, which is a lot on a sync loop.
             )
             .try_init();
     });
@@ -296,4 +308,4 @@ fn init_logging() {
 /// Off Android this entry point exists only to be type-checked; whatever
 /// subscriber the host already has is the right one.
 #[cfg(not(target_os = "android"))]
-fn init_logging() {}
+pub fn init_logging() {}

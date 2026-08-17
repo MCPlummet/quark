@@ -37,6 +37,12 @@ tiny_http = "0.12"
 # Allowlist sanitizer for remote `formatted_body` HTML (org.matrix.custom.html)
 # before it reaches the WebView. See matrix/html.rs.
 ammonia = "4"
+# Direct access to the state store's key/value API (StateStoreDataKey), which
+# matrix-sdk does not re-export. Needed to observe whether a push wake actually
+# resumed from a stored sync token or silently started over — a difference worth
+# an initial sync's traffic that is otherwise invisible. Cargo unifies this with
+# the copy matrix-sdk already depends on.
+matrix-sdk-base = "0.9"
 # Direct JNI, for the push path only (push_jni.rs). Everything else reaches
 # Kotlin through Tauri's mobile-plugin bridge, but a push wakes a process with
 # no Tauri in it, so `PushSyncService` calls Rust itself over a hand-written

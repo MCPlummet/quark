@@ -57,6 +57,12 @@ pub fn run() {
         );
     }
 
+    // Android discards stdout, so the ordinary fmt subscriber logs into the void
+    // there — the app has effectively had no logs on a device. Route them to
+    // logcat instead; everywhere else stdout is what you want.
+    #[cfg(target_os = "android")]
+    push_jni::init_logging();
+    #[cfg(not(target_os = "android"))]
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
