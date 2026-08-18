@@ -101,7 +101,7 @@ fn settle_pending_pushers(
             .and_then(|state| state.endpoint)
             .is_some();
         if crate::push::should_request_endpoint(config.push_enabled, has_endpoint) {
-            match crate::unifiedpush::subscribe(&app_handle) {
+            match crate::unifiedpush::subscribe_async(&app_handle).await {
                 Ok(true) => tracing::info!("Asked the distributor for a push endpoint"),
                 Ok(false) => tracing::info!("Push is on but no distributor is installed"),
                 Err(e) => tracing::warn!("Could not reach a distributor: {e}"),
@@ -2626,11 +2626,8 @@ pub async fn get_push_status(
         .map_err(|_| "Notification config lock poisoned")?
         .clone();
     let state = crate::push::load_push_state(&paths.config_dir);
-    Ok(crate::push::status(
-        &config,
-        state.as_ref(),
-        &crate::unifiedpush::transport_status(&app_handle),
-    ))
+    let transport = crate::unifiedpush::transport_status_async(&app_handle).await;
+    Ok(crate::push::status(&config, state.as_ref(), &transport))
 }
 
 /// Turn push on or off.
@@ -2678,8 +2675,18 @@ pub async fn set_push_enabled(
         }
         // Stop the transport too. Leaving the distributor subscribed would keep
         // waking the device for a feature the user just switched off.
-        if let Err(e) = crate::unifiedpush::unsubscribe(&app_handle) {
+        if let Err(e) = crate::unifiedpush::unsubscribe_async(&app_handle).await {
             tracing::warn!("Could not unsubscribe from the distributor: {e}");
+        }
+        // And forget the address, which is not something we can wait to be told
+        // about. `on_unregistered` would do it, but the call above ends with
+        // `removeDistributor`, so the callback has no distributor left to reach
+        // us through and never arrives. A stale endpoint on disk is worse than
+        // none: `should_request_endpoint` reads it as "already have one" and no
+        // later login ever asks the transport again, leaving push permanently
+        // dead with nothing in Settings admitting it.
+        if let Err(e) = crate::push::forget_endpoint(&paths.config_dir) {
+            tracing::warn!("Could not forget the push endpoint: {e}");
         }
         return Ok(());
     }
@@ -2688,7 +2695,7 @@ pub async fn set_push_enabled(
     // come back here — it arrives at PushEventService moments later and
     // registers itself — so a `true` return means "asked", not "receiving".
     // Settings reports the difference from `registered`.
-    match crate::unifiedpush::subscribe(&app_handle) {
+    match crate::unifiedpush::subscribe_async(&app_handle).await {
         Ok(true) => {}
         Ok(false) => {
             tracing::info!("Push enabled but no distributor is available");
@@ -2707,6 +2714,31 @@ pub async fn set_push_enabled(
         tracing::warn!("Could not register the stored push endpoint: {e}");
     }
     Ok(())
+}
+
+/// Commit to one named distributor and register with it.
+///
+/// The escape hatch for the case `set_push_enabled` cannot resolve on its own:
+/// with several distributors installed and none saved, the connector refuses to
+/// guess and registration stalls at `Waiting` with nothing the user can do.
+/// Settings lists what `get_push_status` reported and calls this with the one
+/// they picked.
+#[tauri::command]
+pub async fn select_push_distributor(
+    app_handle: AppHandle,
+    distributor: String,
+) -> Result<(), String> {
+    if distributor.trim().is_empty() {
+        return Err("No distributor named".to_string());
+    }
+    // A `false` here means the distributor declined rather than that anything
+    // broke — the endpoint arrives asynchronously at PushEventService either
+    // way, and `get_push_status` is what reports whether it did.
+    match crate::unifiedpush::select_distributor_async(&app_handle, &distributor).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("{distributor} would not accept the registration")),
+        Err(e) => Err(e),
+    }
 }
 
 /// Surface the Android battery-optimization exemption prompt (no-op elsewhere).

@@ -283,6 +283,7 @@ pub fn run() {
             commands::get_background_sync_state,
             commands::get_push_status,
             commands::set_push_enabled,
+            commands::select_push_distributor,
             commands::request_battery_exemption,
             // Shell
             commands::open_external_url,

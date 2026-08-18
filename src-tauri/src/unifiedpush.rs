@@ -185,6 +185,20 @@ mod android {
             .map_err(|e| e.to_string())
     }
 
+    #[derive(serde::Serialize)]
+    pub struct DistributorArg<'a> {
+        pub distributor: &'a str,
+    }
+
+    pub fn select_distributor(app: &AppHandle<Wry>, distributor: &str) -> Result<bool, String> {
+        handle(app)
+            .ok_or("UnifiedPush plugin not registered")?
+            .0
+            .run_mobile_plugin::<Registered>("selectDistributor", DistributorArg { distributor })
+            .map(|r| r.registered)
+            .map_err(|e| e.to_string())
+    }
+
     pub fn unregister(app: &AppHandle<Wry>) -> Result<(), String> {
         handle(app)
             .ok_or("UnifiedPush plugin not registered")?
@@ -224,6 +238,7 @@ pub fn transport_status(app: &tauri::AppHandle) -> crate::push::TransportStatus 
         crate::push::TransportStatus {
             available: !status.distributors.is_empty(),
             distributor: Some(status.saved).filter(|s| !s.is_empty()),
+            distributors: status.distributors,
         }
     }
     #[cfg(not(target_os = "android"))]
@@ -262,6 +277,93 @@ pub fn subscribe(app: &tauri::AppHandle) -> Result<bool, String> {
     {
         let _ = app;
         Ok(false)
+    }
+}
+
+/// Commit to one named transport and register with it.
+///
+/// `subscribe` asks the connector to pick, and it declines whenever the choice
+/// is genuinely ambiguous — several distributors installed and none saved. That
+/// refusal is correct (guessing which app should see this device's push traffic
+/// is not ours to make) but on its own it is a dead end: readiness reports
+/// `Waiting` forever with nothing the user can act on. This is the way out.
+pub fn select_distributor(app: &tauri::AppHandle, distributor: &str) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        android::select_distributor(app, distributor)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, distributor);
+        Ok(false)
+    }
+}
+
+// ─── Getting off the async runtime ───────────────────────────────────────────
+//
+// Everything above that reaches Kotlin does so through `run_mobile_plugin`,
+// which is a *synchronous* JNI round-trip. Two of these wait on a distributor
+// callback that a slow, broken or uninstalled-mid-call distributor may never
+// fire — and called straight from an async command that blocks a tokio worker
+// for as long as it takes, with the Settings toggle's promise never settling.
+//
+// The timeout does not cancel the JNI call; nothing can. It frees the caller
+// and abandons a blocking thread, which is the cheap half of the trade. A
+// wedged Settings dialog is the expensive half.
+
+const PLUGIN_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Run a plugin call off the async runtime, with a ceiling on how long the
+/// caller waits for it.
+async fn off_runtime<T: Send + 'static>(
+    app: &tauri::AppHandle,
+    what: &'static str,
+    call: impl FnOnce(&tauri::AppHandle) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let app = app.clone();
+    let task = tokio::task::spawn_blocking(move || call(&app));
+    match tokio::time::timeout(PLUGIN_CALL_TIMEOUT, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => Err(format!("The {what} call panicked: {e}")),
+        Err(_) => Err(format!("The {what} call did not answer within {PLUGIN_CALL_TIMEOUT:?}")),
+    }
+}
+
+/// [`subscribe`], off the async runtime. This is the one that waits on the
+/// distributor's callback, so it is the one that can hang.
+pub async fn subscribe_async(app: &tauri::AppHandle) -> Result<bool, String> {
+    off_runtime(app, "distributor registration", subscribe).await
+}
+
+/// [`unsubscribe`], off the async runtime.
+pub async fn unsubscribe_async(app: &tauri::AppHandle) -> Result<(), String> {
+    off_runtime(app, "distributor unregistration", unsubscribe).await
+}
+
+/// [`select_distributor`], off the async runtime.
+pub async fn select_distributor_async(
+    app: &tauri::AppHandle,
+    distributor: &str,
+) -> Result<bool, String> {
+    let distributor = distributor.to_owned();
+    off_runtime(app, "distributor selection", move |app| {
+        select_distributor(app, &distributor)
+    })
+    .await
+}
+
+/// [`transport_status`], off the async runtime.
+///
+/// Degrades to the default rather than erroring: a status probe that timed out
+/// is a thing we do not know, not a thing that failed, and `push::status` now
+/// treats a registered pusher as the better evidence anyway.
+pub async fn transport_status_async(app: &tauri::AppHandle) -> crate::push::TransportStatus {
+    match off_runtime(app, "distributor status", |app| Ok(transport_status(app))).await {
+        Ok(status) => status,
+        Err(e) => {
+            tracing::warn!("{e}");
+            crate::push::TransportStatus::default()
+        }
     }
 }
 

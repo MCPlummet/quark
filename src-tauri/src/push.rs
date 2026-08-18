@@ -117,6 +117,81 @@ impl PushRegistration {
 /// because none of it is meant to be hand-edited.
 pub const PUSH_STATE_FILENAME: &str = "push.json";
 
+/// Serialises the load → mutate → save cycles on `push.json`.
+///
+/// Every mutator here reads the whole file, changes one field and writes it
+/// back, so two of them interleaving loses whichever write lands first. That is
+/// not hypothetical on the cold path: a distributor can announce an endpoint
+/// (`store_endpoint`) while a push wake is registering a pusher, in a process
+/// with no Tauri and therefore nothing else serialising them. The field lost
+/// that way is usually `pending_delete`, which is the one record standing
+/// between a live pusher and nothing being able to delete it.
+///
+/// Never held across an `.await` — see [`persist`]. The lock covers file I/O
+/// only, so a poisoned lock is recoverable: the guarded section either wrote or
+/// it did not, and the next caller re-reads from disk either way.
+static STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Run a load → mutate → save cycle with no other writer interleaving.
+///
+/// Takes the whole cycle rather than the write alone, because a save that
+/// re-serialises state read before someone else's write is exactly the lost
+/// update this guards against.
+///
+/// Minting state on the way in, so this is for the paths that are *recording*
+/// something — an endpoint arriving, a delete falling due. Paths that only take
+/// things away want [`with_existing_state`], which does not bring a file into
+/// being just to remove a field from it.
+fn with_state<T>(
+    config_dir: &std::path::Path,
+    edit: impl FnOnce(&mut PushState) -> Option<T>,
+) -> Result<Option<T>, String> {
+    let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    edit_locked(config_dir, load_or_init_push_state(config_dir), edit)
+}
+
+/// As [`with_state`], but only if there is already state on disk.
+///
+/// The distinction is not cosmetic. Reporting or clearing push state must never
+/// be what *creates* `push.json` — otherwise every desktop install grows one
+/// from a path that had nothing to say, on a platform that can never push.
+fn with_existing_state<T>(
+    config_dir: &std::path::Path,
+    edit: impl FnOnce(&mut PushState) -> Option<T>,
+) -> Result<Option<T>, String> {
+    let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(state) = load_push_state(config_dir) else {
+        return Ok(None);
+    };
+    edit_locked(config_dir, state, edit)
+}
+
+/// The shared half of the two above. Caller holds `STATE_LOCK`.
+fn edit_locked<T>(
+    config_dir: &std::path::Path,
+    mut state: PushState,
+    edit: impl FnOnce(&mut PushState) -> Option<T>,
+) -> Result<Option<T>, String> {
+    let Some(outcome) = edit(&mut state) else {
+        return Ok(None); // Nothing changed — do not rewrite the file.
+    };
+    save_push_state_to(config_dir, &state)?;
+    Ok(Some(outcome))
+}
+
+/// Write a state the caller already holds, without interleaving another writer.
+///
+/// The async paths (`register`, `unregister`) cannot use [`with_state`]: their
+/// cycle spans homeserver round-trips, and holding a `std::sync::Mutex` across
+/// an `.await` risks deadlocking the runtime — worse than the race it fixes.
+/// They serialise their writes instead, which closes the window that matters
+/// (two processes writing the file at once) while leaving the wider
+/// read-modify-write race to the `WakeGuard` and the single-client rule.
+fn persist(config_dir: &std::path::Path, state: &PushState) -> Result<(), String> {
+    let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    save_push_state_to(config_dir, state)
+}
+
 /// A pusher we told the homeserver about, remembered so it can be deleted when
 /// the transport hands us a new address. Without this a rotated APNs token or
 /// a re-subscribed UnifiedPush endpoint leaves the old pusher on the
@@ -185,13 +260,14 @@ impl PushState {
 /// launch. Everything else in the state is preserved: an endpoint rotation is
 /// precisely when a stale pusher is owed a delete.
 pub fn store_endpoint(config_dir: &std::path::Path, endpoint: &str) -> Result<bool, String> {
-    let mut state = load_or_init_push_state(config_dir);
-    if state.endpoint.as_deref() == Some(endpoint) {
-        return Ok(false);
-    }
-    state.endpoint = Some(endpoint.to_owned());
-    save_push_state_to(config_dir, &state)?;
-    Ok(true)
+    let changed = with_state(config_dir, |state| {
+        if state.endpoint.as_deref() == Some(endpoint) {
+            return None;
+        }
+        state.endpoint = Some(endpoint.to_owned());
+        Some(())
+    })?;
+    Ok(changed.is_some())
 }
 
 /// Whether a session start should ask the transport for an address.
@@ -210,14 +286,10 @@ pub fn should_request_endpoint(push_enabled: bool, has_endpoint: bool) -> bool {
 /// Deliberately does not touch `pending_delete`: losing the address does not
 /// remove the pusher already pointing at it, and that delete is still owed.
 pub fn forget_endpoint(config_dir: &std::path::Path) -> Result<(), String> {
-    let Some(mut state) = load_push_state(config_dir) else {
-        return Ok(());
-    };
-    if state.endpoint.is_none() {
-        return Ok(());
-    }
-    state.endpoint = None;
-    save_push_state_to(config_dir, &state)
+    with_existing_state(config_dir, |state| {
+        state.endpoint.take().map(|_| ())
+    })
+    .map(|_| ())
 }
 
 /// Read push state without creating or modifying anything.
@@ -436,6 +508,11 @@ pub struct TransportStatus {
     pub available: bool,
     /// The transport in use, named for the UI. `None` when none is chosen.
     pub distributor: Option<String>,
+    /// Every transport installed on this device. Carried in full because the
+    /// interesting case is *more than one*: the connector refuses to guess
+    /// between them, so the only way out of that stall is to show the user the
+    /// list and let them say which.
+    pub distributors: Vec<String>,
 }
 
 /// How far along push actually is.
@@ -483,6 +560,9 @@ pub struct PushStatus {
     pub readiness: PushReadiness,
     /// The transport in use, named for the UI (e.g. the distributor).
     pub distributor: Option<String>,
+    /// Every transport installed on this device, so Settings can offer a choice
+    /// rather than reporting a stall the user cannot act on.
+    pub distributors: Vec<String>,
 }
 
 /// Derive the Settings snapshot from the user's preference and what we last
@@ -505,12 +585,20 @@ pub fn status(
         .then(|| state.and_then(|s| s.last.as_ref()))
         .flatten();
 
+    // A registered pusher is asked about first, and it outranks the transport
+    // probe on purpose. `transport_status` collapses *failure* and *absence*
+    // into the same `available: false` — the Kotlin `status` command catches
+    // its own Throwables and returns an empty list — so a binder hiccup or a
+    // plugin that is not managed yet would otherwise report a device happily
+    // receiving pushes as having no distributor installed, and send the user
+    // off to install one they already have. A live pusher is positive evidence
+    // the whole chain worked; nothing a probe says afterwards is better news.
     let readiness = if !config.push_enabled {
         PushReadiness::Off
-    } else if !transport_status.available {
-        PushReadiness::NoTransport
     } else if live.is_some() {
         PushReadiness::Ready
+    } else if !transport_status.available {
+        PushReadiness::NoTransport
     } else {
         PushReadiness::Waiting
     };
@@ -524,6 +612,7 @@ pub fn status(
         gateway_url: live.map(|p| p.gateway_url.clone()),
         readiness,
         distributor: transport_status.distributor.clone(),
+        distributors: transport_status.distributors.clone(),
     }
 }
 
@@ -592,7 +681,7 @@ pub async fn register(
     // the next attempt, which then registers again from a known state.
     state.last = None;
     state.pending_delete.push(next.clone());
-    save_push_state_to(config_dir, &state)?;
+    persist(config_dir, &state)?;
 
     let registration = PushRegistration {
         transport,
@@ -611,7 +700,7 @@ pub async fn register(
     // On failure the entry stays pending: a timeout can't tell us whether the
     // homeserver accepted the pusher, and deleting one that was never created
     // is a no-op — so owing the delete is the only answer that is safe both ways.
-    save_push_state_to(config_dir, &state)?;
+    persist(config_dir, &state)?;
     result.map_err(|e| format!("Failed to register pusher: {e}"))?;
     Ok(true)
 }
@@ -630,7 +719,7 @@ pub async fn unregister(
     mark_for_deletion(&mut state);
     // Persist the intent first: from here on status must not claim the device
     // is registered, whether or not the network agrees.
-    save_push_state_to(config_dir, &state)?;
+    persist(config_dir, &state)?;
 
     match drain_pending_deletes(client, config_dir, &mut state).await {
         0 => Ok(()),
@@ -645,11 +734,11 @@ pub async fn unregister(
 /// until [`retry_pending_deletes`] can pay it. Dropping it instead would leave
 /// the gateway holding a live address for a user who said no.
 pub fn defer_unregister(config_dir: &std::path::Path) -> Result<(), String> {
-    let Some(mut state) = load_push_state(config_dir) else {
-        return Ok(());
-    };
-    mark_for_deletion(&mut state);
-    save_push_state_to(config_dir, &state)
+    with_existing_state(config_dir, |state| {
+        mark_for_deletion(state);
+        Some(())
+    })
+    .map(|_| ())
 }
 
 /// Pay off deletes earlier attempts could not complete. Call once per
@@ -677,15 +766,15 @@ pub async fn retry_pending_deletes(
 /// them, and no token remains to delete them with — keeping the records would
 /// only convince the next login that it is already registered.
 pub fn forget_local_registrations(config_dir: &std::path::Path) {
-    let Some(mut state) = load_push_state(config_dir) else {
-        return;
-    };
-    if state.last.is_none() && state.pending_delete.is_empty() {
-        return;
-    }
-    state.last = None;
-    state.pending_delete.clear();
-    if let Err(e) = save_push_state_to(config_dir, &state) {
+    let cleared = with_existing_state(config_dir, |state| {
+        if state.last.is_none() && state.pending_delete.is_empty() {
+            return None;
+        }
+        state.last = None;
+        state.pending_delete.clear();
+        Some(())
+    });
+    if let Err(e) = cleared {
         tracing::warn!("Failed to clear push state: {e}");
     }
 }
@@ -717,7 +806,7 @@ async fn drain_pending_deletes(
     }
     let owed = still_owed.len();
     state.pending_delete = still_owed;
-    if let Err(e) = save_push_state_to(config_dir, state) {
+    if let Err(e) = persist(config_dir, state) {
         tracing::warn!("Failed to persist push state after deletions: {e}");
     }
     owed
@@ -1149,7 +1238,24 @@ mod readiness_tests {
         TransportStatus {
             available: any_installed,
             distributor: distributor.map(str::to_owned),
+            distributors: if any_installed { vec!["org.ntfy".to_owned()] } else { Vec::new() },
         }
+    }
+
+    /// A probe that failed is not the same claim as a transport that is absent,
+    /// and `transport_status` cannot tell them apart — the Kotlin `status`
+    /// command swallows its own errors and answers with an empty list. So a
+    /// device that is registered and receiving pushes must not be told it has
+    /// no distributor installed, which is what the old ordering did.
+    #[test]
+    fn a_registered_pusher_outranks_a_transport_probe_that_came_back_empty() {
+        let status = status(
+            &config(true),
+            Some(&state(Some("https://ntfy.example.org/up1"), true)),
+            &transport(None, false),
+        );
+        assert_eq!(status.readiness, PushReadiness::Ready);
+        assert!(status.registered);
     }
 
     /// The four states Settings has to tell apart. Collapsing any two of them
