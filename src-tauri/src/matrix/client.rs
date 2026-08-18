@@ -396,7 +396,18 @@ pub async fn start_sync(
         let mut backoff_secs: u64 = 1;
 
         loop {
-            match client.sync(sync_settings.clone()).await {
+            // `sync_with_callback` rather than `sync`, for the callback alone:
+            // it fires once per sync response, which is the only signal that
+            // this loop is *working* rather than merely alive. `sync` itself
+            // loops internally and returns only on error, so its `Ok` arm is
+            // reached about as often as never — reporting progress from there
+            // would leave the push path deferring to a loop that has been
+            // frozen or stuck in backoff for hours.
+            let progress = |_| async {
+                crate::push_wake::note_warm_sync_progress();
+                matrix_sdk::LoopCtrl::Continue
+            };
+            match client.sync_with_callback(sync_settings.clone(), progress).await {
                 Ok(_) => {
                     // Reset backoff on successful sync.
                     backoff_secs = 1;

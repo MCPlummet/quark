@@ -23,15 +23,17 @@ pub enum PushWake {
     /// hours, focus and mutes have not been consulted yet.
     Event { room_id: String, event_id: String },
     /// A counts-only push: the unread count moved with no event to show. Sent
-    /// when notifications are read elsewhere, so the answer is never "notify".
-    Clear,
+    /// when notifications are read elsewhere, so the answer is never "notify"
+    /// — but it is often "un-notify", which is why the room id is kept. A
+    /// homeserver that omits it leaves nothing actionable at all.
+    Clear { room_id: Option<String> },
 }
 
 /// Parse a push gateway notification body.
 ///
 /// `Err` is reserved for a payload that is not a notification at all — a
 /// distributor's own test message, or a truncated body. Anything shaped like a
-/// notification but missing the ids is a [`PushWake::Clear`]: the spec allows
+/// notification but missing the ids is a [`PushWake::Clear { room_id: None }`]: the spec allows
 /// exactly that, and erroring would log noise on every read receipt.
 pub fn parse_wake(payload: &str) -> Result<PushWake, String> {
     let value: serde_json::Value =
@@ -50,7 +52,13 @@ pub fn parse_wake(payload: &str) -> Result<PushWake, String> {
                 event_id: event_id.to_owned(),
             })
         }
-        _ => Ok(PushWake::Clear),
+        // Keeping the room id here is what lets a "read elsewhere" push clear
+        // this device's shade without a sync. Dropping it, as this used to,
+        // left notifications the user had already dealt with sitting there
+        // until they next opened the app.
+        _ => Ok(PushWake::Clear {
+            room_id: room_id.filter(|id| !id.is_empty()).map(str::to_owned),
+        }),
     }
 }
 
@@ -61,6 +69,10 @@ pub fn parse_wake(payload: &str) -> Result<PushWake, String> {
 pub enum WakePlan {
     /// Run a bounded sync and let the notification pipeline decide the rest.
     Sync,
+    /// Take down this room's notifications. The user read it somewhere else, so
+    /// the work is subtraction: no network, no store, no lease — just tell the
+    /// OS to drop what it is still showing.
+    Dismiss { room_id: String },
     /// Stand down. The reason is kept because these are the interesting lines
     /// in a bug report about push that "does nothing".
     Ignore(IgnoreReason),
@@ -72,10 +84,44 @@ pub enum IgnoreReason {
     /// opt-out we could not deliver to the homeserver is owed, not applied —
     /// so pushes keep arriving for a while afterwards.
     PushDisabled,
-    /// The app's own sync loop is live and will deliver this event itself.
+    /// The app's own sync loop is live *and recently made progress*, so it will
+    /// deliver this event itself. Liveness is half the claim: a loop that
+    /// exists but has been stalled in backoff (or frozen by Doze) is not going
+    /// to deliver anything, and standing down for it is how push comes to do
+    /// nothing in exactly the situation it was added for.
     WarmSyncRunning,
-    /// A counts-only push. There is nothing to render.
+    /// A counts-only push that named no room. Nothing to render and nothing to
+    /// dismiss against.
     NothingToShow,
+}
+
+/// What a wake produced, once it ran.
+///
+/// Two lists rather than one, because a wake can now *subtract*: a push saying
+/// the user read a room elsewhere is answered by taking that room's
+/// notifications down, and the only thing that still knows what is on screen
+/// after a cold push is the OS itself.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WakeOutcome {
+    /// Notifications to post.
+    pub specs: Vec<crate::notify::NotificationSpec>,
+    /// Room ids whose live notifications should be dismissed.
+    pub dismiss: Vec<String>,
+}
+
+impl WakeOutcome {
+    /// A wake that decided to do nothing at all.
+    fn nothing() -> Self {
+        Self::default()
+    }
+
+    fn posting(specs: Vec<crate::notify::NotificationSpec>) -> Self {
+        WakeOutcome { specs, dismiss: Vec::new() }
+    }
+
+    fn dismissing(room_id: String) -> Self {
+        WakeOutcome { specs: Vec::new(), dismiss: vec![room_id] }
+    }
 }
 
 /// Decide what to do about a wake-up, before any network or store access.
@@ -88,7 +134,14 @@ pub fn plan_wake(wake: &PushWake, push_enabled: bool, warm_sync_active: bool) ->
     }
     match wake {
         PushWake::Event { .. } => WakePlan::Sync,
-        PushWake::Clear => WakePlan::Ignore(IgnoreReason::NothingToShow),
+        // A dismissal is cheap enough that it could run unconditionally, but it
+        // stays behind the two gates above on purpose: a warm app clears its own
+        // notifications from the receipt it will see, and a user who switched
+        // push off should not have this device acting on pushes at all.
+        PushWake::Clear { room_id: Some(room_id) } => {
+            WakePlan::Dismiss { room_id: room_id.clone() }
+        }
+        PushWake::Clear { room_id: None } => WakePlan::Ignore(IgnoreReason::NothingToShow),
     }
 }
 
@@ -149,6 +202,15 @@ pub fn app_handle() -> Option<&'static tauri::AppHandle> {
     APP_HANDLE.get()
 }
 
+/// The one `Client` this process builds for itself, when there is no app to
+/// borrow one from.
+///
+/// `OnceCell` rather than a plain static because the requirement is not "cache
+/// the result" but "never build twice concurrently" — and `get_or_try_init`
+/// gives both. A failed init leaves the cell empty, so a wake that arrives
+/// before the session is readable does not poison every later one.
+static COLD_CLIENT: tokio::sync::OnceCell<matrix_sdk::Client> = tokio::sync::OnceCell::const_new();
+
 /// A Matrix client for work with no `AppHandle` behind it.
 ///
 /// Prefers the app's own client, and this is not an optimisation: two `Client`s
@@ -156,6 +218,14 @@ pub fn app_handle() -> Option<&'static tauri::AppHandle> {
 /// Olm-account corruption when an app and an extension share a store
 /// (element-ios#3817). Building a fresh one is safe only in the case this
 /// reaches it — no Tauri in the process, so no other client can exist.
+///
+/// The serialisation has to live *here* rather than at the call sites, because
+/// the callers do not share a lock: `run_wake` holds `WAKE_GUARD`, but
+/// `unifiedpush::register_stored_endpoint` and `unifiedpush::on_unregistered`
+/// are driven straight off distributor callbacks and hold nothing. A
+/// distributor that re-announces its endpoint while delivering a queued message
+/// — an ordinary wake-up, not an exotic race — would otherwise have two of
+/// these under construction over one store at once.
 pub async fn background_client(data_dir: &std::path::Path) -> Result<matrix_sdk::Client, String> {
     use tauri::Manager;
 
@@ -163,19 +233,28 @@ pub async fn background_client(data_dir: &std::path::Path) -> Result<matrix_sdk:
         let existing = app
             .try_state::<crate::matrix::client::MatrixState>()
             .and_then(|state| state.0.lock().ok().and_then(|guard| guard.clone()));
+        // Deliberately not cached: the app owns this client's lifetime, and
+        // holding a clone past a logout would keep a dead session alive in a
+        // static for the rest of the process.
         return existing.ok_or_else(|| "The app is running but not logged in".to_string());
     }
 
-    let session = crate::secrets::load_session(data_dir)?.ok_or("No stored session")?;
-    let store_key = crate::secrets::get_store_key(data_dir)?.ok_or("No store-encryption key")?;
-    let client = crate::matrix::client::build_client(
-        &session.homeserver_url,
-        data_dir.to_path_buf(),
-        &store_key,
-    )
-    .await?;
-    crate::matrix::client::restore_session_from_info(&client, &session).await?;
-    Ok(client)
+    COLD_CLIENT
+        .get_or_try_init(|| async {
+            let session = crate::secrets::load_session(data_dir)?.ok_or("No stored session")?;
+            let store_key =
+                crate::secrets::get_store_key(data_dir)?.ok_or("No store-encryption key")?;
+            let client = crate::matrix::client::build_client(
+                &session.homeserver_url,
+                data_dir.to_path_buf(),
+                &store_key,
+            )
+            .await?;
+            crate::matrix::client::restore_session_from_info(&client, &session).await?;
+            Ok::<_, String>(client)
+        })
+        .await
+        .cloned()
 }
 
 /// Set while the app's own sync loop is running.
@@ -186,14 +265,69 @@ pub async fn background_client(data_dir: &std::path::Path) -> Result<matrix_sdk:
 /// the homeserver.
 static WARM_SYNC_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// When the warm loop last completed a sync, in Unix ms. Zero means never.
+///
+/// A task handle existing is not the same claim as a sync happening, and on
+/// Android the two come apart routinely: the process stays resident while Doze
+/// freezes it and cuts its network, so the loop sits in backoff for minutes at
+/// a time. Without this clock a push arriving then stands down for a loop that
+/// cannot answer it — push declining to work in precisely the situation it was
+/// added to fix.
+static WARM_SYNC_PROGRESS_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// How stale the warm loop's last sync may be before push stops deferring to it.
+///
+/// Sits just under the loop's own `MAX_BACKOFF_SECS` (120 s): a loop that has
+/// gone this long without a completed sync is either at the top of its backoff
+/// ladder or frozen, and in both cases it is not about to deliver this event.
+/// Erring long is the safer direction — the cost of waiting too eagerly is a
+/// missed notification, while the cost of not waiting is a second sync against
+/// a homeserver this app has overwhelmed before.
+const WARM_SYNC_LIVENESS_MS: u64 = 90_000;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Record whether the long-lived sync loop is running. Called by `start_sync`
 /// and by the paths that abort it.
+///
+/// Starting also stamps the progress clock, so a loop that has just been spun
+/// up counts as healthy through its first window rather than being written off
+/// before it has had the chance to complete a sync.
 pub fn set_warm_sync_active(active: bool) {
+    WARM_SYNC_PROGRESS_MS.store(if active { now_ms() } else { 0 }, Ordering::Release);
     WARM_SYNC_ACTIVE.store(active, Ordering::Release);
 }
 
+/// Note that the warm loop completed a sync. Called from the loop's success arm.
+pub fn note_warm_sync_progress() {
+    WARM_SYNC_PROGRESS_MS.store(now_ms(), Ordering::Release);
+}
+
+/// Whether the warm loop is both running and recently alive.
+///
+/// Split out as a pure function because the interesting cases — a stalled loop,
+/// a clock that jumped backwards — are the ones that would otherwise need a
+/// frozen phone to reproduce.
+pub fn warm_sync_is_live(running: bool, last_progress_ms: u64, now_ms: u64) -> bool {
+    // `saturating_sub` rather than a subtraction: `SystemTime` is not monotonic
+    // and a device that corrects its clock backwards (NTP after a cold boot, a
+    // timezone-confused RTC) would otherwise underflow into "wildly stale" and
+    // silently stop deferring to a perfectly healthy loop.
+    running && now_ms.saturating_sub(last_progress_ms) <= WARM_SYNC_LIVENESS_MS
+}
+
 pub fn warm_sync_active() -> bool {
-    WARM_SYNC_ACTIVE.load(Ordering::Acquire)
+    warm_sync_is_live(
+        WARM_SYNC_ACTIVE.load(Ordering::Acquire),
+        WARM_SYNC_PROGRESS_MS.load(Ordering::Acquire),
+        now_ms(),
+    )
 }
 
 /// The one wake allowed to sync at a time, for the life of the process.
@@ -203,10 +337,13 @@ pub static WAKE_GUARD: WakeGuard = WakeGuard::new();
 
 /// Wall-clock ceiling for the whole wake, from cold client to rendered specs.
 ///
-/// Android's `shortService` allows about 30 s before it force-stops the service,
-/// and being force-stopped mid-sync is worse than returning nothing: it can
-/// interrupt a store write. Finish early and leave headroom for Kotlin to post
-/// what we found.
+/// Not a race against Android: a `shortService` gets roughly three minutes
+/// before `onTimeout`, so there is no cliff here to duck under. The budget is
+/// about what a wake is *for*. Past twenty seconds a sync has stopped being a
+/// wake-up and become a session — radio held open, battery spent — for a
+/// notification whose whole value was arriving promptly. Stopping also leaves
+/// the service ample headroom to post what we found, and bounds how long a
+/// hung homeserver can hold the wake lease shut against the pushes behind it.
 const WAKE_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Most notifications one wake will post.
@@ -265,8 +402,28 @@ struct Collector {
     span: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>,
 }
 
+/// The latest of several candidate marker timestamps.
+///
+/// Pure so the precedence is testable without a `Room`: the receipts differ in
+/// *which* are present, never in what a later timestamp means, and picking the
+/// newest is right for every combination.
+fn latest_marker(candidates: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
+    candidates.into_iter().flatten().max()
+}
+
 impl Collector {
     /// When the user last read this room, on any device.
+    ///
+    /// Reads all four receipts — public and private, unthreaded and main — and
+    /// takes the newest. The private one is the load-bearing half: `mark_room_read`
+    /// sends `Read` only when the `send_read_receipts` preference is on, while
+    /// `ReadPrivate` goes out unconditionally. Consulting the public receipt
+    /// alone made this filter a permanent no-op for anyone who had turned that
+    /// preference off, so a cold wake re-notified their whole synced batch —
+    /// silently, since a filter that never fires looks exactly like a filter
+    /// with nothing to do. `Main` is checked alongside `Unthreaded` for the same
+    /// reason `rooms.rs` does it: clients disagree about which a room-level read
+    /// belongs in, and missing the one in use costs the whole signal.
     async fn read_marker(&self, room: &matrix_sdk::Room) -> Option<u64> {
         use matrix_sdk::ruma::events::receipt::{ReceiptThread, ReceiptType};
 
@@ -274,13 +431,25 @@ impl Collector {
         if let Some(cached) = self.read_markers.lock().await.get(&room_id) {
             return *cached;
         }
-        let marker = room
-            .load_user_receipt(ReceiptType::Read, ReceiptThread::Unthreaded, room.own_user_id())
-            .await
-            .ok()
-            .flatten()
-            .and_then(|(_, receipt)| receipt.ts)
-            .map(|ts| u64::from(ts.0));
+
+        let mut found = Vec::with_capacity(4);
+        for (receipt_type, thread) in [
+            (ReceiptType::Read, ReceiptThread::Unthreaded),
+            (ReceiptType::Read, ReceiptThread::Main),
+            (ReceiptType::ReadPrivate, ReceiptThread::Unthreaded),
+            (ReceiptType::ReadPrivate, ReceiptThread::Main),
+        ] {
+            found.push(
+                room.load_user_receipt(receipt_type, thread, room.own_user_id())
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|(_, receipt)| receipt.ts)
+                    .map(|ts| u64::from(ts.0)),
+            );
+        }
+        let marker = latest_marker(found);
+
         // Logged because a marker that is always absent turns this filter into a
         // permanent no-op, and a no-op filter is indistinguishable from a
         // working one whenever nothing happens to be already-read.
@@ -305,13 +474,19 @@ impl Collector {
 pub async fn run_wake(
     data_dir: &std::path::Path,
     wake: &PushWake,
-) -> Result<Vec<crate::notify::NotificationSpec>, String> {
+) -> Result<WakeOutcome, String> {
     let config = crate::notifications::load_notification_config_from(data_dir);
     match plan_wake(wake, config.push_enabled, warm_sync_active()) {
         WakePlan::Sync => {}
+        // Answered without a client, a lease or a byte of network: the whole
+        // point of recognising this push is that it costs nothing to honour.
+        WakePlan::Dismiss { room_id } => {
+            tracing::info!("Push wake dismissing notifications for {room_id}");
+            return Ok(WakeOutcome::dismissing(room_id));
+        }
         WakePlan::Ignore(reason) => {
             tracing::info!("Push wake ignored: {reason:?}");
-            return Ok(Vec::new());
+            return Ok(WakeOutcome::nothing());
         }
     }
 
@@ -319,12 +494,13 @@ pub async fn run_wake(
     // lease covers this event too.
     let Some(_lease) = WAKE_GUARD.try_enter() else {
         tracing::info!("Push wake coalesced into the sync already running");
-        return Ok(Vec::new());
+        return Ok(WakeOutcome::nothing());
     };
 
     tokio::time::timeout(WAKE_BUDGET, sync_and_collect(data_dir, config))
         .await
         .map_err(|_| "Push sync exceeded its time budget".to_string())?
+        .map(WakeOutcome::posting)
 }
 
 async fn sync_and_collect(
@@ -338,7 +514,9 @@ async fn sync_and_collect(
     let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let suppressed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let span: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>> = Default::default();
-    register_collectors(
+    // Held until this function returns, at which point the handlers come off
+    // the client again — see `register_collectors`.
+    let _collectors = register_collectors(
         &client,
         Collector {
             config: std::sync::Arc::new(config),
@@ -450,7 +628,20 @@ fn describe_token(token: &Option<String>) -> String {
 
 /// Register the same event handlers the warm path uses, differing only in where
 /// the rendered spec goes.
-fn register_collectors(client: &matrix_sdk::Client, collector: Collector) {
+///
+/// Returns drop guards, and they are load-bearing rather than tidy. The client
+/// this registers against is not always ours to scribble on: `background_client`
+/// hands back the *running app's* `Client` whenever there is one, and the cold
+/// client is now reused for the life of the process. A handler left behind on
+/// either would go on racing `events::maybe_notify` for `claim_notification`
+/// long after this wake ended — and whenever the collector won that race the
+/// user would get no notification at all, because the spec it claimed is
+/// collected into a `Vec` nobody is reading any more.
+#[must_use = "dropping the guards immediately unregisters the handlers"]
+fn register_collectors(
+    client: &matrix_sdk::Client,
+    collector: Collector,
+) -> Vec<matrix_sdk::event_handler::EventHandlerDropGuard> {
     use matrix_sdk::{
         event_handler::Ctx,
         ruma::events::{
@@ -461,7 +652,7 @@ fn register_collectors(client: &matrix_sdk::Client, collector: Collector) {
 
     client.add_event_handler_context(collector);
 
-    client.add_event_handler(
+    let message = client.add_event_handler(
         |ev: SyncRoomMessageEvent,
          room: Room,
          Ctx(collector): Ctx<Collector>,
@@ -473,7 +664,7 @@ fn register_collectors(client: &matrix_sdk::Client, collector: Collector) {
         },
     );
 
-    client.add_event_handler(
+    let sticker = client.add_event_handler(
         |ev: SyncMessageLikeEvent<StickerEventContent>,
          room: Room,
          Ctx(collector): Ctx<Collector>,
@@ -484,6 +675,11 @@ fn register_collectors(client: &matrix_sdk::Client, collector: Collector) {
             collect(&collector, &room, &sender_id, &event, &push_actions).await;
         },
     );
+
+    vec![
+        client.event_handler_drop_guard(message),
+        client.event_handler_drop_guard(sticker),
+    ]
 }
 
 /// The cold-path twin of `events::maybe_notify`: identical inputs into
@@ -626,13 +822,16 @@ mod tests {
                 "devices": [{ "app_id": "tel.quark.app.android", "pushkey": "https://ntfy.sh/x" }]
             }
         }"#;
-        assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear);
+        assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear { room_id: None });
     }
 
     #[test]
     fn a_room_without_an_event_is_a_clear() {
         let payload = r#"{"notification": {"room_id": "!a:x", "counts": {"unread": 0}}}"#;
-        assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear);
+        assert_eq!(
+            parse_wake(payload).expect("valid notification"),
+            PushWake::Clear { room_id: Some("!a:x".to_owned()) }
+        );
     }
 
     #[test]
@@ -667,7 +866,7 @@ mod tests {
     #[test]
     fn empty_ids_are_treated_as_absent() {
         let payload = r#"{"notification": {"room_id": "", "event_id": ""}}"#;
-        assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear);
+        assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear { room_id: None });
     }
 
     #[test]
@@ -703,10 +902,61 @@ mod tests {
     }
 
     #[test]
-    fn a_clear_push_does_not_wake_the_network() {
-        // Nothing to show, and no room id to dismiss against — spending a sync
-        // on it would burn battery for a push whose whole meaning is "less".
-        assert_eq!(plan_wake(&PushWake::Clear, true, false), WakePlan::Ignore(IgnoreReason::NothingToShow));
+    fn a_clear_push_with_no_room_does_not_wake_the_network() {
+        // Nothing to show and nothing to dismiss against: spending a sync on it
+        // would burn battery for a push whose whole meaning is "less".
+        assert_eq!(
+            plan_wake(&PushWake::Clear { room_id: None }, true, false),
+            WakePlan::Ignore(IgnoreReason::NothingToShow)
+        );
+    }
+
+    #[test]
+    fn a_clear_push_naming_a_room_dismisses_it() {
+        // The counts-only push a homeserver sends when the room is read on
+        // another device. It carries a room id, and taking the notifications
+        // down is both the right answer and a free one — no sync involved.
+        assert_eq!(
+            plan_wake(&PushWake::Clear { room_id: Some("!a:x".into()) }, true, false),
+            WakePlan::Dismiss { room_id: "!a:x".to_owned() }
+        );
+    }
+
+    #[test]
+    fn a_dismissal_still_defers_to_a_live_warm_app() {
+        // Cheap enough to run unconditionally, but a warm app clears its own
+        // notifications from the receipt it is about to see, and a user who
+        // switched push off should not have this device acting on pushes.
+        let wake = PushWake::Clear { room_id: Some("!a:x".into()) };
+        assert_eq!(plan_wake(&wake, true, true), WakePlan::Ignore(IgnoreReason::WarmSyncRunning));
+        assert_eq!(plan_wake(&wake, false, false), WakePlan::Ignore(IgnoreReason::PushDisabled));
+    }
+
+    #[test]
+    fn the_newest_read_marker_wins_whichever_receipt_carried_it() {
+        // The public receipt is optional — `send_read_receipts` gates it — so a
+        // filter consulting it alone silently does nothing for anyone who turned
+        // that off. Any one of the four present is enough, and the newest is
+        // always the right answer.
+        assert_eq!(latest_marker([None, Some(10), None, Some(40)]), Some(40));
+        assert_eq!(latest_marker([Some(40), Some(10)]), Some(40));
+        assert_eq!(latest_marker([None, Some(7)]), Some(7));
+        assert_eq!(latest_marker([None, None, None, None]), None);
+    }
+
+    #[test]
+    fn a_sync_loop_that_stopped_progressing_no_longer_holds_push_off() {
+        // The failure this exists to stop: an Android process kept resident but
+        // frozen by Doze still owns a sync task, so the old "is there a loop?"
+        // check declined every push while the loop it deferred to was stalled
+        // in backoff and could not deliver anything.
+        let now = 1_000_000;
+        assert!(warm_sync_is_live(true, now, now), "a loop syncing right now is live");
+        assert!(warm_sync_is_live(true, now - 89_000, now), "inside the window is live");
+        assert!(!warm_sync_is_live(true, now - 91_000, now), "past the window is not");
+        assert!(!warm_sync_is_live(false, now, now), "no loop is never live");
+        // A clock corrected backwards must not read as wildly stale.
+        assert!(warm_sync_is_live(true, now + 5_000, now), "a backwards clock stays live");
     }
 
     #[test]

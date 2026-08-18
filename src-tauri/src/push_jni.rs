@@ -19,19 +19,25 @@ use jni::objects::{JObject, JString};
 use jni::sys::jstring;
 use jni::JNIEnv;
 
-/// What `nativeHandlePush` hands back. Kotlin posts `specs` and logs `error`;
-/// both being empty/absent is the ordinary "nothing to show" outcome.
+/// What `nativeHandlePush` hands back. Kotlin posts `specs`, takes down the
+/// notifications for every room in `dismiss`, and logs `error`; all three being
+/// empty/absent is the ordinary "nothing to do" outcome.
+///
+/// `dismiss` is omitted rather than sent empty, which is the common case — the
+/// Kotlin side reads it with `optJSONArray` and treats absent as none.
 #[derive(serde::Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct PushResult {
     specs: Vec<crate::notify::NotificationSpec>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    dismiss: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
 impl PushResult {
     fn failed(error: impl Into<String>) -> Self {
-        PushResult { specs: Vec::new(), error: Some(error.into()) }
+        PushResult { error: Some(error.into()), ..Default::default() }
     }
 }
 
@@ -47,8 +53,8 @@ impl PushResult {
 /// mangle it to `…_00024Companion_…` and fail at call time, not at build time.
 ///
 /// Returns a JSON `PushResult` string. Errors travel in the payload rather than
-/// as a Java exception because the caller has ~30 s to live and nothing useful
-/// to do with a throwable except log it.
+/// as a Java exception because the caller is a short-lived service with nothing
+/// useful to do with a throwable except log it.
 #[no_mangle]
 pub extern "system" fn Java_tel_quark_app_PushNative_nativeHandlePush<'local>(
     mut env: JNIEnv<'local>,
@@ -114,7 +120,7 @@ pub extern "system" fn Java_tel_quark_app_PushNative_nativeSelfTest<'local>(
     let result = match outcome {
         Ok(Ok(spec)) => {
             tracing::info!("Push self-test rendered: {}", spec.title);
-            PushResult { specs: vec![spec], error: None }
+            PushResult { specs: vec![spec], ..Default::default() }
         }
         Ok(Err(e)) => PushResult::failed(e),
         Err(_) => PushResult::failed("Push self-test panicked"),
@@ -222,7 +228,9 @@ fn handle_push(payload: &str, data_dir: &std::path::Path) -> PushResult {
     };
 
     match runtime.block_on(crate::push_wake::run_wake(data_dir, &wake)) {
-        Ok(specs) => PushResult { specs, error: None },
+        Ok(outcome) => {
+            PushResult { specs: outcome.specs, dismiss: outcome.dismiss, error: None }
+        }
         Err(e) => PushResult::failed(e),
     }
 }
