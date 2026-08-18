@@ -10,8 +10,8 @@ import org.json.JSONObject
  *
  * Its own class rather than a method on [PushSyncService] because Android can
  * refuse to start a foreground service from the background — when it does,
- * [PushReceiver] has to make this same call itself. Both callers need the
- * binding, so it belongs to neither.
+ * [PushEventService] falls back to making this same call itself. Both callers
+ * need the binding, so it belongs to neither.
  *
  * A Kotlin `object`'s members are instance methods on the singleton, which
  * keeps the JNI symbol at the plain `Java_tel_quark_app_PushNative_…` name. A
@@ -19,6 +19,14 @@ import org.json.JSONObject
  */
 object PushNative {
   private const val TAG = "quark"
+
+  /**
+   * Nothing to show, nothing to take away — the answer to every early return.
+   *
+   * Shared rather than rebuilt at each `return`, so the "we could not even ask
+   * Rust" paths cannot drift apart from one another.
+   */
+  private val NOTHING = PushResult(emptyList(), emptyList())
 
   /**
    * `TauriActivity` loads the library on the warm path, but a push can wake a
@@ -36,13 +44,13 @@ object PushNative {
   }
 
   /**
-   * Run the push through Rust and return the notifications it decided to show.
+   * Run the push through Rust and return what it decided the push means.
    *
    * Blocking, and can take seconds — it may build a Matrix client and sync.
    * Never call it on the main thread.
    */
-  fun handle(context: Context, payload: String): List<PushSpec> {
-    if (!libraryLoaded) return emptyList()
+  fun handle(context: Context, payload: String): PushResult {
+    if (!libraryLoaded) return NOTHING
 
     // Rust resolves the store, the session and notifications.toml under this
     // one path: Tauri's app_data_dir() and app_config_dir() both resolve to
@@ -52,17 +60,20 @@ object PushNative {
     } catch (e: Throwable) {
       Log.e(TAG, "Push handler failed", e)
       null
-    } ?: return emptyList()
+    } ?: return NOTHING
 
     return try {
       val result = JSONObject(json)
       result.optString("error").takeIf { it.isNotEmpty() }?.let {
         Log.w(TAG, "Push handler reported: $it")
       }
-      parseSpecs(result.optJSONArray("specs"))
+      PushResult(
+        specs = parseSpecs(result.optJSONArray("specs")),
+        dismiss = parseDismiss(result.optJSONArray("dismiss")),
+      )
     } catch (e: Throwable) {
       Log.e(TAG, "Unreadable push result", e)
-      emptyList()
+      NOTHING
     }
   }
 
@@ -90,6 +101,25 @@ object PushNative {
   }
 
   /**
+   * Room ids the push says are already read elsewhere.
+   *
+   * Rust omits the key entirely when it has nothing to dismiss, which is the
+   * common case, so an absent array has to mean "none" rather than "malformed".
+   * Blank entries are skipped for the same reason: a room id that cannot
+   * identify a room would match every notification with no group set.
+   */
+  private fun parseDismiss(array: JSONArray?): List<String> {
+    if (array == null) return emptyList()
+    val rooms = ArrayList<String>(array.length())
+    for (i in 0 until array.length()) {
+      val room = array.optString(i)
+      if (room.isNullOrBlank()) continue
+      rooms.add(room)
+    }
+    return rooms
+  }
+
+  /**
    * Render a notification from a synthetic event — no session, no network.
    *
    * Present only in debug builds (the Rust symbol is gated on
@@ -97,25 +127,28 @@ object PushNative {
    * will resolve. Used by PushDebugReceiver to exercise the render-and-post
    * half of the cold path on a device that has never logged in.
    */
-  fun selfTest(context: Context): List<PushSpec> {
-    if (!libraryLoaded) return emptyList()
+  fun selfTest(context: Context): PushResult {
+    if (!libraryLoaded) return NOTHING
     val json = try {
       nativeSelfTest(context.dataDir.absolutePath)
     } catch (e: UnsatisfiedLinkError) {
       Log.e(TAG, "nativeSelfTest is missing — this is not a debug build", e)
-      return emptyList()
+      return NOTHING
     } catch (e: Throwable) {
       Log.e(TAG, "Push self-test failed", e)
-      return emptyList()
-    } ?: return emptyList()
+      return NOTHING
+    } ?: return NOTHING
 
     return try {
       val result = JSONObject(json)
       result.optString("error").takeIf { it.isNotEmpty() }?.let { Log.w(TAG, "Self-test: $it") }
-      parseSpecs(result.optJSONArray("specs"))
+      PushResult(
+        specs = parseSpecs(result.optJSONArray("specs")),
+        dismiss = parseDismiss(result.optJSONArray("dismiss")),
+      )
     } catch (e: Throwable) {
       Log.e(TAG, "Unreadable self-test result", e)
-      emptyList()
+      NOTHING
     }
   }
 
@@ -152,6 +185,17 @@ object PushNative {
   /** Debug builds only — absent from release, hence the UnsatisfiedLinkError catch. */
   private external fun nativeSelfTest(dataDir: String): String?
 }
+
+/**
+ * Both halves of what one push can mean.
+ *
+ * A push is not always something to add. A counts-only payload naming a room is
+ * the homeserver saying the user read that room on another device, and Rust
+ * answers it with a dismissal instead of a sync — so a single call has to be
+ * able to return notifications, dismissals, or neither. `dismiss` is absent
+ * from the wire whenever it is empty, which is nearly always.
+ */
+data class PushResult(val specs: List<PushSpec>, val dismiss: List<String>)
 
 /**
  * A rendered notification, decided entirely on the Rust side by the same

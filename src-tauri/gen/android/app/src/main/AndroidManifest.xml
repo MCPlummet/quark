@@ -77,7 +77,8 @@
         <!-- Runs a single push to completion. shortService rather than
              specialUse: it lives for one sync and Android may stop it after
              ~3 minutes, which is exactly the contract we want. Not exported —
-             only PushReceiver, in this app, ever starts it. -->
+             the only thing that starts it is PushEventService, inside this app
+             (plus PushDebugReceiver in debug builds). -->
         <service
             android:name=".PushSyncService"
             android:exported="false"

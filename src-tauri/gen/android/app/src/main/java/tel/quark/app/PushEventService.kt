@@ -88,7 +88,9 @@ class PushEventService : PushService() {
   private fun handleInline(payload: String) {
     thread(name = "quark-push-inline") {
       try {
-        PushNotifier.post(applicationContext, PushNative.handle(applicationContext, payload))
+        val result = PushNative.handle(applicationContext, payload)
+        PushNotifier.post(applicationContext, result.specs)
+        result.dismiss.forEach { PushNotifier.cancelRoom(applicationContext, it) }
       } catch (e: Throwable) {
         Log.e(TAG, "Inline push handling failed", e)
       }

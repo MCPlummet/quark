@@ -32,13 +32,36 @@ class SyncForegroundService : Service() {
     @Volatile
     var isRunning: Boolean = false
       private set
+
+    /**
+     * The channel is normally created by the Rust side via the notification
+     * plugin (init_notification_channels), but a foreground service must be
+     * able to post its required notification even when it starts first — which
+     * a push wake does routinely, in a process the webview has never run in.
+     * Idempotent, so calling it after Rust already did costs nothing.
+     *
+     * On the companion rather than in each service because [PushSyncService]
+     * posts its placeholder on this very channel. Two copies of the definition
+     * would sooner or later disagree about the name or the importance the user
+     * sees, and only one of them would win — whichever service started first.
+     */
+    fun ensureChannel(context: Context) {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return // channels exist since API 26
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+        manager.createNotificationChannel(
+          NotificationChannel(CHANNEL_ID, "Background sync", NotificationManager.IMPORTANCE_MIN)
+            .apply { description = "Keeps the connection to your homeserver alive" }
+        )
+      }
+    }
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onCreate() {
     super.onCreate()
-    ensureChannel()
+    ensureChannel(this)
     isRunning = true
   }
 
@@ -64,22 +87,6 @@ class SyncForegroundService : Service() {
 
   // Keep running when the user swipes the task away — that's the entire point.
   override fun onTaskRemoved(rootIntent: Intent?) {}
-
-  /**
-   * The channel is normally created by the Rust side via the notification
-   * plugin (init_notification_channels), but the service must be able to post
-   * its required foreground notification even if it starts first. Idempotent.
-   */
-  private fun ensureChannel() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return // channels exist since API 26
-    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-      manager.createNotificationChannel(
-        NotificationChannel(CHANNEL_ID, "Background sync", NotificationManager.IMPORTANCE_MIN)
-          .apply { description = "Keeps the connection to your homeserver alive" }
-      )
-    }
-  }
 
   private fun buildNotification(): android.app.Notification {
     val launchIntent = packageManager.getLaunchIntentForPackage(packageName)

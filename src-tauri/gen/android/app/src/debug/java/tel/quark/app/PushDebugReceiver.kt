@@ -65,7 +65,10 @@ class PushDebugReceiver : BroadcastReceiver() {
       val pending = goAsync()
       Thread {
         try {
-          PushNotifier.post(context.applicationContext, PushNative.handle(context.applicationContext, payload))
+          val app = context.applicationContext
+          val result = PushNative.handle(app, payload)
+          PushNotifier.post(app, result.specs)
+          result.dismiss.forEach { PushNotifier.cancelRoom(app, it) }
         } catch (e: Throwable) {
           Log.e("quark", "Inline push handling failed", e)
         } finally {
@@ -85,13 +88,16 @@ class PushDebugReceiver : BroadcastReceiver() {
     Thread {
       try {
         val app = context.applicationContext
-        val specs = PushNative.selfTest(app)
-        if (specs.isEmpty()) {
+        val result = PushNative.selfTest(app)
+        if (result.specs.isEmpty()) {
           Log.w("quark", "Self-test produced no notification — see the reason logged above")
         } else {
-          PushNotifier.post(app, specs)
-          Log.i("quark", "Self-test posted ${specs.size} notification(s)")
+          PushNotifier.post(app, result.specs)
+          Log.i("quark", "Self-test posted ${result.specs.size} notification(s)")
         }
+        // The synthetic event never asks for a dismissal, but honour one if it
+        // ever does: half a contract exercised is a harness that lies.
+        result.dismiss.forEach { PushNotifier.cancelRoom(app, it) }
       } catch (e: Throwable) {
         Log.e("quark", "Self-test failed", e)
       } finally {

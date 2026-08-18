@@ -83,13 +83,45 @@ class UnifiedPushPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   /**
-   * Stop receiving pushes.
+   * Adopt the distributor the user picked by name.
    *
-   * Only tells the distributor. Removing the pusher from the homeserver is
-   * Rust's job and happens either from the resulting `onUnregistered` or
-   * directly from the Settings command — whichever gets there first, since
-   * deleting a pusher twice is a no-op.
+   * The one case [register] cannot resolve: `tryUseCurrentOrDefaultDistributor`
+   * declines precisely when the choice is ambiguous — two or more distributors
+   * installed and none saved yet — so it reports `registered: false` and there
+   * is nothing further the app can do on its own. Without this, Settings can
+   * list what [status] found but never act on it, and the user waits forever
+   * for a distributor they have already installed twice over.
+   *
+   * Saving the choice is what makes the ambiguity go away for good: every later
+   * [register] finds a saved distributor and stops needing to guess.
+   *
+   * Failure resolves `registered: false` rather than throwing, matching how
+   * [register] reports the same condition — Settings has one state to render
+   * either way.
    */
+  @Command
+  fun selectDistributor(invoke: Invoke) {
+    val name = invoke.parseArgs(DistributorArgs::class.java).distributor
+    if (name.isNullOrBlank()) {
+      invoke.resolve(JSObject().apply { put("registered", false) })
+      return
+    }
+    try {
+      UnifiedPush.saveDistributor(activity, name)
+      UnifiedPush.register(activity)
+    } catch (e: Throwable) {
+      Log.e(TAG, "Could not register with the chosen distributor", e)
+      invoke.resolve(JSObject().apply { put("registered", false) })
+      return
+    }
+    invoke.resolve(JSObject().apply { put("registered", true) })
+  }
+
+  /** Argument shape for [selectDistributor]; Tauri deserialises into it by field name. */
+  class DistributorArgs {
+    var distributor: String? = null
+  }
+
   /**
    * Dismiss every notification on screen for a room.
    *
@@ -113,6 +145,14 @@ class UnifiedPushPlugin(private val activity: Activity) : Plugin(activity) {
     var roomId: String? = null
   }
 
+  /**
+   * Stop receiving pushes.
+   *
+   * Only tells the distributor. Removing the pusher from the homeserver is
+   * Rust's job and happens either from the resulting `onUnregistered` or
+   * directly from the Settings command — whichever gets there first, since
+   * deleting a pusher twice is a no-op.
+   */
   @Command
   fun unregister(invoke: Invoke) {
     try {
