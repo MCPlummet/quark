@@ -176,6 +176,23 @@ afford: telling someone it works while nothing delivers it. `no_transport` earns
 its own state on Android as both the likeliest cause and the only one the user
 can fix — the foreground service remains the fallback there.
 
+The ladder asks about a **registered pusher first**, ahead of the transport
+probe. `transport_status` cannot distinguish a device with no distributor from
+a probe that failed — the Kotlin `status` command catches its own errors and
+answers with an empty list — so checking it first let a binder hiccup report a
+device that was happily receiving pushes as having nothing installed. A live
+pusher is positive evidence the whole chain worked, and no probe result
+afterwards is better news than that.
+
+**More than one distributor is a state, not an error.** The connector declines
+to guess which installed app should carry this device's push traffic, which is
+the right call and, on its own, a dead end: registration fails and readiness
+sits at `waiting` with nothing the user can act on. So `PushStatus` carries the
+whole `distributors` list, Settings offers it as a choice, and
+`select_push_distributor` commits to one. Reporting a stall the user cannot
+resolve is the failure this section exists to prevent, and it applies as much
+to *too many* transports as to none.
+
 #### Android: the cold path
 
 A push arrives at a process that may have no Tauri in it at all, which is what
@@ -187,7 +204,12 @@ to `PushSyncService`, a `shortService` foreground service — a broadcast receiv
 gets about ten seconds, and a cold sync that is killed partway through has spent
 the battery without showing the notification it was woken for. When Android
 refuses a background foreground-service start, the work runs inline on the still
-alive `PushEventService` rather than being dropped.
+alive `PushEventService` rather than being dropped. When it refuses *later* —
+the start succeeded but `startForeground` did not — the service stops itself
+immediately and finishes the push as an ordinary background service. Pressing on
+is the one thing it must not do: a service started with `startForegroundService`
+that never reaches the foreground is killed outright, so swallowing a recoverable
+refusal converts it into a certain kill.
 
 From there it crosses into Rust through `push_jni.rs`, the one place Kotlin
 calls Rust without Tauri in between. It owns what Tauri would otherwise have
@@ -209,19 +231,43 @@ behave like a warm one when tapped.
 Three guards matter here, all of them against work this app has previously
 overwhelmed its own homeserver with:
 
-- **A warm app wins.** `push_wake` keeps a process-wide flag set by `start_sync`;
-  a push arriving while the sync loop runs stands down rather than opening a
-  second connection.
+- **A warm app wins — while it is actually working.** `push_wake` keeps a
+  process-wide flag set by `start_sync`, *and* a clock stamped every time the
+  loop completes a sync. Deferring on the flag alone asked the wrong question:
+  an Android process kept resident but frozen by Doze still owns a sync task, so
+  every push stood down for a loop stalled at the top of its backoff ladder —
+  push declining to work in precisely the situation it was added for. A loop
+  that has not synced within `WARM_SYNC_LIVENESS_MS` no longer holds push off.
+  The progress stamp comes from `sync_with_callback`, because `Client::sync`
+  loops internally and returns only on error: its success arm is reached about
+  as often as never.
 - **A burst coalesces.** `WakeGuard` admits one push sync at a time, released on
   `Drop` so a panicking sync reopens it instead of wedging push shut.
 - **One `Client` per store.** `background_client` reuses the app's client when
   there is one; two `Client`s over one store means two `OlmMachine`s, the
-  documented cause of Olm-account corruption. Building a fresh one is safe only
-  where no Tauri exists in the process, which is exactly when it happens.
+  documented cause of Olm-account corruption. Where no Tauri exists the cold
+  client is built once and shared, through a `OnceCell` whose real job is not
+  caching but refusing to build twice at once — the wake path holds `WakeGuard`
+  but the distributor callbacks (`register_stored_endpoint`, `on_unregistered`)
+  hold nothing, and an endpoint re-announced alongside a queued message is an
+  ordinary wake-up, not an exotic race.
+- **Collectors come off the client again.** The cold path registers the warm
+  path's own event handlers, and both clients it may register them against
+  outlive the wake. A leaked handler goes on racing `events::maybe_notify` for
+  `claim_notification`, and each race it wins is a notification the user never
+  sees — the spec is claimed into a `Vec` nobody reads. Hence drop guards.
+
+**A wake can also subtract.** A counts-only push carries no event but does carry
+a room id, and it is what a homeserver sends when the room was read on another
+device. That is answered with a dismissal — `WakeOutcome.dismiss`, honoured by
+`PushNotifier.cancelRoom` — without a client, a lease or a byte of network. The
+alternative is notifications the user already dealt with elsewhere sitting in
+the shade until they next open the app.
 
 Notification dismissal asks Android for the live set rather than the in-process
 registry, which only knows what *this* process posted — after a cold push it is
-empty while the shade is not.
+empty while the shade is not. The room id doubles as the notification group key
+(`notify.rs`), which is what makes a dismissal addressable at all.
 
 Gateway discovery probes the endpoint's **origin** (`unifiedpush.rs`): the path
 and query identify this device's mailbox, not the server's capabilities. A
@@ -232,12 +278,26 @@ mistakes are not symmetric. Falling back would route their room and event ids
 through a third party silently and durably, since the choice is persisted;
 keeping their host risks an outage they can see in Settings and fix.
 
+**Already-read is asked of the read markers, and of all four of them.** A wake
+syncs a batch, so most of what it sees may already have been read elsewhere;
+`already_seen` drops those. The signal has to come from the *private* receipt as
+much as the public one: `mark_room_read` sends `m.read` only when the
+`send_read_receipts` preference is on, while `m.read.private` always goes out.
+Consulting the public receipt alone made the filter a permanent no-op for
+everyone who had turned that preference off — silently, because a filter that
+never fires is indistinguishable from one with nothing to do. Both receipt types
+are read, unthreaded and main, and the newest wins.
+
 `push.json` stores the transport address separately from the registered pusher.
 `last.pushkey` is what the homeserver was told; `endpoint` is what the platform
 handed us. They diverge whenever registration hasn't caught up — an endpoint
 rotated while the app wasn't running — and writing the address down on arrival
 is what lets registration happen at the next login instead of dying with the
-process that heard about it.
+process that heard about it. Switching push **off** forgets the address rather
+than waiting to be told: the opt-out ends by removing the saved distributor, so
+the `onUnregistered` callback that would have done it has no route home. A stale
+endpoint is worse than none — `should_request_endpoint` reads it as "already
+have one" and no later login ever asks the transport again.
 
 **A pusher can outlive everything that knows about it.** It is server-side
 state created by an access token, and once no local record names it, nothing can
