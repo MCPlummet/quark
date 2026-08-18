@@ -91,6 +91,7 @@ export {
   requestBatteryExemption,
   getPushStatus,
   setPushEnabled,
+  selectPushDistributor,
 } from "./notifications.js";
 export type {
   NotificationConfig,

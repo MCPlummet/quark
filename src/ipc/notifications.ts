@@ -56,6 +56,13 @@ export interface PushStatus {
   readiness: PushReadiness;
   /** The transport delivering pushes (the distributor, on Android). */
   distributor: string | null;
+  /**
+   * Every UnifiedPush distributor installed on the device. Empty on desktop
+   * and on iOS — only Android has a choice to make — and only interesting when
+   * it holds more than one, which is the one case the connector refuses to
+   * resolve on its own.
+   */
+  distributors: string[];
 }
 
 /** How far push has got — matches push::PushReadiness */
@@ -168,4 +175,17 @@ export async function getPushStatus(): Promise<PushStatus> {
  */
 export async function setPushEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("set_push_enabled", { enabled });
+}
+
+/**
+ * Pick which distributor delivers pushes, by package name.
+ *
+ * The escape hatch for the one case UnifiedPush declines to guess at: two or
+ * more distributors installed and none saved yet, where picking for the user
+ * would be picking their notification provider for them. Left alone that is a
+ * dead end — registration keeps failing and the status line keeps saying
+ * "waiting" — so the answer has to come from the user.
+ */
+export async function selectPushDistributor(distributor: string): Promise<void> {
+  return invoke<void>("select_push_distributor", { distributor });
 }

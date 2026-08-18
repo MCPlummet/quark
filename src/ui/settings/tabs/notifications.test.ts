@@ -12,6 +12,7 @@ const status = (over: Partial<PushStatus> = {}): PushStatus => ({
   gateway_url: null,
   readiness: "waiting",
   distributor: "org.ntfy",
+  distributors: ["org.ntfy"],
   ...over,
 });
 
@@ -49,12 +50,42 @@ describe("pushStatusLine", () => {
     );
   });
 
+  // The dead end this whole picker exists for: UnifiedPush declines to choose
+  // between two installed distributors, so registration never happens and no
+  // amount of waiting fixes it. The line has to send the user to the control.
+  it("asks the user to choose when several distributors are installed", () => {
+    const line = pushStatusLine(status({
+      readiness: "waiting",
+      distributor: null,
+      distributors: ["org.ntfy", "org.unifiedpush.distributor.nextpush"],
+    }));
+    expect(line).not.toContain("waiting");
+    expect(line).toContain("pick one");
+  });
+
+  // Once one is saved the tie is broken, so this is an ordinary wait again
+  // even though the others are still installed.
+  it("goes back to a plain wait once a distributor is saved", () => {
+    const line = pushStatusLine(status({
+      readiness: "waiting",
+      distributor: "org.ntfy",
+      distributors: ["org.ntfy", "org.unifiedpush.distributor.nextpush"],
+    }));
+    expect(line).toContain("waiting for org.ntfy");
+  });
+
   // iOS has no distributor — the OS supplies the token and the gateway is
   // Quark's own Sygnal. Naming one sends users after an app that does not
-  // exist on their platform.
+  // exist on their platform, and a populated list (which iOS never has) must
+  // not drag those users into the Android choice.
   it("never mentions a distributor on iOS", () => {
     for (const readiness of ["waiting", "no_transport"] as const) {
-      const line = pushStatusLine(status({ transport: "apns", readiness, distributor: null }));
+      const line = pushStatusLine(status({
+        transport: "apns",
+        readiness,
+        distributor: null,
+        distributors: ["org.ntfy", "org.unifiedpush.distributor.nextpush"],
+      }));
       expect(line).not.toContain("distributor");
       expect(line).toContain("iOS");
     }

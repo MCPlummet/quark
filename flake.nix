@@ -78,9 +78,6 @@
             abiVersions = [ "x86_64" ];
           };
 
-        androidComposition = mkAndroidComposition { withEmulator = false; };
-        androidSdkRoot = "${androidComposition.androidsdk}/libexec/android-sdk";
-
         # The installable package (nix/package.nix). Built with nixpkgs'
         # stock rustPlatform — rust-overlay is only for the dev shell.
         quark = pkgs.callPackage ./nix/package.nix { };
