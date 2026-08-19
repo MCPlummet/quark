@@ -83,10 +83,37 @@ fn wipe_local_session(data_dir: &Path) {
 /// Detached on purpose: this is a debt owed to the homeserver, not something a
 /// user waiting to see their rooms should block on, and nothing on screen
 /// depends on the outcome.
-fn settle_pending_pushers(client: matrix_sdk::Client, config_dir: std::path::PathBuf) {
+fn settle_pending_pushers(
+    client: matrix_sdk::Client,
+    config_dir: std::path::PathBuf,
+    app_handle: AppHandle,
+) {
     tokio::spawn(async move {
         if let Err(e) = crate::push::retry_pending_deletes(&client, &config_dir).await {
             tracing::warn!("{e}");
+        }
+
+        // Ask the transport for an address if push is on and none ever arrived.
+        // Enabling push before installing a distributor is the ordinary way that
+        // happens, and nothing else would ever ask again.
+        let config = crate::notifications::load_notification_config_from(&config_dir);
+        let has_endpoint = crate::push::load_push_state(&config_dir)
+            .and_then(|state| state.endpoint)
+            .is_some();
+        if crate::push::should_request_endpoint(config.push_enabled, has_endpoint) {
+            match crate::unifiedpush::subscribe_async(&app_handle).await {
+                Ok(true) => tracing::info!("Asked the distributor for a push endpoint"),
+                Ok(false) => tracing::info!("Push is on but no distributor is installed"),
+                Err(e) => tracing::warn!("Could not reach a distributor: {e}"),
+            }
+        }
+        // Register whatever address the transport left on disk. This is the one
+        // path that recovers a distributor endpoint delivered to a process with
+        // no session to register it against — without it, an endpoint rotation
+        // while the user is logged out leaves push silently dead.
+        #[cfg(target_os = "android")]
+        if let Err(e) = crate::unifiedpush::register_stored_endpoint(&config_dir).await {
+            tracing::warn!("Could not register the stored push endpoint: {e}");
         }
     });
 }
@@ -153,7 +180,7 @@ pub async fn login(
 
     open_search_index(&app_handle, data_path.clone(), store_key.clone()).await;
 
-    settle_pending_pushers(client.clone(), paths.config_dir.clone());
+    settle_pending_pushers(client.clone(), paths.config_dir.clone(), app_handle.clone());
     crate::matrix::client::start_sync(client, Some(app_handle), &sync_state).await;
     Ok(())
 }
@@ -274,7 +301,7 @@ pub async fn restore_session(
 
     open_search_index(&app_handle, data_path.clone(), store_key.clone()).await;
 
-    settle_pending_pushers(client.clone(), paths.config_dir.clone());
+    settle_pending_pushers(client.clone(), paths.config_dir.clone(), app_handle.clone());
     crate::matrix::client::start_sync(client, Some(app_handle), &sync_state).await;
     Ok(RestoreOutcome::Restored)
 }
@@ -312,6 +339,10 @@ pub async fn logout(
             handle.abort();
         }
     }
+    // Nothing is syncing now, so a push arriving mid-logout must not stand down
+    // waiting for a loop that is gone. (Its own session check is what stops it
+    // acting on a logged-out account.)
+    crate::push_wake::set_warm_sync_active(false);
     // Reset handler registration flag so a fresh login re-registers handlers
     // on the new client instance.
     {
@@ -2425,21 +2456,27 @@ pub async fn set_notification_config(
 /// for every message in a room the user muted, only for the device to discard
 /// it. The rule also syncs the mute to the user's other clients.
 ///
-/// The local list is kept as a fallback for when the rule can't be set (offline,
-/// or not logged in), and is what `should_notify` consults.
+/// The local list is kept as a record that the rule write was attempted, and is
+/// what `should_notify` consults on this device.
+///
+/// Returns whether the rule reached the homeserver. It is deliberately not an
+/// `Err`: the mute *did* take effect locally, so failing the whole call would
+/// misreport it. What the caller must not do is ignore the outcome — see
+/// `notifications::mute_outcome`.
 #[tauri::command]
 pub async fn mute_room(
     state: State<'_, MatrixState>,
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
     room_id: String,
-) -> Result<(), String> {
-    set_room_mute(&state, &room_id, true).await;
+) -> Result<crate::notifications::MuteOutcome, String> {
+    let rule = set_room_mute(&state, &room_id, true).await;
     update_mute_list(&config_state, &paths, |rooms| {
         if !rooms.contains(&room_id) {
             rooms.push(room_id.clone());
         }
-    })
+    })?;
+    Ok(crate::notifications::mute_outcome(rule, true))
 }
 
 /// Unmute a room: clear the Matrix push rule, and drop it from the local list.
@@ -2449,25 +2486,31 @@ pub async fn unmute_room(
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
     room_id: String,
-) -> Result<(), String> {
-    set_room_mute(&state, &room_id, false).await;
+) -> Result<crate::notifications::MuteOutcome, String> {
+    let rule = set_room_mute(&state, &room_id, false).await;
     update_mute_list(&config_state, &paths, |rooms| {
         rooms.retain(|r| r != &room_id);
-    })
+    })?;
+    Ok(crate::notifications::mute_outcome(rule, false))
 }
 
-/// Apply the mute to the homeserver's push rules. Best-effort: the local list
-/// still suppresses the notification on this device if it fails, so a mute
-/// never appears to do nothing.
-async fn set_room_mute(state: &State<'_, MatrixState>, room_id: &str, mute: bool) {
+/// Apply the mute to the homeserver's push rules, reporting whether it landed.
+///
+/// Used to swallow every failure into a `tracing::warn!`, which was survivable
+/// while the local list could still silence the room here. Under push it is
+/// not: the homeserver goes on waking the device for a room the user muted,
+/// and a failed *unmute* leaves a rule that keeps the room silent everywhere
+/// while the UI says otherwise. Neither is something to discover from a log.
+async fn set_room_mute(
+    state: &State<'_, MatrixState>,
+    room_id: &str,
+    mute: bool,
+) -> Result<(), String> {
     use matrix_sdk::notification_settings::{IsEncrypted, IsOneToOne, RoomNotificationMode};
     use matrix_sdk::ruma::RoomId;
 
-    let Ok(client) = get_client(state) else { return };
-    let Ok(parsed) = RoomId::parse(room_id) else {
-        tracing::warn!("Not a room id, skipping push rule: {room_id}");
-        return;
-    };
+    let client = get_client(state)?;
+    let parsed = RoomId::parse(room_id).map_err(|e| format!("Not a room id: {e}"))?;
 
     let settings = client.notification_settings().await;
     let result = if mute {
@@ -2493,9 +2536,10 @@ async fn set_room_mute(state: &State<'_, MatrixState>, room_id: &str, mute: bool
         tracing::warn!("Room {room_id} not in store, clearing its push rules instead");
         settings.delete_user_defined_room_rules(&parsed).await
     };
-    if let Err(e) = result {
+    result.map_err(|e| {
         tracing::warn!("Failed to set push rule for {room_id}: {e}");
-    }
+        e.to_string()
+    })
 }
 
 /// Mutate the local mute list and persist it. Persisting is the point: without
@@ -2575,27 +2619,34 @@ pub async fn get_background_sync_state(
 pub async fn get_push_status(
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
+    app_handle: AppHandle,
 ) -> Result<crate::push::PushStatus, String> {
     let config = config_state
         .lock()
         .map_err(|_| "Notification config lock poisoned")?
         .clone();
     let state = crate::push::load_push_state(&paths.config_dir);
-    Ok(crate::push::status(&config, state.as_ref()))
+    let transport = crate::unifiedpush::transport_status_async(&app_handle).await;
+    Ok(crate::push::status(&config, state.as_ref(), &transport))
 }
 
 /// Turn push on or off.
 ///
 /// Switching it off unregisters immediately — leaving the pusher in place
-/// would have the homeserver keep pushing to a device that has opted out.
-/// Switching it on only records the preference; the platform transport
-/// registers once it has an address to register (see the Android and iOS
-/// transports).
+/// would have the homeserver keep pushing to a device that has opted out — and
+/// stops the transport, so the distributor is no longer waking the device for a
+/// feature the user switched off.
+///
+/// Switching it on asks the transport for an address. On Android that address
+/// arrives asynchronously at `PushEventService`, so returning `Ok` means the
+/// request was made, not that pushes are flowing; `get_push_status` reports the
+/// difference.
 #[tauri::command]
 pub async fn set_push_enabled(
     state: State<'_, MatrixState>,
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
+    app_handle: AppHandle,
     enabled: bool,
 ) -> Result<(), String> {
     {
@@ -2622,8 +2673,72 @@ pub async fn set_push_enabled(
             }
             Err(_) => crate::push::defer_unregister(&paths.config_dir)?,
         }
+        // Stop the transport too. Leaving the distributor subscribed would keep
+        // waking the device for a feature the user just switched off.
+        if let Err(e) = crate::unifiedpush::unsubscribe_async(&app_handle).await {
+            tracing::warn!("Could not unsubscribe from the distributor: {e}");
+        }
+        // And forget the address, which is not something we can wait to be told
+        // about. `on_unregistered` would do it, but the call above ends with
+        // `removeDistributor`, so the callback has no distributor left to reach
+        // us through and never arrives. A stale endpoint on disk is worse than
+        // none: `should_request_endpoint` reads it as "already have one" and no
+        // later login ever asks the transport again, leaving push permanently
+        // dead with nothing in Settings admitting it.
+        if let Err(e) = crate::push::forget_endpoint(&paths.config_dir) {
+            tracing::warn!("Could not forget the push endpoint: {e}");
+        }
+        return Ok(());
+    }
+
+    // Turning push on asks the distributor for an address. The endpoint does not
+    // come back here — it arrives at PushEventService moments later and
+    // registers itself — so a `true` return means "asked", not "receiving".
+    // Settings reports the difference from `registered`.
+    match crate::unifiedpush::subscribe_async(&app_handle).await {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::info!("Push enabled but no distributor is available");
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::warn!("Could not reach a distributor: {e}");
+            return Ok(());
+        }
+    }
+    // A distributor that already had an endpoint for us may not announce it
+    // again, so register whatever is on disk rather than waiting for a callback
+    // that is not coming.
+    #[cfg(target_os = "android")]
+    if let Err(e) = crate::unifiedpush::register_stored_endpoint(&paths.config_dir).await {
+        tracing::warn!("Could not register the stored push endpoint: {e}");
     }
     Ok(())
+}
+
+/// Commit to one named distributor and register with it.
+///
+/// The escape hatch for the case `set_push_enabled` cannot resolve on its own:
+/// with several distributors installed and none saved, the connector refuses to
+/// guess and registration stalls at `Waiting` with nothing the user can do.
+/// Settings lists what `get_push_status` reported and calls this with the one
+/// they picked.
+#[tauri::command]
+pub async fn select_push_distributor(
+    app_handle: AppHandle,
+    distributor: String,
+) -> Result<(), String> {
+    if distributor.trim().is_empty() {
+        return Err("No distributor named".to_string());
+    }
+    // A `false` here means the distributor declined rather than that anything
+    // broke — the endpoint arrives asynchronously at PushEventService either
+    // way, and `get_push_status` is what reports whether it did.
+    match crate::unifiedpush::select_distributor_async(&app_handle, &distributor).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("{distributor} would not accept the registration")),
+        Err(e) => Err(e),
+    }
 }
 
 /// Surface the Android battery-optimization exemption prompt (no-op elsewhere).

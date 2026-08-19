@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-build additions. Gradle merges this into the main manifest for the
+  debug build type only, so nothing here exists in a release APK.
+
+  PushDebugReceiver is exported, which is why it must never ship: any app on
+  the device could otherwise make Quark sync and post notifications. Keeping it
+  in src/debug means the release manifest and the release DEX both lack it,
+  rather than relying on a runtime flag someone could get wrong.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".PushDebugReceiver"
+            android:exported="true" />
+    </application>
+</manifest>

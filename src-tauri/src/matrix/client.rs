@@ -259,6 +259,89 @@ pub async fn set_avatar(
 /// Maximum backoff duration on sync errors (2 minutes).
 const MAX_BACKOFF_SECS: u64 = 120;
 
+/// The sync token persisted in the state store, if any.
+///
+/// Read straight from the store rather than trusting the client's in-memory
+/// copy: when that copy is unset, `sync` and `sync_once` silently fall back to
+/// an *initial* sync. On the push path that was the difference between a 42-byte
+/// response and 2.6 MiB, and nothing about the outcome revealed which had
+/// happened.
+pub async fn stored_sync_token(client: &Client) -> Option<String> {
+    client
+        .store()
+        .get_kv_data(matrix_sdk_base::StateStoreDataKey::SyncToken)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.into_sync_token())
+}
+
+/// Which sync token the next sync attempt should present.
+///
+/// `sync_with_callback` does advance the token as it goes — but on the
+/// `SyncSettings` it was *handed*, and the loop hands it a clone that dies with
+/// the call. Re-presenting the settings the loop was built from therefore
+/// rewinds `since` to app launch on every error, and the homeserver replays
+/// every joined room from there: the sync-storm shape this app has overloaded
+/// a homeserver with before.
+///
+/// So the position lives here instead, across attempts, and only ever moves
+/// forward. A store read that finds nothing is missing information rather than
+/// an instruction to start over — falling back to `None` would ask for a full
+/// initial sync.
+struct SyncCursor {
+    token: Option<String>,
+}
+
+impl SyncCursor {
+    fn new(initial: Option<String>) -> Self {
+        Self { token: initial }
+    }
+
+    /// Take up a token just read from the store, if there was one.
+    fn observe(&mut self, stored: Option<String>) {
+        if stored.is_some() {
+            self.token = stored;
+        }
+    }
+
+    fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
+    /// `base` with this cursor's position on it — the settings for one attempt.
+    fn settings(&self, base: &SyncSettings) -> SyncSettings {
+        match self.token.clone() {
+            Some(token) => base.clone().token(token),
+            None => base.clone(),
+        }
+    }
+}
+
+/// The sync filter used by **every** sync this app performs.
+///
+/// Shared rather than duplicated because a sync token is produced *under a
+/// filter*, and presenting that token with a different filter makes the server
+/// treat each room's timeline as limited and re-send a chunk of history. When
+/// the push path used `SyncSettings::default()` here, one wake pulled 274
+/// events spanning six months across every joined room — invisible to the user
+/// (the read-marker filter dropped them all) but paid for in battery and in
+/// load on a homeserver this app has overwhelmed before.
+///
+/// The timeline limit bounds a genuine initial sync; incremental syncs only
+/// carry new events regardless.
+pub fn sync_filter() -> FilterDefinition {
+    let mut timeline_filter = RoomEventFilter::default();
+    timeline_filter.limit = Some(UInt::from(20u32));
+
+    let mut room_filter = RoomFilter::default();
+    room_filter.timeline = timeline_filter;
+
+    let mut filter = FilterDefinition::default();
+    filter.room = room_filter;
+    filter
+}
+
 /// Start a background sync task. Returns immediately; sync runs in background.
 ///
 /// If a sync loop is already running (tracked via `SyncState`), it is aborted
@@ -338,28 +421,33 @@ pub async fn start_sync(
     }
 
     let handle = tokio::spawn(async move {
-        // Limit timeline events per room to avoid large initial-sync payloads.
-        // Incremental syncs only send new events regardless, so this only
-        // affects the first sync after login or a cache miss.
-        let mut timeline_filter = RoomEventFilter::default();
-        timeline_filter.limit = Some(UInt::from(20u32));
-
-        let mut room_filter = RoomFilter::default();
-        room_filter.timeline = timeline_filter;
-
-        let mut filter = FilterDefinition::default();
-        filter.room = room_filter;
-
         // Use Unavailable so Synapse does not write a presence update on every
         // sync poll — avoids lock contention on the presence table.
-        let sync_settings = SyncSettings::default()
-            .filter(filter.into())
+        let base_settings = SyncSettings::default()
+            .filter(sync_filter().into())
             .set_presence(PresenceState::Unavailable);
+        // Same reason as the push path: without an explicit token the first
+        // sync of a freshly-built client is a full initial sync. Every attempt
+        // after this one gets its token from the cursor, which is re-read from
+        // the store rather than carried over from the settings the last attempt
+        // was built from.
+        let mut cursor = SyncCursor::new(stored_sync_token(&client).await);
         let mut was_connected = false;
         let mut backoff_secs: u64 = 1;
 
         loop {
-            match client.sync(sync_settings.clone()).await {
+            // `sync_with_callback` rather than `sync`, for the callback alone:
+            // it fires once per sync response, which is the only signal that
+            // this loop is *working* rather than merely alive. `sync` itself
+            // loops internally and returns only on error, so its `Ok` arm is
+            // reached about as often as never — reporting progress from there
+            // would leave the push path deferring to a loop that has been
+            // frozen or stuck in backoff for hours.
+            let progress = |_| async {
+                crate::push_wake::note_warm_sync_progress();
+                matrix_sdk::LoopCtrl::Continue
+            };
+            match client.sync_with_callback(cursor.settings(&base_settings), progress).await {
                 Ok(_) => {
                     // Reset backoff on successful sync.
                     backoff_secs = 1;
@@ -381,6 +469,14 @@ pub async fn start_sync(
                         }
                     }
 
+                    // Pick up everything the failed call managed to sync
+                    // first. matrix-sdk persists each response's `next_batch`
+                    // before returning, so the store holds the last good
+                    // position — and re-reading it is what keeps this retry
+                    // from asking the server to replay from app launch.
+                    cursor.observe(stored_sync_token(&client).await);
+                    info!("Resuming sync from token: {}", cursor.token().unwrap_or("(none)"));
+
                     // Exponential backoff with jitter to avoid thundering-herd
                     // retries that can overwhelm the homeserver (e.g. causing
                     // Synapse's OTK upload worker lock backoff to overflow).
@@ -397,4 +493,62 @@ pub async fn start_sync(
     // Store the handle so future calls can abort this loop.
     let mut guard = sync_state.handle.lock().expect("SyncState lock poisoned");
     *guard = Some(handle);
+
+    // Tell the push path this process is already syncing. A push that wakes us
+    // now must stand down rather than open a second connection to the
+    // homeserver — the service runs in this same process but has no AppHandle
+    // to discover that through, so it reads a process-wide flag instead.
+    crate::push_wake::set_warm_sync_active(true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cursor_presents_the_token_it_started_with() {
+        let cursor = SyncCursor::new(Some("s_launch".to_owned()));
+        assert_eq!(cursor.token(), Some("s_launch"));
+    }
+
+    #[test]
+    fn a_cursor_with_no_token_presents_none() {
+        // A genuinely fresh client has nothing on disk, and an initial sync is
+        // the correct answer for it.
+        let cursor = SyncCursor::new(None);
+        assert_eq!(cursor.token(), None);
+    }
+
+    #[test]
+    fn a_cursor_adopts_a_newer_stored_token() {
+        // The regression this type exists for: the loop used to hand every
+        // retry the settings it was built with, so a sync error rewound `since`
+        // to whatever was on disk at app launch and the homeserver replayed
+        // everything since.
+        let mut cursor = SyncCursor::new(Some("s_launch".to_owned()));
+        cursor.observe(Some("s_after_an_hour".to_owned()));
+        assert_eq!(cursor.token(), Some("s_after_an_hour"));
+    }
+
+    #[test]
+    fn a_cursor_keeps_its_token_when_the_store_read_finds_nothing() {
+        // A failed or empty store read is absence of information, not a
+        // instruction to start over: falling back to `None` here would ask the
+        // server for an initial sync.
+        let mut cursor = SyncCursor::new(Some("s_launch".to_owned()));
+        cursor.observe(None);
+        assert_eq!(cursor.token(), Some("s_launch"));
+    }
+
+    #[test]
+    fn a_cursor_never_rewinds_across_repeated_failures() {
+        // Three errors in a row, each re-reading the same stored token: the
+        // cursor must still be at the newest one, not back at launch.
+        let mut cursor = SyncCursor::new(Some("s_launch".to_owned()));
+        cursor.observe(Some("s_1".to_owned()));
+        cursor.observe(None);
+        cursor.observe(Some("s_2".to_owned()));
+        cursor.observe(None);
+        assert_eq!(cursor.token(), Some("s_2"));
+    }
 }

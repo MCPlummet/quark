@@ -74,7 +74,14 @@ pub struct NotificationInput {
 }
 
 /// A fully-rendered notification, ready for any delivery transport.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Serializable because delivery is not always Tauri's job: a push that wakes a
+/// cold process has no `AppHandle` to post through, so the spec crosses to
+/// Kotlin as JSON and `PushSyncService` posts it with `NotificationCompat`. The
+/// camelCase field names are that wire contract — they are read by name on the
+/// other side, where a rename fails silently rather than at compile time.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NotificationSpec {
     /// Stable per-event notification id (fnv1a of the event id), so a
     /// re-delivered event replaces rather than duplicates.
@@ -122,6 +129,31 @@ pub fn evaluate(input: &NotificationInput, config: &NotificationConfig) -> Optio
         room_name: input.room_name.clone(),
         highlight: input.push.highlight,
     })
+}
+
+/// Pick the room title a notification should carry.
+///
+/// Kept separate from the store lookups so the precedence is testable: an
+/// explicit `m.room.name` wins, then the members-derived name, and the room id
+/// only when there is genuinely nothing else. A blank name is treated as absent
+/// — an empty `m.room.name` is legal and means "unnamed", not "titled nothing".
+pub fn room_title(name: Option<String>, computed: Option<String>, room_id: &str) -> String {
+    let usable = |s: Option<String>| s.filter(|v| !v.trim().is_empty());
+    usable(name)
+        .or_else(|| usable(computed))
+        .unwrap_or_else(|| room_id.to_owned())
+}
+
+/// Resolve a room's notification title, consulting the store when it has no
+/// explicit name. DMs and small unnamed rooms have none, and titling their
+/// notifications with a raw room id tells the reader nothing.
+pub async fn resolve_room_title(room: &matrix_sdk::Room) -> String {
+    let computed = match room.cached_display_name() {
+        Some(cached) => Some(cached.to_string()),
+        // Not cached yet — a cold push is exactly when that happens.
+        None => room.compute_display_name().await.ok().map(|n| n.to_string()),
+    };
+    room_title(room.name(), computed, room.room_id().as_str())
 }
 
 /// FNV-1a 32-bit over the string, as an `i32` notification id. The Android
@@ -252,15 +284,29 @@ fn deliver_mobile(app: &tauri::AppHandle, spec: &NotificationSpec) {
 
 /// Dismiss all live notifications for a room (read locally or on another
 /// device). No-op on desktop — the plugin has no removal API there.
+///
+/// On Android this asks the OS what is on screen rather than trusting the
+/// registry. The registry only knows what *this process* posted, and push
+/// notifications routinely outlive the process that posted them — so after a
+/// cold push the registry is empty while the shade is not, and the notification
+/// a user just read elsewhere would survive being read.
 pub fn cancel_room(app: &tauri::AppHandle, room_id: &str) {
     use tauri::Manager;
 
+    // Clear our own bookkeeping either way, so a later count doesn't include
+    // notifications that are already gone.
     let ids = app.state::<NotificationRegistry>().take_room(room_id);
-    if ids.is_empty() {
-        return;
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+
+    #[cfg(target_os = "android")]
     {
+        let _ = ids;
+        crate::unifiedpush::cancel_room_notifications(app, room_id);
+    }
+    #[cfg(target_os = "ios")]
+    {
+        if ids.is_empty() {
+            return;
+        }
         if let Err(e) = app.notification().remove_active(ids) {
             tracing::warn!("Failed to clear notifications for {room_id}: {e}");
         }
@@ -451,6 +497,55 @@ mod tests {
         let spec = evaluate(&input(), &c).expect("should notify");
         assert_eq!(spec.title, "New Message");
         assert_eq!(spec.body, "You have a new message");
+    }
+
+    #[test]
+    fn spec_serialises_for_a_non_tauri_notifier() {
+        // The cold push path has no AppHandle, so Kotlin posts the notification
+        // itself from this JSON. These key names are the wire contract with
+        // PushSyncService — renaming a field here silently drops it there.
+        let spec = evaluate(&input(), &config()).expect("should notify");
+        let json = serde_json::to_value(&spec).expect("spec must serialise");
+        assert_eq!(json["id"], spec.id);
+        assert_eq!(json["summaryId"], spec.summary_id);
+        assert_eq!(json["title"], "Alice in General");
+        assert_eq!(json["body"], "hello");
+        assert_eq!(json["channel"], CHANNEL_MESSAGES);
+        assert_eq!(json["group"], "!room:example.com");
+        assert_eq!(json["roomId"], "!room:example.com");
+        assert_eq!(json["eventId"], "$event1");
+        assert_eq!(json["roomName"], "General");
+        assert_eq!(json["highlight"], false);
+    }
+
+    #[test]
+    fn a_named_room_titles_the_notification_with_its_name() {
+        assert_eq!(room_title(Some("General".into()), None, "!r:x"), "General");
+        // An explicit name wins over the computed one even when both exist.
+        assert_eq!(
+            room_title(Some("General".into()), Some("Alice, Bob".into()), "!r:x"),
+            "General"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_room_falls_back_to_its_computed_name() {
+        // DMs and small unnamed rooms have no m.room.name at all; their title
+        // is derived from the members. Without this a notification is headed
+        // with a raw room id, which tells the user nothing about who wrote.
+        assert_eq!(room_title(None, Some("Alice".into()), "!r:x"), "Alice");
+    }
+
+    #[test]
+    fn a_room_id_is_the_last_resort_not_the_first() {
+        assert_eq!(room_title(None, None, "!r:x"), "!r:x");
+    }
+
+    #[test]
+    fn a_blank_name_counts_as_no_name() {
+        // `m.room.name` set to an empty string is legal and means "unnamed".
+        assert_eq!(room_title(Some("".into()), Some("Alice".into()), "!r:x"), "Alice");
+        assert_eq!(room_title(Some("  ".into()), None, "!r:x"), "!r:x");
     }
 
     #[test]

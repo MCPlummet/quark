@@ -15,7 +15,7 @@ import {
 import { invoke } from "../ipc/invoke.js";
 import { isTauri } from "../ipc/mock.js";
 import { showToast } from "../ui/NotificationToast.js";
-import type { NotificationConfig } from "../ipc/notifications.js";
+import type { MuteOutcome, NotificationConfig } from "../ipc/notifications.js";
 
 // Re-export the type so consumers only need to import from this module.
 export type { NotificationConfig } from "../ipc/notifications.js";
@@ -152,25 +152,43 @@ export function handleIncomingMessage(
 /**
  * Mute a room: suppress notifications from it.
  * Updates both the local cache and the persisted backend state.
+ *
+ * The mute that counts is the server-side push rule, and it can fail on its own
+ * while the local change succeeds. That mismatch used to be a log line; under
+ * push it means the homeserver keeps waking the phone for a muted room, so it
+ * is surfaced to the user instead.
  */
 export async function muteRoom(roomId: string): Promise<void> {
-  await muteRoomIpc(roomId);
+  const outcome = await muteRoomIpc(roomId);
   if (_config && !_config.mute_rooms.includes(roomId)) {
     _config = { ..._config, mute_rooms: [..._config.mute_rooms, roomId] };
   }
+  warnIfUnsynced(outcome);
 }
 
 /**
  * Unmute a room: resume notifications from it.
  * Updates both the local cache and the persisted backend state.
+ *
+ * The failure to surface here is the worse of the two: a server-side mute rule
+ * that outlives the unmute leaves the room silent on every client while this
+ * one shows it as unmuted.
  */
 export async function unmuteRoom(roomId: string): Promise<void> {
-  await unmuteRoomIpc(roomId);
+  const outcome = await unmuteRoomIpc(roomId);
   if (_config) {
     _config = {
       ..._config,
       mute_rooms: _config.mute_rooms.filter((r) => r !== roomId),
     };
+  }
+  warnIfUnsynced(outcome);
+}
+
+/** Show the backend's explanation when a mute change didn't reach the server. */
+function warnIfUnsynced(outcome: MuteOutcome): void {
+  if (!outcome.synced && outcome.warning) {
+    showToast(outcome.warning, "error", 8000);
   }
 }
 

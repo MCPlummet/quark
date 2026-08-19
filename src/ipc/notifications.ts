@@ -48,7 +48,25 @@ export interface PushStatus {
   app_id: string | null;
   /** The gateway actually in use — the user's own, or the public fallback. */
   gateway_url: string | null;
+  /**
+   * How far along push actually is. `enabled` says what the user asked for;
+   * this says what they are getting, and the two differ whenever the transport
+   * chain is incomplete.
+   */
+  readiness: PushReadiness;
+  /** The transport delivering pushes (the distributor, on Android). */
+  distributor: string | null;
+  /**
+   * Every UnifiedPush distributor installed on the device. Empty on desktop
+   * and on iOS — only Android has a choice to make — and only interesting when
+   * it holds more than one, which is the one case the connector refuses to
+   * resolve on its own.
+   */
+  distributors: string[];
 }
+
+/** How far push has got — matches push::PushReadiness */
+export type PushReadiness = "off" | "no_transport" | "waiting" | "ready";
 
 /** Background-sync snapshot — matches mobile_sync::BackgroundSyncState */
 export interface BackgroundSyncState {
@@ -73,13 +91,26 @@ export async function setNotificationConfig(
 }
 
 /** Add a room to the mute list. */
-export async function muteRoomIpc(roomId: string): Promise<void> {
-  return invoke<void>("mute_room", { roomId });
+export async function muteRoomIpc(roomId: string): Promise<MuteOutcome> {
+  return invoke<MuteOutcome>("mute_room", { roomId });
 }
 
 /** Remove a room from the mute list. */
-export async function unmuteRoomIpc(roomId: string): Promise<void> {
-  return invoke<void>("unmute_room", { roomId });
+export async function unmuteRoomIpc(roomId: string): Promise<MuteOutcome> {
+  return invoke<MuteOutcome>("unmute_room", { roomId });
+}
+
+/**
+ * Whether a mute/unmute reached the homeserver — matches
+ * notifications::MuteOutcome.
+ *
+ * Not an error, because the change did take effect on this device. But the
+ * mute that matters is the server-side push rule, and when only one of the two
+ * lands the user is the only one who can decide what to do about it.
+ */
+export interface MuteOutcome {
+  synced: boolean;
+  warning: string | null;
 }
 
 /** Send a test OS notification to verify the system is working. */
@@ -144,4 +175,17 @@ export async function getPushStatus(): Promise<PushStatus> {
  */
 export async function setPushEnabled(enabled: boolean): Promise<void> {
   return invoke<void>("set_push_enabled", { enabled });
+}
+
+/**
+ * Pick which distributor delivers pushes, by package name.
+ *
+ * The escape hatch for the one case UnifiedPush declines to guess at: two or
+ * more distributors installed and none saved yet, where picking for the user
+ * would be picking their notification provider for them. Left alone that is a
+ * dead end — registration keeps failing and the status line keeps saying
+ * "waiting" — so the answer has to come from the user.
+ */
+export async function selectPushDistributor(distributor: string): Promise<void> {
+  return invoke<void>("select_push_distributor", { distributor });
 }

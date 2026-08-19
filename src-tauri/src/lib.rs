@@ -10,8 +10,11 @@ pub mod net_guard;
 pub mod notifications;
 pub mod notify;
 pub mod push;
+pub mod push_jni;
+pub mod push_wake;
 pub mod search_index;
 pub mod secrets;
+pub mod unifiedpush;
 pub mod updater;
 
 use matrix::client::{MatrixState, PaginationLock, SearchState, SyncState, TimelineTokens};
@@ -54,6 +57,12 @@ pub fn run() {
         );
     }
 
+    // Android discards stdout, so the ordinary fmt subscriber logs into the void
+    // there — the app has effectively had no logs on a device. Route them to
+    // logcat instead; everywhere else stdout is what you want.
+    #[cfg(target_os = "android")]
+    push_jni::init_logging();
+    #[cfg(not(target_os = "android"))]
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -111,10 +120,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init());
 
-    // Android: register the app-local Kotlin plugin driving the background-
-    // sync foreground service (see mobile_sync.rs).
+    // Android: register the app-local Kotlin plugins driving the background-
+    // sync foreground service (mobile_sync.rs) and UnifiedPush distributor
+    // selection (unifiedpush.rs).
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(mobile_sync::init());
+    let builder = builder.plugin(mobile_sync::init()).plugin(unifiedpush::init());
 
     // Desktop auto-updater (AppImage / macOS .app / Windows NSIS). Endpoints are
     // set per-channel at runtime in updater.rs; the config endpoint is a fallback.
@@ -273,6 +283,7 @@ pub fn run() {
             commands::get_background_sync_state,
             commands::get_push_status,
             commands::set_push_enabled,
+            commands::select_push_distributor,
             commands::request_battery_exemption,
             // Shell
             commands::open_external_url,
@@ -346,6 +357,12 @@ pub fn run() {
             }
 
             app.manage(Paths { config_dir });
+
+            // Publish the handle for work that arrives from Kotlin rather than
+            // from a command — a push has no AppHandle of its own, and needs
+            // this one to reuse the app's Matrix client instead of opening a
+            // second one over the same store.
+            push_wake::set_app_handle(app.handle().clone());
 
             // Load persisted room-activity timestamps and start their
             // periodic flusher (flush() is a no-op while nothing changed).

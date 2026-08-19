@@ -456,7 +456,21 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       return { supported: false, enabled: false, running: false, battery_exempt: false };
     // Browser dev mode has no push transport, same as desktop.
     case "get_push_status":
-      return { supported: false, enabled: false, registered: false, transport: null, app_id: null, gateway_url: null };
+      // Browser dev mode has no transport at all, so the section stays hidden —
+      // mirroring a desktop build rather than pretending to be a phone.
+      return {
+        supported: false,
+        enabled: false,
+        registered: false,
+        transport: null,
+        app_id: null,
+        gateway_url: null,
+        readiness: "off",
+        distributor: null,
+        distributors: [],
+      };
+    case "select_push_distributor":
+      return null;
     case "set_avatar":
       return "mxc://matrix.org/mock-avatar-upload";
     case "get_home_data": {
@@ -586,13 +600,17 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         oldest_ts: Date.now() - 86400000,
         newest_ts: Date.now() - 60000,
       };
+    case "mute_room":
+    case "unmute_room":
+      // Browser dev mode has no homeserver, but the mute is "as synced as it
+      // gets" here — reporting a warning would train the UI on a failure the
+      // real backend only reports when the push rule genuinely didn't land.
+      return { synced: true, warning: null };
     case "set_app_config":
     case "set_notification_config":
     case "clear_media_cache":
     case "set_cache_size_limit":
     case "clear_event_cache":
-    case "mute_room":
-    case "unmute_room":
     case "init_notification_channels":
     case "clear_room_notifications":
       return null;

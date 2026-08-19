@@ -1,4 +1,5 @@
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
@@ -79,11 +80,18 @@ android {
             )
         }
     }
-    kotlinOptions {
-        jvmTarget = "1.8"
-    }
     buildFeatures {
         buildConfig = true
+    }
+}
+
+// Kotlin 2.x removed `android { kotlinOptions { jvmTarget = "..." } }`. Same
+// target as before (1.8) so the bytecode level and desugaring behaviour are
+// unchanged — this is a DSL migration, not a toolchain change. It has to stay
+// aligned with AGP's Java sourceCompatibility, which also defaults to 8.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_1_8)
     }
 }
 
@@ -96,6 +104,12 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
+    // UnifiedPush: the user's chosen distributor (ntfy, Conversations, …) wakes
+    // the app; a gateway translates Matrix push into a POST to it. No Google
+    // Play Services, which is the point — Quark ships through its own F-Droid
+    // repo. The library's own manifest supplies the <queries> block that makes
+    // distributors visible under Android 11+ package visibility.
+    implementation("org.unifiedpush.android:connector:3.3.3")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

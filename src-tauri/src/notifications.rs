@@ -114,6 +114,47 @@ pub fn should_notify(config: &NotificationConfig, room_id: &str) -> bool {
     true
 }
 
+/// What actually happened when a room's mute was changed.
+///
+/// The mute the user cares about is the Matrix push rule: it silences the room
+/// on every client and, under push, stops the homeserver waking this device at
+/// all. The local `mute_rooms` entry is only a record that we tried — see
+/// DESIGN.md — so when the rule write fails the two disagree, and the user is
+/// the only one who can decide what to do about it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MuteOutcome {
+    /// The homeserver's push rule now matches what the user asked for.
+    pub synced: bool,
+    /// What to tell them if it does not. `None` when everything worked.
+    pub warning: Option<String>,
+}
+
+/// Describe a mute/unmute attempt in terms the user can act on.
+///
+/// The two failures are not equally bad, so they do not get the same message.
+/// A failed **mute** still silences the room on this device — the local list
+/// sees to that — and only costs battery. A failed **unmute** leaves a
+/// server-side rule that empties `push_actions`, so the room goes on being
+/// silent while the UI says otherwise: a room that has stopped working with no
+/// visible cause, which is the failure this whole type exists to prevent.
+pub fn mute_outcome(rule_result: Result<(), String>, muting: bool) -> MuteOutcome {
+    let Err(reason) = rule_result else {
+        return MuteOutcome { synced: true, warning: None };
+    };
+    let warning = if muting {
+        format!(
+            "Muted on this device only — the server could not be updated ({reason}). \
+             Your other clients will still notify, and this one will keep being woken."
+        )
+    } else {
+        format!(
+            "This room is still muted on the server ({reason}), so it will stay silent \
+             everywhere until the unmute reaches it. Try again when you are back online."
+        )
+    };
+    MuteOutcome { synced: false, warning: Some(warning) }
+}
+
 /// Build the (title, body) strings for an OS notification.
 ///
 /// Respects `show_sender` and `show_body` privacy flags:
@@ -206,6 +247,52 @@ pub fn save_notification_config_to(
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod mute_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn a_rule_that_was_written_needs_no_warning() {
+        let outcome = mute_outcome(Ok(()), true);
+        assert!(outcome.synced);
+        assert_eq!(outcome.warning, None);
+    }
+
+    /// A failed mute is the mild case: the local list still silences the room
+    /// here, so the user gets what they asked for on this device. What they do
+    /// not get is a quiet phone — under push the homeserver keeps waking it.
+    #[test]
+    fn a_failed_mute_says_it_only_applies_here() {
+        let outcome = mute_outcome(Err("offline".into()), true);
+        assert!(!outcome.synced);
+        let warning = outcome.warning.expect("a failed mute must be reported");
+        assert!(warning.contains("this device"), "got: {warning}");
+    }
+
+    /// A failed *unmute* is the dangerous one, and the reason this exists. The
+    /// server-side rule empties push_actions, so the room stays silent while the
+    /// UI insists it was unmuted — a room that has apparently stopped working
+    /// with no visible cause. Silence here is exactly the wrong answer.
+    #[test]
+    fn a_failed_unmute_warns_that_the_room_stays_silent() {
+        let outcome = mute_outcome(Err("offline".into()), false);
+        assert!(!outcome.synced);
+        let warning = outcome.warning.expect("a failed unmute must be reported");
+        assert!(warning.contains("still"), "got: {warning}");
+        assert!(warning.contains("muted"), "got: {warning}");
+    }
+
+    /// The underlying failure has to survive into the message — "it didn't
+    /// work" without a cause is not something a user can act on.
+    #[test]
+    fn the_warning_carries_the_reason() {
+        for muting in [true, false] {
+            let outcome = mute_outcome(Err("Not logged in".into()), muting);
+            assert!(outcome.warning.unwrap().contains("Not logged in"));
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
