@@ -202,14 +202,73 @@ pub fn app_handle() -> Option<&'static tauri::AppHandle> {
     APP_HANDLE.get()
 }
 
+/// A process-wide slot for a client that must not be built twice at once.
+///
+/// `tokio::sync::OnceCell` was the obvious fit and the wrong one. It gives the
+/// "never build twice concurrently" half, but it cannot be emptied — clearing
+/// needs `&mut`, which a `static` never yields — and what goes in this slot has
+/// a lifetime much shorter than the process (see `release_cold_client`).
+///
+/// A mutex held across the build gives the same guarantee and adds the missing
+/// one. Generic only so its rules can be tested without a Matrix session:
+/// the cell just clones and drops what it is handed.
+struct ClientCell<T> {
+    slot: tokio::sync::Mutex<Option<T>>,
+}
+
+impl<T: Clone> ClientCell<T> {
+    const fn new() -> Self {
+        Self { slot: tokio::sync::Mutex::const_new(None) }
+    }
+
+    /// The cached value, building it under the lock if the slot is empty.
+    ///
+    /// A failed build leaves the slot empty, so a wake that arrives before the
+    /// session is readable does not poison every later one.
+    async fn get_or_try_init<F, Fut, E>(&self, build: F) -> Result<T, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T, E>>,
+    {
+        let mut slot = self.slot.lock().await;
+        if let Some(existing) = slot.as_ref() {
+            return Ok(existing.clone());
+        }
+        let built = build().await?;
+        *slot = Some(built.clone());
+        Ok(built)
+    }
+
+    /// Empty the slot, handing back whatever was in it.
+    async fn release(&self) -> Option<T> {
+        self.slot.lock().await.take()
+    }
+}
+
 /// The one `Client` this process builds for itself, when there is no app to
 /// borrow one from.
+static COLD_CLIENT: ClientCell<matrix_sdk::Client> = ClientCell::new();
+
+/// Drop the client this module built for a Tauri-less wake, if there is one.
 ///
-/// `OnceCell` rather than a plain static because the requirement is not "cache
-/// the result" but "never build twice concurrently" — and `get_or_try_init`
-/// gives both. A failed init leaves the cell empty, so a wake that arrives
-/// before the session is readable does not poison every later one.
-static COLD_CLIENT: tokio::sync::OnceCell<matrix_sdk::Client> = tokio::sync::OnceCell::const_new();
+/// Both reasons are about lifetime rather than memory, and neither is optional.
+///
+/// The `Client` owns I/O registered against the runtime it was built on — a
+/// connection pool, the send-queue and lock-refresh tasks. Every JNI entry
+/// point builds its own runtime and drops it when the call returns, so a client
+/// cached past that point outlives its reactor: the next push would drive
+/// pooled sockets bound to a dead driver and the background tasks would simply
+/// be gone. So the slot is emptied before the runtime that filled it goes.
+///
+/// And once Tauri starts in this process the app builds its own `Client` over
+/// the same store. A leftover here would make two, which means two
+/// `OlmMachine`s — the documented cause of Olm-account corruption when an app
+/// and an extension share a store (element-ios#3817).
+pub async fn release_cold_client() {
+    if COLD_CLIENT.release().await.is_some() {
+        tracing::debug!("Released the wake's own Matrix client");
+    }
+}
 
 /// A Matrix client for work with no `AppHandle` behind it.
 ///
@@ -230,6 +289,10 @@ pub async fn background_client(data_dir: &std::path::Path) -> Result<matrix_sdk:
     use tauri::Manager;
 
     if let Some(app) = app_handle() {
+        // Tauri has started in this process since the last wake, so anything
+        // built here is now a second `Client` over one store. Drop it before
+        // handing back the app's own.
+        release_cold_client().await;
         let existing = app
             .try_state::<crate::matrix::client::MatrixState>()
             .and_then(|state| state.0.lock().ok().and_then(|guard| guard.clone()));
@@ -254,7 +317,6 @@ pub async fn background_client(data_dir: &std::path::Path) -> Result<matrix_sdk:
             Ok::<_, String>(client)
         })
         .await
-        .cloned()
 }
 
 /// Set while the app's own sync loop is running.
@@ -790,6 +852,77 @@ pub fn self_test_spec(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Stand-in for the `Client` a real cell holds: the cell only ever clones
+    /// and drops what it is given, so a `String` exercises every path.
+    async fn build_ok(builds: Arc<AtomicUsize>) -> Result<String, String> {
+        builds.fetch_add(1, Ordering::SeqCst);
+        // Force a suspension point so a concurrent caller has somewhere to
+        // interleave — without it the first build would finish before the
+        // second is ever polled and the test would prove nothing.
+        tokio::task::yield_now().await;
+        Ok("client".to_owned())
+    }
+
+    #[tokio::test]
+    async fn a_cell_builds_once_for_concurrent_callers() {
+        // Two `Client`s over one store means two `OlmMachine`s, which is the
+        // documented cause of Olm-account corruption (element-ios#3817). A
+        // distributor re-announcing its endpoint while delivering a message is
+        // an ordinary wake-up, not an exotic race.
+        let cell: ClientCell<String> = ClientCell::new();
+        let builds = Arc::new(AtomicUsize::new(0));
+
+        let (a, b) = tokio::join!(
+            cell.get_or_try_init(|| build_ok(builds.clone())),
+            cell.get_or_try_init(|| build_ok(builds.clone())),
+        );
+
+        assert_eq!(a.unwrap(), "client");
+        assert_eq!(b.unwrap(), "client");
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn releasing_lets_the_next_caller_build_again() {
+        // The reason `release` has to exist: the runtime a push builds its
+        // client on is dropped when the call returns, so the client must not
+        // outlive it. The next push builds a fresh one.
+        let cell: ClientCell<String> = ClientCell::new();
+        let builds = Arc::new(AtomicUsize::new(0));
+
+        cell.get_or_try_init(|| build_ok(builds.clone())).await.unwrap();
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+
+        assert_eq!(cell.release().await, Some("client".to_owned()));
+
+        cell.get_or_try_init(|| build_ok(builds.clone())).await.unwrap();
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_failed_build_leaves_the_cell_empty() {
+        // A wake that arrives before the session is readable must not poison
+        // every later one.
+        let cell: ClientCell<String> = ClientCell::new();
+
+        let failed: Result<String, String> =
+            cell.get_or_try_init(|| async { Err("No stored session".to_owned()) }).await;
+        assert_eq!(failed, Err("No stored session".to_owned()));
+
+        let builds = Arc::new(AtomicUsize::new(0));
+        cell.get_or_try_init(|| build_ok(builds.clone())).await.unwrap();
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn releasing_an_empty_cell_is_harmless() {
+        let cell: ClientCell<String> = ClientCell::new();
+        assert_eq!(cell.release().await, None);
+    }
 
     #[test]
     fn parses_an_event_id_only_notification() {

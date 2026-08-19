@@ -191,13 +191,26 @@ fn two_string_call<'local>(
     env.new_string(json).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }
 
+/// Run `future`, then drop anything whose lifetime is tied to the runtime it
+/// ran on — while that runtime is still alive to drop it on.
+///
+/// Every entry point in this file builds a runtime and drops it when the call
+/// returns, but the client the wake builds is cached in a process-wide slot
+/// that outlives both. See `push_wake::release_cold_client` for what that costs
+/// if it is skipped.
+async fn scoped<T>(future: impl std::future::Future<Output = T>) -> T {
+    let outcome = future.await;
+    crate::push_wake::release_cold_client().await;
+    outcome
+}
+
 /// Run one future to completion on a runtime built for the purpose.
 ///
 /// The endpoint callbacks are short — a file write and at most one HTTP
 /// round-trip — so a single-threaded runtime is enough.
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
     match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => runtime.block_on(future),
+        Ok(runtime) => runtime.block_on(scoped(future)),
         Err(e) => {
             // Only reachable if the OS refuses a reactor; nothing to fall back
             // to, and the caller's own timeout will notice.
@@ -227,7 +240,7 @@ fn handle_push(payload: &str, data_dir: &std::path::Path) -> PushResult {
         Err(e) => return PushResult::failed(format!("Could not start a runtime: {e}")),
     };
 
-    match runtime.block_on(crate::push_wake::run_wake(data_dir, &wake)) {
+    match runtime.block_on(scoped(crate::push_wake::run_wake(data_dir, &wake))) {
         Ok(outcome) => {
             PushResult { specs: outcome.specs, dismiss: outcome.dismiss, error: None }
         }
