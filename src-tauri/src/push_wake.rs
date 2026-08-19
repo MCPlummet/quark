@@ -26,7 +26,12 @@ pub enum PushWake {
     /// when notifications are read elsewhere, so the answer is never "notify"
     /// — but it is often "un-notify", which is why the room id is kept. A
     /// homeserver that omits it leaves nothing actionable at all.
-    Clear { room_id: Option<String> },
+    ///
+    /// `unread` is what makes "read elsewhere" a claim rather than an
+    /// assumption: a counts push whose count went *up* is not a room the user
+    /// has dealt with. `None` means the homeserver sent no counts at all, which
+    /// is not evidence either way.
+    Clear { room_id: Option<String>, unread: Option<u64> },
 }
 
 /// Parse a push gateway notification body.
@@ -44,6 +49,10 @@ pub fn parse_wake(payload: &str) -> Result<PushWake, String> {
 
     let room_id = notification.get("room_id").and_then(|v| v.as_str());
     let event_id = notification.get("event_id").and_then(|v| v.as_str());
+    let unread = notification
+        .get("counts")
+        .and_then(|counts| counts.get("unread"))
+        .and_then(serde_json::Value::as_u64);
 
     match (room_id, event_id) {
         (Some(room_id), Some(event_id)) if !room_id.is_empty() && !event_id.is_empty() => {
@@ -58,6 +67,7 @@ pub fn parse_wake(payload: &str) -> Result<PushWake, String> {
         // until they next opened the app.
         _ => Ok(PushWake::Clear {
             room_id: room_id.filter(|id| !id.is_empty()).map(str::to_owned),
+            unread,
         }),
     }
 }
@@ -93,6 +103,11 @@ pub enum IgnoreReason {
     /// A counts-only push that named no room. Nothing to render and nothing to
     /// dismiss against.
     NothingToShow,
+    /// A counts-only push whose room still has unread messages. It moved the
+    /// badge but it is not the "read on another device" signal a dismissal
+    /// stands on, and acting on it would clear notifications the user has not
+    /// seen.
+    StillUnread,
 }
 
 /// What a wake produced, once it ran.
@@ -138,10 +153,17 @@ pub fn plan_wake(wake: &PushWake, push_enabled: bool, warm_sync_active: bool) ->
         // stays behind the two gates above on purpose: a warm app clears its own
         // notifications from the receipt it will see, and a user who switched
         // push off should not have this device acting on pushes at all.
-        PushWake::Clear { room_id: Some(room_id) } => {
+        // Only a count that reached zero says the user dealt with this room.
+        // A homeserver that sends no counts at all is not contradicting that,
+        // so absence still dismisses — it is a count above zero, and only that,
+        // which means the room is still waiting for them.
+        PushWake::Clear { room_id: Some(_), unread: Some(unread) } if *unread > 0 => {
+            WakePlan::Ignore(IgnoreReason::StillUnread)
+        }
+        PushWake::Clear { room_id: Some(room_id), .. } => {
             WakePlan::Dismiss { room_id: room_id.clone() }
         }
-        PushWake::Clear { room_id: None } => WakePlan::Ignore(IgnoreReason::NothingToShow),
+        PushWake::Clear { room_id: None, .. } => WakePlan::Ignore(IgnoreReason::NothingToShow),
     }
 }
 
@@ -955,7 +977,10 @@ mod tests {
                 "devices": [{ "app_id": "tel.quark.app.android", "pushkey": "https://ntfy.sh/x" }]
             }
         }"#;
-        assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear { room_id: None });
+        assert_eq!(
+            parse_wake(payload).expect("valid notification"),
+            PushWake::Clear { room_id: None, unread: Some(0) }
+        );
     }
 
     #[test]
@@ -963,7 +988,7 @@ mod tests {
         let payload = r#"{"notification": {"room_id": "!a:x", "counts": {"unread": 0}}}"#;
         assert_eq!(
             parse_wake(payload).expect("valid notification"),
-            PushWake::Clear { room_id: Some("!a:x".to_owned()) }
+            PushWake::Clear { room_id: Some("!a:x".to_owned()), unread: Some(0) }
         );
     }
 
@@ -999,7 +1024,7 @@ mod tests {
     #[test]
     fn empty_ids_are_treated_as_absent() {
         let payload = r#"{"notification": {"room_id": "", "event_id": ""}}"#;
-        assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear { room_id: None });
+        assert_eq!(parse_wake(payload).expect("valid notification"), PushWake::Clear { room_id: None, unread: None });
     }
 
     #[test]
@@ -1039,7 +1064,7 @@ mod tests {
         // Nothing to show and nothing to dismiss against: spending a sync on it
         // would burn battery for a push whose whole meaning is "less".
         assert_eq!(
-            plan_wake(&PushWake::Clear { room_id: None }, true, false),
+            plan_wake(&PushWake::Clear { room_id: None, unread: None }, true, false),
             WakePlan::Ignore(IgnoreReason::NothingToShow)
         );
     }
@@ -1050,7 +1075,7 @@ mod tests {
         // another device. It carries a room id, and taking the notifications
         // down is both the right answer and a free one — no sync involved.
         assert_eq!(
-            plan_wake(&PushWake::Clear { room_id: Some("!a:x".into()) }, true, false),
+            plan_wake(&PushWake::Clear { room_id: Some("!a:x".into()), unread: None }, true, false),
             WakePlan::Dismiss { room_id: "!a:x".to_owned() }
         );
     }
@@ -1060,7 +1085,7 @@ mod tests {
         // Cheap enough to run unconditionally, but a warm app clears its own
         // notifications from the receipt it is about to see, and a user who
         // switched push off should not have this device acting on pushes.
-        let wake = PushWake::Clear { room_id: Some("!a:x".into()) };
+        let wake = PushWake::Clear { room_id: Some("!a:x".into()), unread: None };
         assert_eq!(plan_wake(&wake, true, true), WakePlan::Ignore(IgnoreReason::WarmSyncRunning));
         assert_eq!(plan_wake(&wake, false, false), WakePlan::Ignore(IgnoreReason::PushDisabled));
     }
@@ -1202,5 +1227,45 @@ mod tests {
             guard.try_enter().is_some(),
             "a panicking sync must not wedge push shut for the process's life"
         );
+    }
+
+    /// A push that names a room but carries no event only means "read
+    /// elsewhere" when the count actually went to zero. Dismissing on a count
+    /// that went *up* wipes notifications the user has never seen.
+    #[test]
+    fn a_counts_only_push_that_still_has_unread_messages_does_not_dismiss() {
+        let payload = r#"{
+            "notification": {
+                "room_id": "!a:x",
+                "counts": { "unread": 3 }
+            }
+        }"#;
+        let wake = parse_wake(payload).expect("valid notification");
+        assert_eq!(wake, PushWake::Clear { room_id: Some("!a:x".to_owned()), unread: Some(3) });
+        assert_eq!(plan_wake(&wake, true, false), WakePlan::Ignore(IgnoreReason::StillUnread));
+    }
+
+    #[test]
+    fn a_counts_only_push_that_zeroes_the_count_dismisses() {
+        let payload = r#"{
+            "notification": {
+                "room_id": "!a:x",
+                "counts": { "unread": 0 }
+            }
+        }"#;
+        let wake = parse_wake(payload).expect("valid notification");
+        assert_eq!(wake, PushWake::Clear { room_id: Some("!a:x".to_owned()), unread: Some(0) });
+        assert_eq!(plan_wake(&wake, true, false), WakePlan::Dismiss { room_id: "!a:x".to_owned() });
+    }
+
+    /// Not every homeserver sends counts, and absence is not evidence the room
+    /// is still unread. This is also the shape the dismissal path was verified
+    /// against on-device, so it keeps working.
+    #[test]
+    fn a_counts_only_push_with_no_counts_at_all_still_dismisses() {
+        let payload = r#"{ "notification": { "room_id": "!a:x" } }"#;
+        let wake = parse_wake(payload).expect("valid notification");
+        assert_eq!(wake, PushWake::Clear { room_id: Some("!a:x".to_owned()), unread: None });
+        assert_eq!(plan_wake(&wake, true, false), WakePlan::Dismiss { room_id: "!a:x".to_owned() });
     }
 }

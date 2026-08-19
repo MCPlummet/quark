@@ -271,6 +271,13 @@ device. That is answered with a dismissal — `WakeOutcome.dismiss`, honoured by
 alternative is notifications the user already dealt with elsewhere sitting in
 the shade until they next open the app.
 
+"Read elsewhere" is a claim, though, and `counts.unread` is what backs it. A
+counts push whose count went *up* is a badge update, not a room the user has
+dealt with, and dismissing on it would clear notifications they have never seen
+— so only a count that is absent or zero dismisses (`IgnoreReason::StillUnread`
+covers the rest). Absent still dismisses because not every homeserver sends
+counts, and silence is not evidence the room is still waiting.
+
 Notification dismissal asks Android for the live set rather than the in-process
 registry, which only knows what *this* process posted — after a cold push it is
 empty while the shade is not. The room id doubles as the notification group key
