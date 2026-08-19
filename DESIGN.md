@@ -246,11 +246,18 @@ overwhelmed its own homeserver with:
 - **One `Client` per store.** `background_client` reuses the app's client when
   there is one; two `Client`s over one store means two `OlmMachine`s, the
   documented cause of Olm-account corruption. Where no Tauri exists the cold
-  client is built once and shared, through a `OnceCell` whose real job is not
+  client is built once and shared, through a `ClientCell` whose real job is not
   caching but refusing to build twice at once — the wake path holds `WakeGuard`
   but the distributor callbacks (`register_stored_endpoint`, `on_unregistered`)
   hold nothing, and an endpoint re-announced alongside a queued message is an
-  ordinary wake-up, not an exotic race.
+  ordinary wake-up, not an exotic race. A mutex rather than a `OnceCell`,
+  because the slot also has to be *emptied*, and a `OnceCell` in a `static`
+  never can be. The client owns I/O registered against the runtime each JNI
+  entry point builds and drops per call, so one cached past that point would
+  leave the next push driving a dead reactor; and once Tauri starts in the same
+  process the app builds its own client over the same store, which is the
+  two-`OlmMachine` hazard again. So it is released before a runtime goes, and
+  when the app takes over.
 - **Collectors come off the client again.** The cold path registers the warm
   path's own event handlers, and both clients it may register them against
   outlive the wake. A leaked handler goes on racing `events::maybe_notify` for
