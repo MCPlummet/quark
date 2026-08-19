@@ -94,6 +94,31 @@ describe("toggleSection", () => {
     expect(enabled).toBe(true);
   });
 
+  // The hint used to be painted once, which was safe only while it depended on
+  // nothing that changes. `pushHint` now branches on readiness and on how many
+  // distributors are installed, so a stale hint contradicts the status line
+  // directly above it — "waiting for org.ntfy" under a hint still telling the
+  // user to pick one.
+  it("repaints a state-dependent hint, not just the status", async () => {
+    const c = makeControls();
+    let enabled = false;
+    const section = (await c.toggleSection(spec({
+      get: async () => ({ supported: true, enabled, detail: enabled ? "on" : "off" }),
+      set: async (v) => { enabled = v; },
+      hint: (s) => (s.enabled ? "receiving pushes" : "push is off"),
+    })))!;
+
+    expect(section.textContent).toContain("push is off");
+
+    const input = checkbox(section);
+    input.checked = true;
+    input.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(section.textContent).toContain("state: on"));
+    expect(section.textContent).toContain("receiving pushes");
+    expect(section.textContent).not.toContain("push is off");
+  });
+
   // An unsupported platform reports `supported: false`; it does not throw. A
   // rejection is therefore a real failure and used to vanish into `catch {}`.
   it("surfaces a failed fetch instead of swallowing it", async () => {

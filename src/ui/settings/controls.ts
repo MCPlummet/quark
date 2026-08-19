@@ -243,11 +243,23 @@ export function makeControls(): SettingsControls {
 
       const status = document.createElement("div");
       status.className = "settings-dialog__hint";
-      status.textContent = spec.status(state);
+
+      const hint = document.createElement("div");
+      hint.className = "settings-dialog__hint";
+
+      // Both lines are derived from the same state, so both have to be
+      // repainted together. Repainting only the status leaves the two
+      // contradicting each other — a status reading "waiting for org.ntfy"
+      // under a hint still telling the user to choose a distributor.
+      const paint = (s: S) => {
+        status.textContent = spec.status(s);
+        hint.textContent = spec.hint(s);
+      };
+      paint(state);
 
       const refresh = async (): Promise<S> => {
         const next = await spec.get();
-        status.textContent = spec.status(next);
+        paint(next);
         return next;
       };
 
@@ -261,9 +273,6 @@ export function makeControls(): SettingsControls {
       const extra = spec.extra?.(state, refresh);
       if (extra) section.appendChild(extra);
 
-      const hint = document.createElement("div");
-      hint.className = "settings-dialog__hint";
-      hint.textContent = spec.hint(state);
       section.appendChild(hint);
 
       return section;
