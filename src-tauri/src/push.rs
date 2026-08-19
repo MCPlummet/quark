@@ -179,17 +179,33 @@ fn edit_locked<T>(
     Ok(Some(outcome))
 }
 
-/// Write a state the caller already holds, without interleaving another writer.
+/// Write a state the caller already holds, without clobbering another writer.
 ///
 /// The async paths (`register`, `unregister`) cannot use [`with_state`]: their
 /// cycle spans homeserver round-trips, and holding a `std::sync::Mutex` across
 /// an `.await` risks deadlocking the runtime — worse than the race it fixes.
-/// They serialise their writes instead, which closes the window that matters
-/// (two processes writing the file at once) while leaving the wider
-/// read-modify-write race to the `WakeGuard` and the single-client rule.
+///
+/// But writing the whole snapshot back is not safe either, because one field is
+/// not theirs. `endpoint` belongs to `store_endpoint`, which runs straight off a
+/// distributor callback holding nothing — no `WakeGuard`, no Tauri, nothing
+/// else serialising it. A rotation landing inside a registration's round-trip
+/// would be silently undone, leaving push.json naming an address the device no
+/// longer has; and since `should_request_endpoint` refuses to ask again once an
+/// endpoint exists, nothing would ever correct it. Push stays dead while
+/// Settings reports it ready.
+///
+/// So the on-disk endpoint wins. Re-reading it under the lock costs one file
+/// read on a path that just did a network round-trip, and it is the whole race:
+/// every other field here is written only by the async paths themselves.
 fn persist(config_dir: &std::path::Path, state: &PushState) -> Result<(), String> {
     let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    save_push_state_to(config_dir, state)
+    let mut next = state.clone();
+    // Nothing readable on disk means there is no other writer to defer to —
+    // keep what the caller holds rather than dropping an address on the floor.
+    if let Some(on_disk) = load_push_state(config_dir) {
+        next.endpoint = on_disk.endpoint;
+    }
+    save_push_state_to(config_dir, &next)
 }
 
 /// A pusher we told the homeserver about, remembered so it can be deleted when
@@ -1477,6 +1493,46 @@ mod state_tests {
         save_push_state_to(dir.path(), &state).unwrap();
 
         assert_eq!(load_or_init_push_state(dir.path()).last, Some(registered()));
+    }
+
+    /// `register` loads state, awaits a homeserver round-trip, then writes its
+    /// snapshot back. A distributor rotating the endpoint inside that window
+    /// used to be silently undone — push.json kept naming the old address, and
+    /// `should_request_endpoint` refuses to ask again once an endpoint exists,
+    /// so push stayed dead while Settings reported it ready.
+    #[test]
+    fn persisting_a_registration_does_not_undo_a_concurrent_endpoint_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        store_endpoint(dir.path(), "https://ntfy.example.org/A").unwrap();
+
+        // What `register` is holding across its await.
+        let mut snapshot = load_or_init_push_state(dir.path());
+        snapshot.last = Some(registered());
+
+        // The distributor rotates while that round-trip is in flight.
+        store_endpoint(dir.path(), "https://ntfy.example.org/B").unwrap();
+
+        persist(dir.path(), &snapshot).unwrap();
+
+        let on_disk = load_push_state(dir.path()).expect("state on disk");
+        assert_eq!(on_disk.endpoint.as_deref(), Some("https://ntfy.example.org/B"));
+        // The registration itself still lands.
+        assert_eq!(on_disk.last, Some(registered()));
+    }
+
+    /// The other direction still has to work: with nobody else writing, a
+    /// persist carries its own endpoint through.
+    #[test]
+    fn persisting_keeps_the_endpoint_when_nothing_else_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        store_endpoint(dir.path(), "https://ntfy.example.org/A").unwrap();
+
+        let mut snapshot = load_or_init_push_state(dir.path());
+        snapshot.last = Some(registered());
+        persist(dir.path(), &snapshot).unwrap();
+
+        let on_disk = load_push_state(dir.path()).expect("state on disk");
+        assert_eq!(on_disk.endpoint.as_deref(), Some("https://ntfy.example.org/A"));
     }
 
     #[test]
