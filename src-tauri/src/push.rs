@@ -471,12 +471,15 @@ pub const PLATFORM_SUPPORTS_PUSH: bool =
 ///
 /// Everything above this line is platform-agnostic: registration, persistence,
 /// planning and status all work without knowing where the address comes from.
-/// Supplying one is a per-platform job, and the platforms are not in step —
-/// Android has UnifiedPush; iOS gets APNs in a later phase and must not
-/// advertise a toggle that can only ever say "waiting" until then. Hence a
-/// separate flag from [`PLATFORM_SUPPORTS_PUSH`]: capability and delivery are
-/// different claims, and this is the one that has to stay honest.
-pub const TRANSPORT_AVAILABLE: bool = cfg!(target_os = "android");
+/// Supplying one is a per-platform job — Android has UnifiedPush, iOS has APNs
+/// through `apns.rs` — and the flag stays separate from
+/// [`PLATFORM_SUPPORTS_PUSH`] because capability and delivery are different
+/// claims. A platform can be perfectly able to receive a push while this build
+/// has nothing wired up to supply a pushkey, and Settings must not offer a
+/// toggle that can only ever say "waiting". Both platforms are now in step, so
+/// the two consts agree; keeping them distinct is what makes the next platform
+/// (or a build that drops a transport) fail visibly rather than silently.
+pub const TRANSPORT_AVAILABLE: bool = cfg!(any(target_os = "android", target_os = "ios"));
 
 /// Whether Settings should offer push at all.
 ///
@@ -926,10 +929,11 @@ mod status_tests {
         assert_eq!(state.pending_delete.len(), 1);
     }
 
-    /// The platform check alone is not enough. iOS is push-capable but has no
-    /// transport until the APNs phase lands, so a build that advertised push
-    /// there would offer a toggle that can never leave "waiting" — with a hint
-    /// naming a distributor that iOS cannot use.
+    /// The platform check alone is not enough. Both shipping platforms now
+    /// carry a transport, but the pairing is what the const means, not a
+    /// coincidence to be simplified away: a capable platform whose build wires
+    /// nothing up would otherwise offer a toggle that can never leave
+    /// "waiting" — which is what iOS was between Phase 1 and Phase 3.
     #[test]
     fn a_platform_with_no_transport_does_not_offer_push() {
         assert!(!supports_push(true, false));
@@ -944,12 +948,15 @@ mod status_tests {
         assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
     }
 
-    /// iOS is capable but not yet wired. Flipping this test is part of Phase 3.
+    /// iOS now has one too. `TransportStatus::default()` is what iOS always
+    /// reports — there is no distributor to enumerate — so this doubles as the
+    /// assertion that push is offered on a platform where the transport probe
+    /// has nothing to say.
     #[cfg(target_os = "ios")]
     #[test]
-    fn ios_does_not_offer_push_until_apns_lands() {
-        assert!(!TRANSPORT_AVAILABLE);
-        assert!(!status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
+    fn ios_has_a_transport_and_offers_push() {
+        assert!(TRANSPORT_AVAILABLE);
+        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
     }
 
     #[test]

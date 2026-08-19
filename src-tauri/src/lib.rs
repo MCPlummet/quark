@@ -1,3 +1,4 @@
+pub mod apns;
 pub mod commands;
 pub mod config;
 pub mod events;
