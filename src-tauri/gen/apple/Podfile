@@ -1,7 +1,9 @@
 # Uncomment the next line to define a global platform for your project
 
 target 'quark_iOS' do
-platform :ios, '14.0'
+# Keep in step with project.yml's deploymentTarget and tauri.conf.json's
+# bundle.iOS.minimumSystemVersion.
+platform :ios, '17.0'
   # Pods for quark_iOS
 end
 

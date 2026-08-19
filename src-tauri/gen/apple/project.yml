@@ -2,7 +2,10 @@ name: quark
 options:
   bundleIdPrefix: tel.quark.app
   deploymentTarget:
-    iOS: 14.0
+    # Must match `bundle.iOS.minimumSystemVersion` in tauri.conf.json. This is
+    # the source xcodegen generates the pbxproj from, so a mismatch here is not
+    # cosmetic — regenerating silently rewrites the target the app ships with.
+    iOS: 17.0
 fileGroups: [../../src]
 configs:
   debug: debug
@@ -12,6 +15,11 @@ settingGroups:
     base:
       PRODUCT_NAME: Quark
       PRODUCT_BUNDLE_IDENTIFIER: tel.quark.app
+      # Every setting the built project needs has to be declared here rather
+      # than left in quark.xcodeproj/project.pbxproj, which xcodegen rewrites
+      # from this file. A team id is not secret — it ships inside every signed
+      # app — and without it a regenerated project cannot sign at all.
+      DEVELOPMENT_TEAM: STY28WCV84
 targetTemplates:
   app:
     type: application
@@ -38,8 +46,16 @@ targets:
       - path: LaunchScreen.storyboard
     info:
       path: quark_iOS/Info.plist
+      # xcodegen writes quark_iOS/Info.plist from these properties, so anything
+      # missing here is deleted from the plist on the next regen. The usage
+      # descriptions matter most: iOS terminates the app the moment it touches
+      # the camera, microphone or photo library without them, so losing them
+      # builds and signs cleanly and only fails in the user's hands.
       properties:
         LSRequiresIPhoneOS: true
+        NSCameraUsageDescription: Quark needs camera access so you can take a photo or video to send in a chat.
+        NSMicrophoneUsageDescription: Quark needs microphone access so videos you record to send include sound.
+        NSPhotoLibraryUsageDescription: Quark needs photo library access so you can attach existing photos and videos to a chat.
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
