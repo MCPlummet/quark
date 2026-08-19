@@ -263,6 +263,17 @@ overwhelmed its own homeserver with:
   outlive the wake. A leaked handler goes on racing `events::maybe_notify` for
   `claim_notification`, and each race it wins is a notification the user never
   sees — the spec is claimed into a `Vec` nobody reads. Hence drop guards.
+- **A cut-short wake still posts what it rendered.** The 20 s `WAKE_BUDGET` and
+  a failing sync both used to return an error and drop everything the handlers
+  had already collected. That loses those notifications permanently, not
+  temporarily: matrix-sdk persists the sync token *before* it dispatches
+  handlers, so by the time a spec exists the homeserver already counts this
+  device as having read that far, and no later sync offers the event again. The
+  collector's output therefore lives in `run_wake`, outside the future
+  `timeout` can cancel, and `salvage` posts whatever is in it — still capped —
+  whenever the sync ends early with something to show. The error survives only
+  when there is nothing to salvage, because "empty because it timed out" and
+  "empty because nothing was worth showing" are different bug reports.
 
 **A wake can also subtract.** A counts-only push carries no event but does carry
 a room id, and it is what a homeserver sends when the room was read on another

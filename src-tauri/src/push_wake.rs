@@ -465,6 +465,58 @@ pub fn cap_wake_notifications(
     (specs, dropped)
 }
 
+/// How a wake's bounded sync ended.
+enum WakeSyncEnd {
+    /// It ran to completion.
+    Completed,
+    /// It returned an error.
+    Failed(String),
+    /// It was still going when [`WAKE_BUDGET`] ran out.
+    OutOfTime,
+}
+
+/// What a wake hands back, given how its sync ended and whatever its handlers
+/// collected before that.
+///
+/// Collected work is never thrown away, however the sync ended. matrix-sdk
+/// persists the sync token *before* it dispatches handlers — `process_sync`
+/// calls `receive_sync_response`, which writes the token, and only then runs
+/// the handlers — so by the time a spec exists at all, the homeserver already
+/// believes this device has read that far. Reporting only the error would lose
+/// those notifications permanently: no later sync offers those events again,
+/// and the dedupe ring has claimed them besides. A notification posted late
+/// beats one that is never posted.
+///
+/// The error still surfaces when there is nothing to salvage. A wake that came
+/// back empty because it ran out of time is a different thing from one that
+/// came back empty because there was nothing worth showing, and only the first
+/// is worth a line in a bug report about push that "does nothing".
+fn salvage(
+    end: WakeSyncEnd,
+    collected: Vec<crate::notify::NotificationSpec>,
+) -> Result<Vec<crate::notify::NotificationSpec>, String> {
+    let (specs, dropped) = cap_wake_notifications(collected);
+    if dropped > 0 {
+        tracing::info!("Push wake capped at {MAX_WAKE_NOTIFICATIONS}; dropped {dropped} older");
+    }
+
+    let cut_short = match end {
+        WakeSyncEnd::Completed => return Ok(specs),
+        WakeSyncEnd::Failed(e) => e,
+        WakeSyncEnd::OutOfTime => "Push sync exceeded its time budget".to_owned(),
+    };
+
+    if specs.is_empty() {
+        return Err(cut_short);
+    }
+    tracing::warn!(
+        "Push wake cut short ({cut_short}) but posting the {} notification(s) it had already \
+         rendered: the sync token has moved past those events, so nothing else will show them",
+        specs.len()
+    );
+    Ok(specs)
+}
+
 /// Everything the collecting event handlers need. No `AppHandle` — that is the
 /// entire point of this path.
 #[derive(Clone)]
@@ -581,21 +633,42 @@ pub async fn run_wake(
         return Ok(WakeOutcome::nothing());
     };
 
-    tokio::time::timeout(WAKE_BUDGET, sync_and_collect(data_dir, config))
-        .await
-        .map_err(|_| "Push sync exceeded its time budget".to_string())?
-        .map(WakeOutcome::posting)
+    // The collector's output lives out here rather than inside the sync,
+    // because the sync is the part that can be cancelled: `timeout` drops that
+    // future whole, and everything it owned with it. Handing it an `Arc` means
+    // a wake that runs out of time can still be asked what it managed to
+    // render — see `salvage` for why that matters so much.
+    let out: std::sync::Arc<std::sync::Mutex<Vec<crate::notify::NotificationSpec>>> =
+        Default::default();
+
+    let end = match tokio::time::timeout(
+        WAKE_BUDGET,
+        sync_and_collect(data_dir, config, out.clone()),
+    )
+    .await
+    {
+        Ok(Ok(())) => WakeSyncEnd::Completed,
+        Ok(Err(e)) => WakeSyncEnd::Failed(e),
+        Err(_) => WakeSyncEnd::OutOfTime,
+    };
+
+    // A poisoned lock means a handler panicked partway through the batch. What
+    // it had already written is still there and still worth posting, so take it
+    // rather than treating the panic as a reason to drop the lot.
+    let collected = out.lock().unwrap_or_else(|e| e.into_inner()).clone();
+
+    salvage(end, collected).map(WakeOutcome::posting)
 }
 
 async fn sync_and_collect(
     data_dir: &std::path::Path,
     config: crate::notifications::NotificationConfig,
-) -> Result<Vec<crate::notify::NotificationSpec>, String> {
+    out: std::sync::Arc<std::sync::Mutex<Vec<crate::notify::NotificationSpec>>>,
+) -> Result<(), String> {
     use matrix_sdk::config::SyncSettings;
 
     let client = background_client(data_dir).await?;
 
-    let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let suppressed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let span: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>> = Default::default();
     // Held until this function returns, at which point the handlers come off
@@ -667,11 +740,6 @@ async fn sync_and_collect(
         tracing::info!("Push wake advanced the sync token to {}", describe_token(&token_after));
     }
 
-    let collected = out.lock().map_err(|_| "Collector lock poisoned")?.clone();
-    let (specs, dropped) = cap_wake_notifications(collected);
-    if dropped > 0 {
-        tracing::info!("Push wake capped at {MAX_WAKE_NOTIFICATIONS}; dropped {dropped} older");
-    }
     if let Some((oldest, newest)) = span.lock().ok().and_then(|s| *s) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -687,8 +755,9 @@ async fn sync_and_collect(
     if suppressed > 0 {
         tracing::info!("Push wake skipped {suppressed} event(s) already read elsewhere");
     }
-    tracing::info!("Push wake rendered {} notification(s)", specs.len());
-    Ok(specs)
+    let rendered = out.lock().unwrap_or_else(|e| e.into_inner()).len();
+    tracing::info!("Push wake rendered {rendered} notification(s)");
+    Ok(())
 }
 
 /// A short, stable fingerprint of a sync token for logs.
@@ -1267,5 +1336,66 @@ mod tests {
         let wake = parse_wake(payload).expect("valid notification");
         assert_eq!(wake, PushWake::Clear { room_id: Some("!a:x".to_owned()), unread: None });
         assert_eq!(plan_wake(&wake, true, false), WakePlan::Dismiss { room_id: "!a:x".to_owned() });
+    }
+
+    /// The bug this guards. matrix-sdk persists the sync token *before* it
+    /// dispatches handlers, so by the time `collect` builds a spec the token
+    /// has already moved past that event. A wake that then reports only an
+    /// error loses those notifications for good — no later sync will offer
+    /// them again, because as far as the homeserver is concerned this device
+    /// has already read that far.
+    #[test]
+    fn a_wake_that_runs_out_of_time_still_posts_what_it_collected() {
+        let collected = vec![spec_named("$a"), spec_named("$b")];
+        let specs = salvage(WakeSyncEnd::OutOfTime, collected).expect("collected work is not a failure");
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].event_id, "$a");
+    }
+
+    #[test]
+    fn a_sync_that_failed_still_posts_what_it_collected() {
+        let specs = salvage(WakeSyncEnd::Failed("Push sync failed: 502".into()), vec![spec_named("$a")])
+            .expect("collected work is not a failure");
+        assert_eq!(specs.len(), 1);
+    }
+
+    /// With nothing collected there is nothing to salvage, and the caller
+    /// still needs to hear why the wake came back empty.
+    #[test]
+    fn a_wake_that_runs_out_of_time_with_nothing_collected_reports_the_timeout() {
+        let err = salvage(WakeSyncEnd::OutOfTime, Vec::new()).unwrap_err();
+        assert!(err.contains("time budget"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_sync_that_failed_with_nothing_collected_reports_the_failure() {
+        let err = salvage(WakeSyncEnd::Failed("No stored session".into()), Vec::new()).unwrap_err();
+        assert_eq!(err, "No stored session");
+    }
+
+    #[test]
+    fn a_completed_sync_returns_what_it_collected() {
+        let specs = salvage(WakeSyncEnd::Completed, vec![spec_named("$a")]).expect("completed");
+        assert_eq!(specs.len(), 1);
+    }
+
+    #[test]
+    fn a_completed_sync_that_found_nothing_is_not_an_error() {
+        assert!(salvage(WakeSyncEnd::Completed, Vec::new()).expect("completed").is_empty());
+    }
+
+    /// Salvage is still a wake, and a wake posts at most
+    /// `MAX_WAKE_NOTIFICATIONS`. A sync cut short after collecting a hundred
+    /// events must not empty all of them onto the shade.
+    #[test]
+    fn salvaged_notifications_are_still_capped() {
+        let collected: Vec<_> = (0..MAX_WAKE_NOTIFICATIONS + 5)
+            .map(|i| spec_named(&format!("$e{i}")))
+            .collect();
+
+        let specs = salvage(WakeSyncEnd::OutOfTime, collected).expect("collected work is not a failure");
+
+        assert_eq!(specs.len(), MAX_WAKE_NOTIFICATIONS);
+        assert_eq!(specs.last().unwrap().event_id, format!("$e{}", MAX_WAKE_NOTIFICATIONS + 4));
     }
 }
