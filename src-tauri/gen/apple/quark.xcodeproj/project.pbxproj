@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0E47EA99D6F87BBA3C13B284 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 18B0105FE2B4B079095AEAEC /* Security.framework */; };
+		0F654C19453CB1A67A79B398 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = F306E13B92399AFD8F7A900A /* libapp.a */; };
 		1664DB2CD1CE8E27D37A96C9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 136100CF43BA4D3ACFBF1709 /* Assets.xcassets */; };
 		456B175B40B887297AA6A2E3 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 11E698919B7DF03B5F1DFAA2 /* LaunchScreen.storyboard */; };
 		5D50CE864BA2CDF537FF78CD /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 64AB5F1809196600E24D4A12 /* assets */; };
@@ -22,47 +23,61 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		03DC0F6E09B2EA1D24E1B150 /* lib.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = lib.rs; sourceTree = "<group>"; };
+		03DC0F6E09B2EA1D24E1B150 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		064E084588FF60F3E691F9BF /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		072F508CE10B247B73C6DF37 /* devices.rs */ = {isa = PBXFileReference; path = devices.rs; sourceTree = "<group>"; };
 		11E698919B7DF03B5F1DFAA2 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		136100CF43BA4D3ACFBF1709 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		13643DF6A6B3B79E0C0AA706 /* reactions.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = reactions.rs; sourceTree = "<group>"; };
-		15E32F429AFA9F0736EC96F1 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
+		13643DF6A6B3B79E0C0AA706 /* reactions.rs */ = {isa = PBXFileReference; path = reactions.rs; sourceTree = "<group>"; };
+		15E32F429AFA9F0736EC96F1 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		18B0105FE2B4B079095AEAEC /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
-		256F479A5D492F6F8794A484 /* main.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = main.rs; sourceTree = "<group>"; };
-		27E48AA70AF01F44EDEEA638 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
-		313B6C3BA9E4087D65D407C5 /* spaces.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = spaces.rs; sourceTree = "<group>"; };
-		342C18C8DC869204B1F5D506 /* client.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = client.rs; sourceTree = "<group>"; };
-		437F82C0EFE1FFB06BBC2D96 /* emoji.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = emoji.rs; sourceTree = "<group>"; };
+		256F479A5D492F6F8794A484 /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
+		27E48AA70AF01F44EDEEA638 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		313B6C3BA9E4087D65D407C5 /* spaces.rs */ = {isa = PBXFileReference; path = spaces.rs; sourceTree = "<group>"; };
+		342C18C8DC869204B1F5D506 /* client.rs */ = {isa = PBXFileReference; path = client.rs; sourceTree = "<group>"; };
+		437F82C0EFE1FFB06BBC2D96 /* emoji.rs */ = {isa = PBXFileReference; path = emoji.rs; sourceTree = "<group>"; };
 		4C4BEC4F6DDBE7868059F69A /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		64AB5F1809196600E24D4A12 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		71BB63E26C00CC3B1AE6B91B /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
-		7BE1AC47C3BBAA7343253A85 /* events.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = events.rs; sourceTree = "<group>"; };
-		825E4C44313020B0DAA07239 /* rooms.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = rooms.rs; sourceTree = "<group>"; };
-		82667241180AA70AA67B78BB /* commands.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = commands.rs; sourceTree = "<group>"; };
+		78A84EE79CCF2B5DA700D24F /* secrets.rs */ = {isa = PBXFileReference; path = secrets.rs; sourceTree = "<group>"; };
+		7BE1AC47C3BBAA7343253A85 /* events.rs */ = {isa = PBXFileReference; path = events.rs; sourceTree = "<group>"; };
+		825E4C44313020B0DAA07239 /* rooms.rs */ = {isa = PBXFileReference; path = rooms.rs; sourceTree = "<group>"; };
+		82667241180AA70AA67B78BB /* commands.rs */ = {isa = PBXFileReference; path = commands.rs; sourceTree = "<group>"; };
 		846A911DE49E408752AF0291 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
+		86F628E976C670EA6B051DC5 /* push_wake.rs */ = {isa = PBXFileReference; path = push_wake.rs; sourceTree = "<group>"; };
 		88CCC89E6787EC25C8CD31F9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		8E36620ADC5519E9D18C4106 /* notifications.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = notifications.rs; sourceTree = "<group>"; };
+		8A5BAA535012C90C17573B56 /* updater.rs */ = {isa = PBXFileReference; path = updater.rs; sourceTree = "<group>"; };
+		8E36620ADC5519E9D18C4106 /* notifications.rs */ = {isa = PBXFileReference; path = notifications.rs; sourceTree = "<group>"; };
 		8E7F544E5A12B91EABD17494 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		8F99DE7CA7AFC8D691A5A0D2 /* push_jni.rs */ = {isa = PBXFileReference; path = push_jni.rs; sourceTree = "<group>"; };
+		9485CFA77FAD35612509472C /* mobile_sync.rs */ = {isa = PBXFileReference; path = mobile_sync.rs; sourceTree = "<group>"; };
 		9543BF492D7C6FCC7F54E40A /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		97267C532EEACAEB979EDC71 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		9861659CD6479E789A8BAA73 /* quark_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = quark_iOS.entitlements; sourceTree = "<group>"; };
-		992EA2ACD82F512B8831CEFB /* threads.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = threads.rs; sourceTree = "<group>"; };
-		99D8F9D36BE95A2225EFD167 /* klipy.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = klipy.rs; sourceTree = "<group>"; };
-		AA48FD2AB3076297B9B80311 /* Quark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Quark.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AC5E083C2AA6A348016479A1 /* app_config.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = app_config.rs; sourceTree = "<group>"; };
-		ADC428ECB3C7B6959D50BD25 /* crypto.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = crypto.rs; sourceTree = "<group>"; };
-		C056B44E456BE1140DBBC37D /* media.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = media.rs; sourceTree = "<group>"; };
-		CC6960C4FE8303D734EB7A9C /* timeline.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = timeline.rs; sourceTree = "<group>"; };
-		CD6C42F38C5035118DE3DEAB /* media_cache.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = media_cache.rs; sourceTree = "<group>"; };
-		D155880044C89A73C8B826EB /* tenor.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = tenor.rs; sourceTree = "<group>"; };
-		D44DC7156AE2715E61044134 /* theme.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = theme.rs; sourceTree = "<group>"; };
-		E25F3783B73DC867A83EBB4A /* stickers.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = stickers.rs; sourceTree = "<group>"; };
+		992EA2ACD82F512B8831CEFB /* threads.rs */ = {isa = PBXFileReference; path = threads.rs; sourceTree = "<group>"; };
+		99D8F9D36BE95A2225EFD167 /* klipy.rs */ = {isa = PBXFileReference; path = klipy.rs; sourceTree = "<group>"; };
+		A19B2179CF11C33AB3ECD1BE /* notify.rs */ = {isa = PBXFileReference; path = notify.rs; sourceTree = "<group>"; };
+		AA48FD2AB3076297B9B80311 /* quark_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = quark_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AC5E083C2AA6A348016479A1 /* app_config.rs */ = {isa = PBXFileReference; path = app_config.rs; sourceTree = "<group>"; };
+		ADC428ECB3C7B6959D50BD25 /* crypto.rs */ = {isa = PBXFileReference; path = crypto.rs; sourceTree = "<group>"; };
+		BB561C0A2474B24399762E33 /* html.rs */ = {isa = PBXFileReference; path = html.rs; sourceTree = "<group>"; };
+		C056B44E456BE1140DBBC37D /* media.rs */ = {isa = PBXFileReference; path = media.rs; sourceTree = "<group>"; };
+		C2086E8BAD268180D80E06DD /* unifiedpush.rs */ = {isa = PBXFileReference; path = unifiedpush.rs; sourceTree = "<group>"; };
+		C834A6797F8D3337F1F575F0 /* push.rs */ = {isa = PBXFileReference; path = push.rs; sourceTree = "<group>"; };
+		CC6960C4FE8303D734EB7A9C /* timeline.rs */ = {isa = PBXFileReference; path = timeline.rs; sourceTree = "<group>"; };
+		CD6C42F38C5035118DE3DEAB /* media_cache.rs */ = {isa = PBXFileReference; path = media_cache.rs; sourceTree = "<group>"; };
+		D155880044C89A73C8B826EB /* tenor.rs */ = {isa = PBXFileReference; path = tenor.rs; sourceTree = "<group>"; };
+		D44DC7156AE2715E61044134 /* theme.rs */ = {isa = PBXFileReference; path = theme.rs; sourceTree = "<group>"; };
+		E25F3783B73DC867A83EBB4A /* stickers.rs */ = {isa = PBXFileReference; path = stickers.rs; sourceTree = "<group>"; };
 		E2BFC48F008E8ED8BE348317 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
-		EF178041CBE41AA17EEFF283 /* quarkrc.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = quarkrc.rs; sourceTree = "<group>"; };
-		F4933279D0E4E8C4EEEC6EF1 /* mod.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = mod.rs; sourceTree = "<group>"; };
-		F7165896A5EB3177E7AC440D /* giphy.rs */ = {isa = PBXFileReference; lastKnownFileType = text; path = giphy.rs; sourceTree = "<group>"; };
+		EF178041CBE41AA17EEFF283 /* quarkrc.rs */ = {isa = PBXFileReference; path = quarkrc.rs; sourceTree = "<group>"; };
+		F306E13B92399AFD8F7A900A /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		F342BDAB6EA648E083BAEFD1 /* media_server.rs */ = {isa = PBXFileReference; path = media_server.rs; sourceTree = "<group>"; };
+		F4933279D0E4E8C4EEEC6EF1 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
+		F7165896A5EB3177E7AC440D /* giphy.rs */ = {isa = PBXFileReference; path = giphy.rs; sourceTree = "<group>"; };
 		F802D2C3C67788CB617FE5DB /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		F85614369567937F3AC38D5F /* net_guard.rs */ = {isa = PBXFileReference; path = net_guard.rs; sourceTree = "<group>"; };
+		FDF40CB6E9688DC34274A218 /* search_index.rs */ = {isa = PBXFileReference; path = search_index.rs; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -129,9 +144,25 @@
 		A23186DF75211EF1C155E653 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				AA48FD2AB3076297B9B80311 /* Quark.app */,
+				AA48FD2AB3076297B9B80311 /* quark_iOS.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		AA8357D367013FEB199AACE9 /* release */ = {
+			isa = PBXGroup;
+			children = (
+				F306E13B92399AFD8F7A900A /* libapp.a */,
+			);
+			path = release;
+			sourceTree = "<group>";
+		};
+		B0C82D386959B6F85DFC9C36 /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				AA8357D367013FEB199AACE9 /* release */,
+			);
+			path = arm64;
 			sourceTree = "<group>";
 		};
 		B1A52916735BA47B57D909B9 /* quark */ = {
@@ -151,7 +182,18 @@
 				03DC0F6E09B2EA1D24E1B150 /* lib.rs */,
 				256F479A5D492F6F8794A484 /* main.rs */,
 				CD6C42F38C5035118DE3DEAB /* media_cache.rs */,
+				F342BDAB6EA648E083BAEFD1 /* media_server.rs */,
+				9485CFA77FAD35612509472C /* mobile_sync.rs */,
+				F85614369567937F3AC38D5F /* net_guard.rs */,
 				8E36620ADC5519E9D18C4106 /* notifications.rs */,
+				A19B2179CF11C33AB3ECD1BE /* notify.rs */,
+				8F99DE7CA7AFC8D691A5A0D2 /* push_jni.rs */,
+				86F628E976C670EA6B051DC5 /* push_wake.rs */,
+				C834A6797F8D3337F1F575F0 /* push.rs */,
+				FDF40CB6E9688DC34274A218 /* search_index.rs */,
+				78A84EE79CCF2B5DA700D24F /* secrets.rs */,
+				C2086E8BAD268180D80E06DD /* unifiedpush.rs */,
+				8A5BAA535012C90C17573B56 /* updater.rs */,
 				39A54F0B22586F62485AC339 /* config */,
 				FBD5A5317A04262717205892 /* gif */,
 				FAA24CC15390A56011078457 /* matrix */,
@@ -163,6 +205,7 @@
 		E906E062A91AA4301F4FEA32 /* Externals */ = {
 			isa = PBXGroup;
 			children = (
+				B0C82D386959B6F85DFC9C36 /* arm64 */,
 			);
 			path = Externals;
 			sourceTree = "<group>";
@@ -196,7 +239,9 @@
 			children = (
 				342C18C8DC869204B1F5D506 /* client.rs */,
 				ADC428ECB3C7B6959D50BD25 /* crypto.rs */,
+				072F508CE10B247B73C6DF37 /* devices.rs */,
 				437F82C0EFE1FFB06BBC2D96 /* emoji.rs */,
+				BB561C0A2474B24399762E33 /* html.rs */,
 				C056B44E456BE1140DBBC37D /* media.rs */,
 				15E32F429AFA9F0736EC96F1 /* mod.rs */,
 				13643DF6A6B3B79E0C0AA706 /* reactions.rs */,
@@ -220,6 +265,13 @@
 			path = gif;
 			sourceTree = "<group>";
 		};
+		"TEMP_156E7DA7-D9B1-404D-8B32-51FC84E81B4D" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -240,7 +292,7 @@
 			packageProductDependencies = (
 			);
 			productName = quark_iOS;
-			productReference = AA48FD2AB3076297B9B80311 /* Quark.app */;
+			productReference = AA48FD2AB3076297B9B80311 /* quark_iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -251,6 +303,11 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					B945568A22A59592412D8CE8 = {
+						DevelopmentTeam = STY28WCV84;
+					};
+				};
 			};
 			buildConfigurationList = 2EC7F2D3C93FBC6298726C99 /* Build configuration list for PBXProject "quark" */;
 			developmentRegion = en;
@@ -279,6 +336,7 @@
 				1664DB2CD1CE8E27D37A96C9 /* Assets.xcassets in Resources */,
 				456B175B40B887297AA6A2E3 /* LaunchScreen.storyboard in Resources */,
 				5D50CE864BA2CDF537FF78CD /* assets in Resources */,
+				0F654C19453CB1A67A79B398 /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -324,7 +382,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				ARCHS = arm64;
+				ARCHS = (
+					arm64,
+				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = quark_iOS/quark_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -340,22 +400,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = tel.quark.app;
-				PRODUCT_NAME = "Quark";
+				PRODUCT_NAME = Quark;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;
@@ -422,7 +470,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
-				ARCHS = arm64;
+				ARCHS = (
+					arm64,
+				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = quark_iOS/quark_iOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
@@ -438,22 +488,10 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"LIBRARY_SEARCH_PATHS[arch=arm64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
-				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION)",
-					"$(SDKROOT)/usr/lib/swift",
-					"$(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
-					"$(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)",
-				);
+				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
+				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = tel.quark.app;
-				PRODUCT_NAME = "Quark";
+				PRODUCT_NAME = Quark;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALID_ARCHS = arm64;

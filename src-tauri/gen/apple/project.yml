@@ -53,6 +53,11 @@ targets:
       # builds and signs cleanly and only fails in the user's hands.
       properties:
         LSRequiresIPhoneOS: true
+        # APNs delivers `content-available` pushes to a suspended app only if it
+        # declares this. Without it the push is dropped before the extension is
+        # ever consulted, which looks exactly like a gateway that never fired.
+        UIBackgroundModes:
+          - remote-notification
         NSCameraUsageDescription: Quark needs camera access so you can take a photo or video to send in a chat.
         NSMicrophoneUsageDescription: Quark needs microphone access so videos you record to send include sound.
         NSPhotoLibraryUsageDescription: Quark needs photo library access so you can attach existing photos and videos to a chat.
@@ -70,7 +75,17 @@ targets:
         CFBundleShortVersionString: 0.18.0
         CFBundleVersion: "0.18.0"
     entitlements:
+      # xcodegen *writes* this file from these properties — a key added to the
+      # .entitlements by hand survives until the next `xcodegen generate` and
+      # then vanishes, taking push with it and leaving a build that signs fine.
+      # `aps-environment` is `development` for local Xcode builds; release and
+      # TestFlight need `production`, matched by the `.ios.prod` app_id that
+      # `apns::transport_for_build` selects off `debug_assertions`.
       path: quark_iOS/quark_iOS.entitlements
+      properties:
+        aps-environment: development
+        com.apple.security.application-groups:
+          - group.tel.quark.app
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
