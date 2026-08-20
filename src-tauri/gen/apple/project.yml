@@ -86,6 +86,13 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 0.18.0
         CFBundleVersion: "0.18.0"
+        # Declares the app a legitimate target for INSendMessageIntent, which is
+        # half of what lets the NSE render pushes as communication notifications
+        # (sender avatar, native "sender in group" header). The entitlement
+        # below is the other half; missing either silently downgrades to the
+        # plain-text rendering.
+        NSUserActivityTypes:
+          - INSendMessageIntent
     entitlements:
       # xcodegen *writes* this file from these properties — a key added to the
       # .entitlements by hand survives until the next `xcodegen generate` and
@@ -98,6 +105,9 @@ targets:
         aps-environment: development
         com.apple.security.application-groups:
           - group.tel.quark.app
+        # Communication Notifications — needs the capability of the same name
+        # ticked on the App ID in the developer portal, like push itself.
+        com.apple.developer.usernotifications.communication: true
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
@@ -164,12 +174,15 @@ targets:
         CFBundleShortVersionString: 0.18.0
         CFBundleVersion: "0.18.0"
     entitlements:
-      # The app group and nothing else. An extension must not declare
-      # `aps-environment` — the app owns the push registration.
+      # The app group and the communication-notifications grant — never
+      # `aps-environment`, which the app alone owns. The communication key is
+      # needed on the process that hands iOS the INSendMessageIntent, and that
+      # is this one.
       path: QuarkNSE/QuarkNSE.entitlements
       properties:
         com.apple.security.application-groups:
           - group.tel.quark.app
+        com.apple.developer.usernotifications.communication: true
     settings:
       base:
         # Must be a child of the app's bundle id, or iOS refuses to install it.
@@ -183,3 +196,5 @@ targets:
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
     dependencies:
       - sdk: UserNotifications.framework
+      # INSendMessageIntent — the communication-notification rendering.
+      - sdk: Intents.framework

@@ -1,3 +1,4 @@
+import Intents
 import UserNotifications
 
 /// Turns a metadata push into something worth reading.
@@ -22,8 +23,17 @@ final class NotificationService: UNNotificationServiceExtension {
         let delivery = Delivery(handler: contentHandler, fallback: content)
         self.delivery = delivery
 
+        let roomId = request.content.userInfo["room_id"] as? String
+
+        // Group by room on every path, including the ones below that bail out:
+        // a notification that could not be resolved still belongs to its room's
+        // stack, not loose at the top of the list.
+        if let roomId {
+            content.threadIdentifier = roomId
+        }
+
         guard
-            let roomId = request.content.userInfo["room_id"] as? String,
+            let roomId,
             let eventId = request.content.userInfo["event_id"] as? String,
             let shared = SharedState.load()
         else {
@@ -34,8 +44,7 @@ final class NotificationService: UNNotificationServiceExtension {
             guard let event = try? await shared.context(roomId: roomId, eventId: eventId) else {
                 return delivery.send(content)
             }
-            event.render(into: content, roomId: roomId, preferences: shared)
-            delivery.send(content)
+            delivery.send(await event.render(into: content, roomId: roomId, preferences: shared))
         }
     }
 
@@ -131,13 +140,16 @@ private struct SharedState {
 // ─── Resolving the event ─────────────────────────────────────────────────────
 
 /// What one `/context` request yields: the event itself plus enough room state
-/// to name the room and its sender, without a second round trip.
+/// to name the room and its sender — and their avatars — without a second
+/// round trip.
 private struct ResolvedEvent {
     let type: String
     let sender: String
     let body: String?
     let roomName: String?
     let senderName: String?
+    let roomAvatarMxc: String?
+    let senderAvatarMxc: String?
 
     var isEncrypted: Bool { type == "m.room.encrypted" }
 }
@@ -167,8 +179,7 @@ extension SharedState {
         let escape = { (s: String) in
             s.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? s
         }
-        var path = "\(homeserver.hasSuffix("/") ? String(homeserver.dropLast()) : homeserver)"
-        path += "/_matrix/client/v3/rooms/\(escape(roomId))/context/\(escape(eventId))?limit=0"
+        var path = "\(base)/_matrix/client/v3/rooms/\(escape(roomId))/context/\(escape(eventId))?limit=0"
         if lazyLoad {
             path += "&filter=\(escape("{\"lazy_load_members\":true}"))"
         }
@@ -184,6 +195,10 @@ extension SharedState {
         return Self.parse(data)
     }
 
+    private var base: String {
+        homeserver.hasSuffix("/") ? String(homeserver.dropLast()) : homeserver
+    }
+
     private static func parse(_ data: Data) -> ResolvedEvent? {
         guard
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -196,14 +211,19 @@ extension SharedState {
         let state = root["state"] as? [[String: Any]] ?? []
 
         var roomName: String?
+        var roomAvatar: String?
         var senderName: String?
+        var senderAvatar: String?
         for stateEvent in state {
+            let stateContent = stateEvent["content"] as? [String: Any]
             switch stateEvent["type"] as? String {
             case "m.room.name":
-                roomName = (stateEvent["content"] as? [String: Any])?["name"] as? String
+                roomName = stateContent?["name"] as? String
+            case "m.room.avatar":
+                roomAvatar = stateContent?["url"] as? String
             case "m.room.member" where stateEvent["state_key"] as? String == sender:
-                senderName =
-                    (stateEvent["content"] as? [String: Any])?["displayname"] as? String
+                senderName = stateContent?["displayname"] as? String
+                senderAvatar = stateContent?["avatar_url"] as? String
             default:
                 break
             }
@@ -214,25 +234,134 @@ extension SharedState {
             sender: sender,
             body: content?["body"] as? String,
             roomName: roomName?.isEmpty == false ? roomName : nil,
-            senderName: senderName?.isEmpty == false ? senderName : nil
+            senderName: senderName?.isEmpty == false ? senderName : nil,
+            roomAvatarMxc: roomAvatar,
+            senderAvatarMxc: senderAvatar
         )
+    }
+
+    /// Fetch an avatar thumbnail, or nil — a notification without an avatar
+    /// beats one that never arrives because a media fetch hung.
+    ///
+    /// The authenticated media endpoint is Matrix 1.11; the unauthenticated v3
+    /// path is the fallback for older homeservers.
+    func thumbnail(mxc: String?) async -> INImage? {
+        guard let mxc, mxc.hasPrefix("mxc://") else { return nil }
+        let parts = mxc.dropFirst("mxc://".count).split(separator: "/", maxSplits: 1)
+        guard parts.count == 2 else { return nil }
+        let escape = { (s: Substring) in
+            String(s).addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? String(s)
+        }
+        let suffix = "thumbnail/\(escape(parts[0]))/\(escape(parts[1]))?width=192&height=192&method=crop"
+
+        for path in [
+            "\(base)/_matrix/client/v1/media/\(suffix)",
+            "\(base)/_matrix/media/v3/\(suffix)",
+        ] {
+            guard let url = URL(string: path) else { continue }
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            request.timeoutInterval = 5
+            guard
+                let (data, response) = try? await URLSession.shared.data(for: request),
+                (response as? HTTPURLResponse)?.statusCode == 200,
+                !data.isEmpty
+            else { continue }
+            return INImage(imageData: data)
+        }
+        return nil
     }
 }
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
 
 private extension ResolvedEvent {
-    /// Mirrors `notifications::format_notification` so a pushed notification
-    /// reads the same as one the running app posts — same "sender in room"
-    /// title, and the same two placeholders when the privacy flags are off.
-    func render(into content: UNMutableNotificationContent, roomId: String, preferences: SharedState) {
-        let sender = senderName ?? self.sender
-        let room = roomName ?? roomId
+    /// Render as a communication notification — the API that gets a sender
+    /// avatar and a native "sender, in group" header, the way Messages does.
+    ///
+    /// Falls back to plain title/body text mirroring
+    /// `notifications::format_notification`, so the two paths always agree on
+    /// the privacy flags: with `show_sender` off nothing identifying is shown,
+    /// which also rules the intent out entirely — it exists to display exactly
+    /// what that flag hides.
+    func render(
+        into content: UNMutableNotificationContent,
+        roomId: String,
+        preferences: SharedState
+    ) async -> UNNotificationContent {
+        let senderDisplay = senderName ?? sender
 
-        content.title = preferences.showSender ? "\(sender) in \(room)" : "New Message"
+        // A DM has no m.room.name, and naming it by its room id helps nobody:
+        // the sender *is* the conversation.
+        content.title = preferences.showSender
+            ? roomName.map { "\(senderDisplay) in \($0)" } ?? senderDisplay
+            : "New Message"
         content.body = renderedBody(showBody: preferences.showBody)
-        // Groups a room's notifications together, the way the app's own do.
         content.threadIdentifier = roomId
+
+        guard preferences.showSender else { return content }
+        return await communicationStyled(
+            content, roomId: roomId, senderDisplay: senderDisplay, preferences: preferences
+        )
+    }
+
+    private func communicationStyled(
+        _ content: UNMutableNotificationContent,
+        roomId: String,
+        senderDisplay: String,
+        preferences: SharedState
+    ) async -> UNNotificationContent {
+        // DMs wear the sender's face; named rooms wear the room's. Either way
+        // the other is the fallback — a wrong avatar beats a grey monogram.
+        let avatarMxc = roomName == nil
+            ? (senderAvatarMxc ?? roomAvatarMxc)
+            : (roomAvatarMxc ?? senderAvatarMxc)
+        let avatar = await preferences.thumbnail(mxc: avatarMxc)
+
+        let senderPerson = INPerson(
+            personHandle: INPersonHandle(value: sender, type: .unknown),
+            nameComponents: nil,
+            displayName: senderDisplay,
+            image: roomName == nil ? avatar : nil,
+            contactIdentifier: nil,
+            customIdentifier: sender
+        )
+        // The recipient is this device's user. iOS only renders the group name
+        // when the intent actually describes a group — a sender alone reads as
+        // a DM regardless of speakableGroupName.
+        let me = INPerson(
+            personHandle: INPersonHandle(value: "self", type: .unknown),
+            nameComponents: nil,
+            displayName: nil,
+            image: nil,
+            contactIdentifier: nil,
+            customIdentifier: nil,
+            isMe: true
+        )
+
+        let intent = INSendMessageIntent(
+            recipients: [me],
+            outgoingMessageType: .outgoingMessageText,
+            content: content.body,
+            speakableGroupName: roomName.map { INSpeakableString(spokenPhrase: $0) },
+            conversationIdentifier: roomId,
+            serviceName: nil,
+            sender: senderPerson,
+            attachments: nil
+        )
+        if roomName != nil, let avatar {
+            intent.setImage(avatar, forParameterNamed: \.speakableGroupName)
+        }
+
+        let interaction = INInteraction(intent: intent, response: nil)
+        interaction.direction = .incoming
+        try? await interaction.donate()
+
+        // `updating(from:)` re-titles from the intent (sender name, group
+        // name) and attaches the avatar. If iOS declines — the communication
+        // entitlement missing is the usual cause — the plain rendering above
+        // already says everything but the picture.
+        return (try? content.updating(from: intent)) ?? content
     }
 
     private func renderedBody(showBody: Bool) -> String {

@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0E47EA99D6F87BBA3C13B284 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 18B0105FE2B4B079095AEAEC /* Security.framework */; };
 		1664DB2CD1CE8E27D37A96C9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 136100CF43BA4D3ACFBF1709 /* Assets.xcassets */; };
+		28C26086AEDDE50C17FF0E0F /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC6F0191929EDE8A5E0BB84 /* Intents.framework */; };
 		456B175B40B887297AA6A2E3 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 11E698919B7DF03B5F1DFAA2 /* LaunchScreen.storyboard */; };
 		5D50CE864BA2CDF537FF78CD /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 64AB5F1809196600E24D4A12 /* assets */; };
 		61AB49632AE6AB47549D385E /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F802D2C3C67788CB617FE5DB /* QuartzCore.framework */; };
@@ -66,6 +67,7 @@
 		342C18C8DC869204B1F5D506 /* client.rs */ = {isa = PBXFileReference; path = client.rs; sourceTree = "<group>"; };
 		437F82C0EFE1FFB06BBC2D96 /* emoji.rs */ = {isa = PBXFileReference; path = emoji.rs; sourceTree = "<group>"; };
 		4C4BEC4F6DDBE7868059F69A /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		5FC6F0191929EDE8A5E0BB84 /* Intents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Intents.framework; path = System/Library/Frameworks/Intents.framework; sourceTree = SDKROOT; };
 		63A48257C35B25AF383EF1D5 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		64AB5F1809196600E24D4A12 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		6C767C0B388C3A6F800A865E /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
@@ -120,6 +122,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F9ED4D88D039F1313812CD2E /* UserNotifications.framework in Frameworks */,
+				28C26086AEDDE50C17FF0E0F /* Intents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -279,6 +282,7 @@
 			isa = PBXGroup;
 			children = (
 				E2BFC48F008E8ED8BE348317 /* CoreGraphics.framework */,
+				5FC6F0191929EDE8A5E0BB84 /* Intents.framework */,
 				4C4BEC4F6DDBE7868059F69A /* libapp.a */,
 				8E7F544E5A12B91EABD17494 /* Metal.framework */,
 				064E084588FF60F3E691F9BF /* MetalKit.framework */,
@@ -331,7 +335,7 @@
 			path = gif;
 			sourceTree = "<group>";
 		};
-		"TEMP_BFE08B42-2958-451E-BE33-3488CE23AB7F" /* x86_64 */ = {
+		"TEMP_0987A014-23DB-499C-BC46-764D5DE417BB" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
