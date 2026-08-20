@@ -43,7 +43,14 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
+      # In the navigator but in no build phase. Whether Externals has a
+      # libapp.a in it when xcodegen runs depends entirely on whether a build
+      # has happened since the last clean — and if one has, the default
+      # classification copies a half-gigabyte static archive into the app
+      # bundle as a resource. Linking is unaffected: the framework dependency
+      # and LIBRARY_SEARCH_PATHS below are what actually find it.
       - path: Externals
+        buildPhase: none
       - path: quark_iOS
       - path: assets
         buildPhase: resources

@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		0E47EA99D6F87BBA3C13B284 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 18B0105FE2B4B079095AEAEC /* Security.framework */; };
-		0F654C19453CB1A67A79B398 /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = F306E13B92399AFD8F7A900A /* libapp.a */; };
 		1664DB2CD1CE8E27D37A96C9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 136100CF43BA4D3ACFBF1709 /* Assets.xcassets */; };
 		456B175B40B887297AA6A2E3 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 11E698919B7DF03B5F1DFAA2 /* LaunchScreen.storyboard */; };
 		5D50CE864BA2CDF537FF78CD /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 64AB5F1809196600E24D4A12 /* assets */; };
@@ -90,6 +89,7 @@
 		992EA2ACD82F512B8831CEFB /* threads.rs */ = {isa = PBXFileReference; path = threads.rs; sourceTree = "<group>"; };
 		99D8F9D36BE95A2225EFD167 /* klipy.rs */ = {isa = PBXFileReference; path = klipy.rs; sourceTree = "<group>"; };
 		A19B2179CF11C33AB3ECD1BE /* notify.rs */ = {isa = PBXFileReference; path = notify.rs; sourceTree = "<group>"; };
+		A802C8888C4816A6C4EA70C9 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		AC5E083C2AA6A348016479A1 /* app_config.rs */ = {isa = PBXFileReference; path = app_config.rs; sourceTree = "<group>"; };
 		ADC428ECB3C7B6959D50BD25 /* crypto.rs */ = {isa = PBXFileReference; path = crypto.rs; sourceTree = "<group>"; };
 		BB561C0A2474B24399762E33 /* html.rs */ = {isa = PBXFileReference; path = html.rs; sourceTree = "<group>"; };
@@ -215,6 +215,7 @@
 		B0C82D386959B6F85DFC9C36 /* arm64 */ = {
 			isa = PBXGroup;
 			children = (
+				DA721B9487E3C19CAE1A8B0A /* debug */,
 				AA8357D367013FEB199AACE9 /* release */,
 			);
 			path = arm64;
@@ -256,6 +257,14 @@
 			);
 			name = src;
 			path = ../../src;
+			sourceTree = "<group>";
+		};
+		DA721B9487E3C19CAE1A8B0A /* debug */ = {
+			isa = PBXGroup;
+			children = (
+				A802C8888C4816A6C4EA70C9 /* libapp.a */,
+			);
+			path = debug;
 			sourceTree = "<group>";
 		};
 		E906E062A91AA4301F4FEA32 /* Externals */ = {
@@ -322,7 +331,7 @@
 			path = gif;
 			sourceTree = "<group>";
 		};
-		"TEMP_80A8D3AC-E776-4952-B18A-401E8CCB902D" /* x86_64 */ = {
+		"TEMP_BFE08B42-2958-451E-BE33-3488CE23AB7F" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -417,7 +426,6 @@
 				1664DB2CD1CE8E27D37A96C9 /* Assets.xcassets in Resources */,
 				456B175B40B887297AA6A2E3 /* LaunchScreen.storyboard in Resources */,
 				5D50CE864BA2CDF537FF78CD /* assets in Resources */,
-				0F654C19453CB1A67A79B398 /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
