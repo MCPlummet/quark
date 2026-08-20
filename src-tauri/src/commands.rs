@@ -115,6 +115,15 @@ fn settle_pending_pushers(
         if let Err(e) = crate::unifiedpush::register_stored_endpoint(&config_dir).await {
             tracing::warn!("Could not register the stored push endpoint: {e}");
         }
+        // The same recovery on iOS, plus one the Android path does not need: a
+        // token the OS issued before `setup()` had resolved a config dir is
+        // parked in `apns.rs` and has nowhere else to be picked up. APNs does
+        // not re-issue on request, so this is the only thing standing between
+        // that ordering and push staying dead until the next launch.
+        #[cfg(target_os = "ios")]
+        if let Err(e) = crate::apns::register_stored_token(&config_dir).await {
+            tracing::warn!("Could not register the stored APNs token: {e}");
+        }
     });
 }
 

@@ -35,6 +35,11 @@ targets:
   quark_iOS:
     type: application
     platform: iOS
+    # Mirrors PRODUCT_NAME in the `app` setting group. xcodegen does not read
+    # setting groups when it names the buildable in the scheme, so without this
+    # a regen writes `quark_iOS.app` into a scheme whose target actually builds
+    # `Quark.app`.
+    productName: Quark
     sources:
       - path: Sources
       - path: Assets.xcassets
@@ -109,6 +114,9 @@ targets:
       - sdk: QuartzCore.framework
       - sdk: Security.framework
       - sdk: UIKit.framework
+      # main.mm asks for notification permission before registering for remote
+      # notifications; without this the link fails rather than the push.
+      - sdk: UserNotifications.framework
       - sdk: WebKit.framework
     preBuildScripts:
       - script: pnpm tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
