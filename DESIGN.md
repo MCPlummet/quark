@@ -332,9 +332,17 @@ nothing. The OS is the transport and the only gateway that can sign for
 pushkey is the device token base64-encoded, because Sygnal's
 `convert_device_token_to_hex` default makes it base64-*decode* what it is given;
 hex registers cleanly and never delivers. `app_id` selects sandbox or production
-(`tel.quark.app.ios.dev` / `.prod`) off `debug_assertions`, and must agree with
-the `aps-environment` entitlement — a mismatch fails silently at APNs, visible
-only in Sygnal's logs.
+(`tel.quark.app.ios.dev` / `.prod`) and must agree with the `aps-environment`
+entitlement the app was signed with — a mismatch fails silently at APNs,
+visible only in Sygnal's logs. So it is not chosen by a second switch that
+could disagree: `apns::detect_sandbox` reads the entitlement back out of the
+bundle's embedded provisioning profile at runtime, making registration follow
+the signature whatever the build flags were (`debug_assertions` was the old
+proxy, and a release-profile build signed for development registered `.prod`
+against a sandbox token). An absent profile is the App Store's doing and means
+production; the simulator, which has tokens but no profile, is pinned sandbox
+at compile time; only an unreadable profile falls back to the compile-time
+guess.
 
 **Tauri owns the app delegate**, so there is no compile-time place to put the
 remote-notification callbacks: `main.mm` adds them at runtime to whichever class

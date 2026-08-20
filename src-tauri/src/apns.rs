@@ -20,12 +20,111 @@
 pub const GATEWAY: &str = "https://push.quark.tel/_matrix/push/v1/notify";
 
 /// Sandbox and production APNs are separate endpoints, and a token minted by one
-/// is rejected by the other. Xcode builds get sandbox tokens; TestFlight and the
-/// App Store get production ones. The `app_id` this picks is a key in Sygnal's
-/// config, so the two halves have to be chosen by the same switch — hence
-/// `debug_assertions` rather than anything the user or the config file can set.
-pub fn transport_for_build(debug: bool) -> crate::push::PushTransport {
-    crate::push::PushTransport::Apns { sandbox: debug }
+/// is rejected by the other. The `app_id` this picks is a key in Sygnal's
+/// config, so it has to agree with the kind of token the device was issued —
+/// which is decided by the `aps-environment` entitlement the app was *signed*
+/// with, not by anything the user or the config file can set.
+pub fn transport_for_build(sandbox: bool) -> crate::push::PushTransport {
+    crate::push::PushTransport::Apns { sandbox }
+}
+
+// ─── Which APNs environment this install actually lives in ───────────────────
+//
+// The environment used to be inferred from `cfg!(debug_assertions)`, which
+// works only while "compiled debug" and "signed for development" happen to
+// coincide. They come apart routinely — a release-profile build installed from
+// Xcode for startup speed is still signed `development` and still holds a
+// sandbox token, but would have registered `.ios.prod` and died silently at
+// APNs. So the environment is read at runtime from the same fact that decided
+// which token APNs issued: the `aps-environment` entitlement in the embedded
+// provisioning profile. The two can no longer disagree, whatever the build
+// flags were.
+
+/// What the profile's `aps-environment` entitlement says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApsEnvironment {
+    Development,
+    Production,
+}
+
+/// What reading the embedded profile yielded. Split from the decision so the
+/// decision table is testable without a bundle to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProfileRead {
+    /// No `embedded.mobileprovision` in the bundle. The App Store strips it,
+    /// so absence *is* the production signal, not an error.
+    Absent,
+    /// A profile exists but the entitlement could not be found in it.
+    Unreadable,
+    Env(ApsEnvironment),
+}
+
+/// The sandbox flag to register with, given what the profile said.
+fn sandbox_verdict(read: ProfileRead) -> bool {
+    match read {
+        ProfileRead::Env(ApsEnvironment::Development) => true,
+        ProfileRead::Env(ApsEnvironment::Production) => false,
+        ProfileRead::Absent => false,
+        // A profile we cannot make sense of degrades to the old compile-time
+        // guess rather than to a coin flip.
+        ProfileRead::Unreadable => cfg!(debug_assertions),
+    }
+}
+
+/// Scan a provisioning profile for its `aps-environment` value.
+///
+/// The file is a CMS envelope, but the plist inside it is plaintext, so a byte
+/// scan finds the key without any crypto — the same approach the commercial
+/// push SDKs take. The value search is bounded to the bytes right after the
+/// key so a `<string>` from some later entitlement can never masquerade as
+/// this one.
+fn aps_environment_in(profile: &[u8]) -> Option<ApsEnvironment> {
+    fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    let key = b"<key>aps-environment</key>";
+    let after_key = find(profile, key)? + key.len();
+    let window = &profile[after_key..profile.len().min(after_key + 200)];
+
+    let open = find(window, b"<string>")? + b"<string>".len();
+    let close = open + find(&window[open..], b"</string>")?;
+    match window[open..close].trim_ascii() {
+        b"development" => Some(ApsEnvironment::Development),
+        b"production" => Some(ApsEnvironment::Production),
+        _ => None,
+    }
+}
+
+/// Read this install's APNs environment from its own bundle.
+fn read_embedded_profile() -> ProfileRead {
+    // The executable sits at the bundle root on iOS, and the profile beside it.
+    let Some(path) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("embedded.mobileprovision")))
+    else {
+        return ProfileRead::Unreadable;
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => match aps_environment_in(&bytes) {
+            Some(env) => ProfileRead::Env(env),
+            None => ProfileRead::Unreadable,
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProfileRead::Absent,
+        Err(_) => ProfileRead::Unreadable,
+    }
+}
+
+/// The sandbox flag for this install.
+///
+/// The simulator is the one place with a token and no provisioning profile —
+/// its tokens are always sandbox, and falling through to the absent-means-
+/// production rule would route them at the wrong endpoint.
+fn detect_sandbox() -> bool {
+    if cfg!(target_abi = "sim") {
+        return true;
+    }
+    sandbox_verdict(read_embedded_profile())
 }
 
 /// Label for this device in the user's pusher list on other clients.
@@ -98,7 +197,7 @@ pub async fn register_stored_token(data_dir: &std::path::Path) -> Result<(), Str
         &client,
         data_dir,
         &config,
-        transport_for_build(cfg!(debug_assertions)),
+        transport_for_build(detect_sandbox()),
         token,
         GATEWAY.to_owned(),
         device_display_name(),
@@ -287,10 +386,10 @@ mod tests {
     use super::*;
 
     /// The sandbox flag picks the `app_id`, and Sygnal keys its config by that
-    /// exact string. A debug build registering `.ios.prod` is rejected at APNs
-    /// with no error the device ever sees.
+    /// exact string. A sandbox token registered as `.ios.prod` is rejected at
+    /// APNs with no error the device ever sees.
     #[test]
-    fn debug_builds_register_against_the_sandbox() {
+    fn the_sandbox_flag_maps_straight_onto_the_transport() {
         assert_eq!(
             transport_for_build(true),
             crate::push::PushTransport::Apns { sandbox: true }
@@ -299,6 +398,49 @@ mod tests {
             transport_for_build(false),
             crate::push::PushTransport::Apns { sandbox: false }
         );
+    }
+
+    /// The profile's entitlement is the same fact that decided which token the
+    /// device holds, which is what makes this the one non-guess available. The
+    /// value search is bounded, so entitlements after `aps-environment` cannot
+    /// bleed into it.
+    #[test]
+    fn the_profile_scan_reads_the_entitlement_and_only_it() {
+        let dev = b"noise\x00<plist><dict>\
+            <key>aps-environment</key>\n\t<string> development </string>\
+            <key>application-identifier</key><string>X.tel.quark.app</string>\
+            </dict></plist>\x00noise";
+        assert_eq!(aps_environment_in(dev), Some(ApsEnvironment::Development));
+
+        let prod = b"<key>aps-environment</key><string>production</string>";
+        assert_eq!(aps_environment_in(prod.as_slice()), Some(ApsEnvironment::Production));
+
+        // No entitlement at all — a profile without push.
+        assert_eq!(aps_environment_in(b"<key>get-task-allow</key><true/>"), None);
+
+        // A value APNs has never issued is not worth guessing about.
+        assert_eq!(
+            aps_environment_in(b"<key>aps-environment</key><string>staging</string>"),
+            None
+        );
+
+        // The key present but its value pushed outside the bounded window —
+        // whatever that string was, it was not this entitlement's value.
+        let mut far = b"<key>aps-environment</key>".to_vec();
+        far.extend(std::iter::repeat(b' ').take(300));
+        far.extend_from_slice(b"<string>development</string>");
+        assert_eq!(aps_environment_in(&far), None);
+    }
+
+    /// The decision table. Absence means the App Store stripped the profile —
+    /// that install holds a production token, so absence is data, not an
+    /// error. Only an unreadable profile falls back to the compile-time guess.
+    #[test]
+    fn the_verdict_trusts_the_profile_and_treats_absence_as_production() {
+        assert!(sandbox_verdict(ProfileRead::Env(ApsEnvironment::Development)));
+        assert!(!sandbox_verdict(ProfileRead::Env(ApsEnvironment::Production)));
+        assert!(!sandbox_verdict(ProfileRead::Absent));
+        assert_eq!(sandbox_verdict(ProfileRead::Unreadable), cfg!(debug_assertions));
     }
 
     /// The two halves of the environment choice have to move together: the

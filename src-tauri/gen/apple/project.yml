@@ -97,9 +97,11 @@ targets:
       # xcodegen *writes* this file from these properties — a key added to the
       # .entitlements by hand survives until the next `xcodegen generate` and
       # then vanishes, taking push with it and leaving a build that signs fine.
-      # `aps-environment` is `development` for local Xcode builds; release and
-      # TestFlight need `production`, matched by the `.ios.prod` app_id that
-      # `apns::transport_for_build` selects off `debug_assertions`.
+      # `aps-environment` is `development` for local Xcode builds; TestFlight
+      # and App Store export re-sign it to `production`. The matching app_id is
+      # no longer a second switch to keep in step: `apns::detect_sandbox` reads
+      # this very entitlement back out of the embedded provisioning profile at
+      # runtime, so registration follows whatever the build was signed as.
       path: quark_iOS/quark_iOS.entitlements
       properties:
         aps-environment: development
