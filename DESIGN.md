@@ -346,10 +346,30 @@ until the next launch.
 
 **The extension is Swift only** — no Rust, no matrix-sdk, and so no decryption.
 It resolves the room id and event id the pusher sends with one authenticated
-`/context` request and renders through the same shape as
-`notifications::format_notification`, so a pushed notification reads like one
-the running app posts. Encrypted rooms render a fixed string; decryption needs a
-crypto store the extension can open, which is a later phase.
+`/context` request and renders as a **communication notification**: it donates
+an `INSendMessageIntent` and rewrites the content from it, which is the only
+API iOS offers for putting a real avatar and a native sender/group header on a
+notification. DMs — recognisable as rooms with no `m.room.name` — wear the
+sender's avatar and title as just the sender; named rooms wear the room's
+avatar, each falling back to the other. This needs the Communication
+Notifications entitlement on *both* targets, `NSUserActivityTypes` naming
+`INSendMessageIntent` on the app, and the capability enabled on both App IDs in
+the portal; when any of that is missing, iOS declines the intent and the plain
+title/body rendering — the same shape as `notifications::format_notification` —
+still stands. With `show_sender` off the intent is skipped outright: it exists
+to display exactly what that flag hides. `threadIdentifier` is set to the room
+id the moment it is known, before any fetch, so even a notification whose
+resolution failed stacks with its room. Encrypted rooms render a fixed string;
+decryption needs a crypto store the extension can open, which is a later phase.
+
+**Taps route through Android's pipeline.** tauri-plugin-notification owns the
+`UNUserNotificationCenter` delegate, and its `didReceive` deliberately ignores
+push-triggered responses — so `main.mm` hooks that method and takes exactly the
+case the plugin declines, the two partitioning on the same trigger check. The
+tap is written as the same `PendingNotificationAction` file MainActivity
+mirrors on Android, an event nudges a live webview to consume it immediately,
+and the boot-time replay covers the cold start — one dispatch path
+(`routeNotificationAction`) for both platforms, warm or cold.
 
 Two things cross into it, and both go through the **app group**
 (`group.tel.quark.app`), because an extension cannot read the app's keychain —
