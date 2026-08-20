@@ -97,6 +97,14 @@ fn settle_pending_pushers(
         // Enabling push before installing a distributor is the ordinary way that
         // happens, and nothing else would ever ask again.
         let config = crate::notifications::load_notification_config_from(&config_dir);
+        // Seed the extension's copy of the privacy flags. `set_notification_config`
+        // keeps it current afterwards; this is what puts it there at all on a
+        // fresh install, or on the first launch of a build that added it.
+        if let Err(e) = crate::secrets::write_nse_display(config.show_body, config.show_sender) {
+            tracing::warn!(
+                "Could not share display preferences with the notification extension: {e}"
+            );
+        }
         let has_endpoint = crate::push::load_push_state(&config_dir)
             .and_then(|state| state.endpoint)
             .is_some();
@@ -167,6 +175,16 @@ pub async fn login(
 
     let client = crate::matrix::client::build_client(&homeserver_url, data_path.clone(), &store_key).await?;
     let session = crate::matrix::client::login_with_password(&client, &username, &password).await?;
+
+    // Hand the iOS notification service extension its own copy. It runs in a
+    // separate process with no access to the keychain, so the app-group file is
+    // the only channel it has. Best-effort: an unprovisioned app group costs a
+    // notification its sender and room name, not the login.
+    if let Err(e) =
+        crate::secrets::write_nse_credentials(&session.homeserver_url, &session.access_token)
+    {
+        tracing::warn!("Could not share credentials with the notification extension: {e}");
+    }
 
     // Persist the session in the OS keyring — it is never returned to the
     // frontend or written to localStorage.
@@ -298,6 +316,16 @@ pub async fn restore_session(
         return Ok(RestoreOutcome::Invalid);
     }
 
+    // Refresh the extension's copy on every restore, not just at login: nothing
+    // else rewrites it, so a device that logged in once and has been restoring
+    // ever since would otherwise be left with whatever the app group held the
+    // first time — including nothing at all, on a build that predates this.
+    if let Err(e) =
+        crate::secrets::write_nse_credentials(&session.homeserver_url, &session.access_token)
+    {
+        tracing::warn!("Could not share credentials with the notification extension: {e}");
+    }
+
     {
         let mut guard = state.0.lock().map_err(|_| "State lock poisoned")?;
         *guard = Some(client.clone());
@@ -388,6 +416,10 @@ pub async fn logout(
     // and is unreachable now — keeping it would only convince the next login it
     // was already registered.
     crate::push::forget_local_registrations(&paths.config_dir);
+    // Nor does it touch the app group, which is outside the data dir entirely.
+    // An access token left in a container another process can read is a leak,
+    // not untidiness.
+    crate::secrets::clear_nse_credentials();
 
     Ok(())
 }
@@ -409,6 +441,7 @@ pub async fn clear_session(
     // the records would only make the next login think it was already
     // registered and skip registering at all.
     crate::push::forget_local_registrations(&paths.config_dir);
+    crate::secrets::clear_nse_credentials();
     Ok(())
 }
 
@@ -2454,6 +2487,12 @@ pub async fn set_notification_config(
     let mut guard = config_state.lock().map_err(|_| "Notification config lock poisoned")?;
     let merged = guard.with_preferences(config);
     crate::notifications::save_notification_config_to(&paths.config_dir, &merged)?;
+    // The iOS extension renders notifications this process never sees, and it
+    // cannot read the config dir. Without this, turning previews off would leave
+    // message text on the lock screen for every pushed notification.
+    if let Err(e) = crate::secrets::write_nse_display(merged.show_body, merged.show_sender) {
+        tracing::warn!("Could not share display preferences with the notification extension: {e}");
+    }
     *guard = merged;
     Ok(())
 }

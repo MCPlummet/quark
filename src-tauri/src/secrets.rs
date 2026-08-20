@@ -277,6 +277,170 @@ mod imp {
     }
 }
 
+// ─── iOS: the notification service extension's copy ─────────────────────────
+//
+// The NSE runs in its own process and cannot read the app's keychain — the
+// `keyring` crate cannot set a keychain access group, and nothing above does.
+// So the app writes the little the extension needs into the shared app-group
+// container instead. It makes one authenticated GET and renders the result;
+// anything more than a homeserver and a token would be storing a secret the
+// extension has no use for.
+//
+// This is a second copy of the access token, in a container the extension can
+// read. That is the point, and it is also why logout has to delete it: a token
+// left behind in a shared container after the session ends is a real leak.
+
+#[cfg(target_os = "ios")]
+mod nse {
+    use std::path::{Path, PathBuf};
+
+    /// Implemented in `gen/apple/Sources/quark/main.mm`. Both are resolved at
+    /// final link, when the Rust staticlib and the ObjC++ meet in one binary.
+    extern "C" {
+        fn quark_app_group_path() -> *const std::os::raw::c_char;
+        fn quark_protect_until_first_unlock(path: *const std::os::raw::c_char) -> bool;
+    }
+
+    const CREDENTIALS: &str = "nse-credentials.json";
+    const DISPLAY: &str = "nse-display.json";
+
+    #[derive(serde::Serialize)]
+    struct Credentials<'a> {
+        homeserver_url: &'a str,
+        access_token: &'a str,
+    }
+
+    /// The two privacy flags `notifications::format_notification` applies.
+    ///
+    /// A separate file from the credentials because the two have different
+    /// sources and change at different times: credentials come from the keyring
+    /// when a session appears, these from Settings whenever the user edits them.
+    /// Merging them would mean a keyring read on every Settings save.
+    #[derive(serde::Serialize)]
+    struct Display {
+        show_body: bool,
+        show_sender: bool,
+    }
+
+    /// The shared container, or `None` when the app-group entitlement is
+    /// missing or unprovisioned — a signing problem, not a runtime one.
+    fn container() -> Option<PathBuf> {
+        // SAFETY: returns NULL or a NUL-terminated string that outlives the call.
+        let raw = unsafe { quark_app_group_path() };
+        if raw.is_null() {
+            tracing::warn!(
+                "App group container unavailable; the notification extension \
+                 cannot be given credentials"
+            );
+            return None;
+        }
+        let path = unsafe { std::ffi::CStr::from_ptr(raw) }.to_str().ok()?;
+        Some(PathBuf::from(path))
+    }
+
+    /// Mark the file readable while the device is locked but after its first
+    /// unlock since boot.
+    ///
+    /// Failing loudly rather than warning is deliberate. A credential file the
+    /// extension cannot open on a locked device is worse than no file at all:
+    /// pushes arrive precisely when the phone is locked, so the bug would pass
+    /// every hand test and fail every real notification.
+    fn protect(path: &Path) -> Result<(), String> {
+        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|e| format!("Credential path is not a valid C string: {e}"))?;
+        // SAFETY: c_path is NUL-terminated and outlives the call.
+        if unsafe { quark_protect_until_first_unlock(c_path.as_ptr()) } {
+            Ok(())
+        } else {
+            Err("Could not set the extension credentials' file protection class".to_owned())
+        }
+    }
+
+    pub fn write(homeserver_url: &str, access_token: &str) -> Result<(), String> {
+        let path = container().ok_or("App group container unavailable")?.join(CREDENTIALS);
+        let body = serde_json::to_vec(&Credentials { homeserver_url, access_token })
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&path, body).map_err(|e| e.to_string())?;
+        protect(&path)
+    }
+
+    pub fn write_display(show_body: bool, show_sender: bool) -> Result<(), String> {
+        let path = container().ok_or("App group container unavailable")?.join(DISPLAY);
+        let body = serde_json::to_vec(&Display { show_body, show_sender })
+            .map_err(|e| e.to_string())?;
+        // No protection class: these are two booleans, and a file the extension
+        // cannot read on a locked device would silently fall back to *showing*
+        // more than the user asked for. The safe default has to be the readable
+        // one, so this file is deliberately not protected the way the token is.
+        std::fs::write(&path, body).map_err(|e| e.to_string())
+    }
+
+    pub fn clear() {
+        let Some(dir) = container() else {
+            return;
+        };
+        // The display flags outlive the session on purpose: they are a UI
+        // preference, not a secret, and the next login should not briefly leak
+        // previews the user turned off.
+        remove(&dir.join(CREDENTIALS));
+    }
+
+    fn remove(path: &Path) {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("Could not remove {}: {e}", path.display()),
+        }
+    }
+}
+
+/// Give the iOS notification service extension what it needs to turn a metadata
+/// push into a readable notification. A no-op everywhere else.
+///
+/// Called whenever a session appears rather than only at login: `restore_session`
+/// never writes the keyring, so a device that logged in once would otherwise
+/// keep whatever token was current the first time this ran.
+pub fn write_nse_credentials(homeserver_url: &str, access_token: &str) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    {
+        nse::write(homeserver_url, access_token)
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (homeserver_url, access_token);
+        Ok(())
+    }
+}
+
+/// Tell the extension which of the sender and the message body the user has
+/// asked to see. A no-op everywhere else.
+///
+/// The extension renders notifications the app never gets to see — it runs while
+/// the app is suspended or gone — so without this, `show_body = false` would
+/// still put message text on the lock screen. Written whenever Settings saves,
+/// which is the only thing that changes them.
+pub fn write_nse_display(show_body: bool, show_sender: bool) -> Result<(), String> {
+    #[cfg(target_os = "ios")]
+    {
+        nse::write_display(show_body, show_sender)
+    }
+    #[cfg(not(target_os = "ios"))]
+    {
+        let _ = (show_body, show_sender);
+        Ok(())
+    }
+}
+
+/// Remove the extension's copy of the credentials. A no-op everywhere else.
+///
+/// Best-effort and infallible by design: this runs on the logout path, which
+/// must not fail, and the worst outcome is a stale token the homeserver has
+/// already revoked.
+pub fn clear_nse_credentials() {
+    #[cfg(target_os = "ios")]
+    nse::clear();
+}
+
 // ─── Public API (platform-agnostic) ─────────────────────────────────────────
 
 /// Whether secure storage is reachable. Quark refuses to start an encrypted
