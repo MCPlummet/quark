@@ -290,15 +290,45 @@ mod imp {
 // read. That is the point, and it is also why logout has to delete it: a token
 // left behind in a shared container after the session ends is a real leak.
 
-#[cfg(target_os = "ios")]
 mod nse {
     use std::path::{Path, PathBuf};
 
-    /// Implemented in `gen/apple/Sources/quark/main.mm`. Both are resolved at
-    /// final link, when the Rust staticlib and the ObjC++ meet in one binary.
-    extern "C" {
-        fn quark_app_group_path() -> *const std::os::raw::c_char;
-        fn quark_protect_until_first_unlock(path: *const std::os::raw::c_char) -> bool;
+    /// Sets a file's data-protection class. Implemented in `main.mm`, because
+    /// only Foundation can do it.
+    type Protector = unsafe extern "C" fn(*const std::os::raw::c_char) -> bool;
+
+    /// Both of these are *handed to* Rust rather than looked up in ObjC, and
+    /// that is not a style choice. `crate-type` includes `cdylib`, which links
+    /// on its own with no `main.mm` anywhere near it — so a Rust `extern "C"`
+    /// block naming these symbols fails the build outright, on the cdylib,
+    /// before the staticlib the app actually uses is ever reached. Passing them
+    /// in from `main()` means Rust references no ObjC symbol by name at all,
+    /// and is the same direction the APNs token already travels.
+    static APP_GROUP: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    static PROTECTOR: std::sync::OnceLock<Protector> = std::sync::OnceLock::new();
+
+    /// Called once from `main()`, before Tauri starts.
+    ///
+    /// # Safety
+    /// `path` must be null or a valid NUL-terminated C string, and `protect` a
+    /// function that stays valid for the life of the process.
+    #[no_mangle]
+    pub unsafe extern "C" fn quark_register_app_group(
+        path: *const std::os::raw::c_char,
+        protect: Option<Protector>,
+    ) {
+        if let Some(protect) = protect {
+            let _ = PROTECTOR.set(protect);
+        }
+        if path.is_null() {
+            // The entitlement is missing or unprovisioned. A signing problem,
+            // not a runtime one, and it costs notification detail rather than
+            // the session — so it is reported where it bites, not here.
+            return;
+        }
+        if let Ok(path) = std::ffi::CStr::from_ptr(path).to_str() {
+            let _ = APP_GROUP.set(PathBuf::from(path));
+        }
     }
 
     const CREDENTIALS: &str = "nse-credentials.json";
@@ -324,18 +354,15 @@ mod nse {
 
     /// The shared container, or `None` when the app-group entitlement is
     /// missing or unprovisioned — a signing problem, not a runtime one.
-    fn container() -> Option<PathBuf> {
-        // SAFETY: returns NULL or a NUL-terminated string that outlives the call.
-        let raw = unsafe { quark_app_group_path() };
-        if raw.is_null() {
+    fn container() -> Option<&'static Path> {
+        let path = APP_GROUP.get().map(PathBuf::as_path);
+        if path.is_none() {
             tracing::warn!(
                 "App group container unavailable; the notification extension \
                  cannot be given credentials"
             );
-            return None;
         }
-        let path = unsafe { std::ffi::CStr::from_ptr(raw) }.to_str().ok()?;
-        Some(PathBuf::from(path))
+        path
     }
 
     /// Mark the file readable while the device is locked but after its first
@@ -346,10 +373,14 @@ mod nse {
     /// pushes arrive precisely when the phone is locked, so the bug would pass
     /// every hand test and fail every real notification.
     fn protect(path: &Path) -> Result<(), String> {
+        let protect = PROTECTOR
+            .get()
+            .ok_or("No file protector registered; main() did not run quark_register_app_group")?;
         let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
             .map_err(|e| format!("Credential path is not a valid C string: {e}"))?;
-        // SAFETY: c_path is NUL-terminated and outlives the call.
-        if unsafe { quark_protect_until_first_unlock(c_path.as_ptr()) } {
+        // SAFETY: c_path is NUL-terminated and outlives the call, and the
+        // pointer came from `main()` where it names a function in this binary.
+        if unsafe { protect(c_path.as_ptr()) } {
             Ok(())
         } else {
             Err("Could not set the extension credentials' file protection class".to_owned())
@@ -401,15 +432,13 @@ mod nse {
 /// never writes the keyring, so a device that logged in once would otherwise
 /// keep whatever token was current the first time this ran.
 pub fn write_nse_credentials(homeserver_url: &str, access_token: &str) -> Result<(), String> {
-    #[cfg(target_os = "ios")]
-    {
-        nse::write(homeserver_url, access_token)
+    // A runtime `cfg!` rather than `#[cfg]`: it compiles away just the same, and
+    // it leaves `nse` type-checked on every platform. The module has no
+    // iOS-specific code left in it — only iOS ever registers an app group.
+    if !cfg!(target_os = "ios") {
+        return Ok(());
     }
-    #[cfg(not(target_os = "ios"))]
-    {
-        let _ = (homeserver_url, access_token);
-        Ok(())
-    }
+    nse::write(homeserver_url, access_token)
 }
 
 /// Tell the extension which of the sender and the message body the user has
@@ -420,15 +449,10 @@ pub fn write_nse_credentials(homeserver_url: &str, access_token: &str) -> Result
 /// still put message text on the lock screen. Written whenever Settings saves,
 /// which is the only thing that changes them.
 pub fn write_nse_display(show_body: bool, show_sender: bool) -> Result<(), String> {
-    #[cfg(target_os = "ios")]
-    {
-        nse::write_display(show_body, show_sender)
+    if !cfg!(target_os = "ios") {
+        return Ok(());
     }
-    #[cfg(not(target_os = "ios"))]
-    {
-        let _ = (show_body, show_sender);
-        Ok(())
-    }
+    nse::write_display(show_body, show_sender)
 }
 
 /// Remove the extension's copy of the credentials. A no-op everywhere else.
@@ -437,7 +461,9 @@ pub fn write_nse_display(show_body: bool, show_sender: bool) -> Result<(), Strin
 /// must not fail, and the worst outcome is a stale token the homeserver has
 /// already revoked.
 pub fn clear_nse_credentials() {
-    #[cfg(target_os = "ios")]
+    if !cfg!(target_os = "ios") {
+        return;
+    }
     nse::clear();
 }
 

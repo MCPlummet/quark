@@ -74,16 +74,21 @@ static void quark_install_push_delegate(void) {
 }
 
 // ─── The app group shared with the notification service extension ────────────
+//
+// Both of these are *given* to Rust at startup rather than called from it. A
+// Rust `extern "C"` block naming them would fail to link: the crate also builds
+// as a cdylib, which links on its own with no main.mm in sight, and that link
+// runs before the staticlib the app actually uses.
 
-extern "C" const char *quark_app_group_path(void) {
+static const char *quark_app_group_path(void) {
     NSURL *url = [NSFileManager.defaultManager
         containerURLForSecurityApplicationGroupIdentifier:@"group.tel.quark.app"];
     if (url == nil) {
         return NULL; // Entitlement missing or not provisioned — a signing problem.
     }
-    // Leaked deliberately: called once per credential write, and handing Rust a
-    // buffer whose lifetime it would have to negotiate back across the boundary
-    // costs more than the handful of bytes.
+    // Leaked deliberately: called once, at launch, and handing Rust a buffer
+    // whose lifetime it would have to negotiate back across the boundary costs
+    // more than the handful of bytes.
     return strdup(url.path.UTF8String);
 }
 
@@ -91,7 +96,7 @@ extern "C" const char *quark_app_group_path(void) {
 // unlock following a boot, *including* while the device is locked. The default
 // class would make the extension fail precisely when pushes arrive — on a locked
 // phone — and pass every hand test on an unlocked one.
-extern "C" bool quark_protect_until_first_unlock(const char *path) {
+static bool quark_protect_until_first_unlock(const char *path) {
     if (path == NULL) {
         return false;
     }
@@ -109,6 +114,12 @@ extern "C" bool quark_protect_until_first_unlock(const char *path) {
 
 int main(int argc, char * argv[]) {
     @autoreleasepool {
+        // Hand Rust the shared container and the one Foundation call it needs
+        // inside it. Before start_app, so the first session to appear already
+        // has somewhere to write the extension's credentials.
+        ffi::quark_register_app_group(quark_app_group_path(),
+                                      quark_protect_until_first_unlock);
+
         // Registered before start_app because start_app runs the run loop and
         // never returns. The observer fires once the delegate exists, which is
         // the earliest moment there is a class to add the callbacks to.
