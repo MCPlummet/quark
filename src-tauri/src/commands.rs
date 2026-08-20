@@ -2795,15 +2795,17 @@ pub async fn request_battery_exemption(app_handle: AppHandle) -> Result<(), Stri
     crate::mobile_sync::request_battery_exemption(&app_handle)
 }
 
-/// Read-and-delete the cold-start notification action MainActivity captured
-/// (Android only — see `notify::PendingNotificationAction`). The frontend
+/// Read-and-delete the cold-start notification action the platform captured —
+/// MainActivity's mirror file on Android, `apns::quark_notification_tapped` on
+/// iOS; both write the same `notify::PendingNotificationAction`. The frontend
 /// calls this at boot to replay a tap that arrived before its listener was
-/// registered, and after warm taps to discard the duplicate file.
+/// registered, after warm taps to discard the duplicate file, and on iOS
+/// whenever the tap event announces a fresh one.
 #[tauri::command]
 pub async fn take_pending_notification_action(
     app_handle: AppHandle,
 ) -> Result<Option<crate::notify::PendingNotificationAction>, String> {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let path = app_handle
             .path()
@@ -2816,7 +2818,7 @@ pub async fn take_pending_notification_action(
             .unwrap_or(0);
         Ok(crate::notify::take_pending_action_from(&path, now_ms))
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = app_handle;
         Ok(None)

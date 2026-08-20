@@ -20,5 +20,8 @@ namespace ffi {
         /// The app group container's path (or NULL if unprovisioned), and the
         /// call that sets a file's data-protection class within it.
         void quark_register_app_group(const char *path, bool (*protect)(const char *));
+
+        /// The user tapped a pushed notification for this room.
+        void quark_notification_tapped(const char *room_id);
     }
 }

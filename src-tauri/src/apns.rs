@@ -161,6 +161,73 @@ pub unsafe extern "C" fn quark_apns_token(token: *const std::os::raw::c_char) {
     });
 }
 
+/// Event telling a live webview a notification tap just landed, so it can
+/// consume the pending-action file without waiting for the next boot.
+pub const EVENT_NOTIFICATION_TAP: &str = "quark://notification/tap";
+
+/// The user tapped a pushed notification. Route them to its room.
+///
+/// Reuses Android's whole delivery pipeline from the file down: the tap is
+/// written as a `PendingNotificationAction` — the same JSON MainActivity
+/// mirrors on Android — and the frontend replays it through
+/// `take_pending_notification_action` exactly as it replays a cold Android
+/// tap. The file is written even when the webview is alive, because the event
+/// only *announces* it; a webview mid-construction misses the event and still
+/// finds the file at boot. The frontend's existing take-once semantics are
+/// what prevent the double-route.
+///
+/// # Safety
+/// `room_id` must be null or a valid NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn quark_notification_tapped(room_id: *const std::os::raw::c_char) {
+    if room_id.is_null() {
+        return;
+    }
+    let Ok(room_id) = std::ffi::CStr::from_ptr(room_id).to_str() else {
+        return;
+    };
+    let room_id = room_id.to_owned();
+
+    use tauri::Manager;
+    let Some(app) = crate::push_wake::app_handle() else {
+        // A tap always runs the full app, so this means the observer fired
+        // before Tauri finished setting up — nowhere to resolve a data dir
+        // from yet. Rare enough to log rather than buffer.
+        tracing::warn!("Notification tap for {room_id} arrived before setup; dropped");
+        return;
+    };
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        tracing::warn!("Notification tap for {room_id}: no data dir to record it in");
+        return;
+    };
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let action = crate::notify::PendingNotificationAction {
+        ts,
+        action_id: Some("tap".to_owned()),
+        input_value: None,
+        notification: Some(serde_json::json!({ "extra": { "room_id": room_id } })),
+    };
+    match serde_json::to_string(&action) {
+        Ok(json) => {
+            if let Err(e) =
+                std::fs::write(data_dir.join(crate::notify::PENDING_ACTION_FILENAME), json)
+            {
+                tracing::warn!("Could not record the notification tap: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("Could not serialise the notification tap: {e}"),
+    }
+
+    use tauri::Emitter;
+    if let Err(e) = app.emit(EVENT_NOTIFICATION_TAP, ()) {
+        tracing::debug!("No webview heard the notification tap ({e}); the file replay will");
+    }
+}
+
 /// Called from the app delegate when APNs declines to issue a token.
 ///
 /// # Safety
