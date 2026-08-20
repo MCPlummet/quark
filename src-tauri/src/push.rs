@@ -65,13 +65,22 @@ impl PushTransport {
 
 /// Payload Sygnal sends verbatim to APNs. `mutable-content` is what makes iOS
 /// hand the push to the notification service extension; without it the user
-/// sees this placeholder alert instead of the real sender and room.
+/// sees this placeholder alert instead of the real sender and room. `sound` is
+/// what makes the notification audible — omitted, it arrives silently.
+///
+/// Changing this after release is not the one-line edit it looks like: the
+/// payload is stored on the homeserver in the pusher, and `plan_registration`
+/// compares only `(app_id, pushkey, gateway)` — an edit here reaches existing
+/// pushers only when their token rotates or push is toggled. Get it right
+/// before the first pusher registers, or pair the change with a plan that
+/// re-registers.
 fn apns_default_payload() -> matrix_sdk::ruma::serde::JsonObject {
     use serde_json::json;
     let payload = json!({
         "default_payload": {
             "aps": {
                 "mutable-content": 1,
+                "sound": "default",
                 "alert": { "loc-key": "Notification", "loc-args": [] },
             }
         }
@@ -1725,6 +1734,14 @@ mod tests {
     #[test]
     fn apns_asks_for_mutable_content_so_the_extension_runs() {
         assert_eq!(wire(&apns(false))["data"]["default_payload"]["aps"]["mutable-content"], 1);
+    }
+
+    /// Without `sound` the push arrives silently — and because the payload
+    /// lives in the registered pusher, not the app, fixing it later only
+    /// reaches devices whose registration churns. It has to be right up front.
+    #[test]
+    fn apns_notifications_are_audible() {
+        assert_eq!(wire(&apns(false))["data"]["default_payload"]["aps"]["sound"], "default");
     }
 
     /// APNs-shaped payload on an Android pusher would be dead weight the
