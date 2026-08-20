@@ -352,11 +352,13 @@ API iOS offers for putting a real avatar and a native sender/group header on a
 notification. DMs — recognisable as rooms with no `m.room.name` — wear the
 sender's avatar and title as just the sender; named rooms wear the room's
 avatar, each falling back to the other. This needs the Communication
-Notifications entitlement on *both* targets, `NSUserActivityTypes` naming
-`INSendMessageIntent` on the app, and the capability enabled on both App IDs in
-the portal; when any of that is missing, iOS declines the intent and the plain
-title/body rendering — the same shape as `notifications::format_notification` —
-still stands. With `show_sender` off the intent is skipped outright: it exists
+Notifications entitlement and `NSUserActivityTypes` naming `INSendMessageIntent`
+— both on the *app*, not the extension: iOS validates the styled rendering
+against the host app's entitlements even though the extension donates the
+intent, and a profile for the extension's App ID refuses the key outright. When
+any of that is missing, iOS declines the intent and the plain title/body
+rendering — the same shape as `notifications::format_notification` — still
+stands. With `show_sender` off the intent is skipped outright: it exists
 to display exactly what that flag hides. `threadIdentifier` is set to the room
 id the moment it is known, before any fetch, so even a notification whose
 resolution failed stacks with its room. Encrypted rooms render a fixed string;

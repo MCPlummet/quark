@@ -335,7 +335,7 @@
 			path = gif;
 			sourceTree = "<group>";
 		};
-		"TEMP_0987A014-23DB-499C-BC46-764D5DE417BB" /* x86_64 */ = {
+		"TEMP_8797CA6A-9DBF-4B1B-B292-78FF893E733C" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);

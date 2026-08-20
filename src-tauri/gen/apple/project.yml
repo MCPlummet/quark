@@ -105,8 +105,11 @@ targets:
         aps-environment: development
         com.apple.security.application-groups:
           - group.tel.quark.app
-        # Communication Notifications — needs the capability of the same name
-        # ticked on the App ID in the developer portal, like push itself.
+        # Communication Notifications. On the app only — iOS validates the
+        # styled rendering against the host app's entitlements even though the
+        # extension is what donates the intent, and the extension's own profile
+        # refuses the key. If signing rejects it here too, the capability needs
+        # ticking on the tel.quark.app App ID in the portal.
         com.apple.developer.usernotifications.communication: true
     scheme:
       environmentVariables:
@@ -174,15 +177,15 @@ targets:
         CFBundleShortVersionString: 0.18.0
         CFBundleVersion: "0.18.0"
     entitlements:
-      # The app group and the communication-notifications grant — never
-      # `aps-environment`, which the app alone owns. The communication key is
-      # needed on the process that hands iOS the INSendMessageIntent, and that
-      # is this one.
+      # The app group and nothing else. `aps-environment` belongs to the app,
+      # and so does the communication-notifications grant: iOS validates the
+      # styled rendering against the *host app's* entitlements, and a profile
+      # for the extension's App ID refuses the key outright ("Entitlement ...
+      # not found and could not be included in profile").
       path: QuarkNSE/QuarkNSE.entitlements
       properties:
         com.apple.security.application-groups:
           - group.tel.quark.app
-        com.apple.developer.usernotifications.communication: true
     settings:
       base:
         # Must be a child of the app's bundle id, or iOS refuses to install it.
