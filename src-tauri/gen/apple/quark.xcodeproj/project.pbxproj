@@ -14,14 +14,41 @@
 		5D50CE864BA2CDF537FF78CD /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 64AB5F1809196600E24D4A12 /* assets */; };
 		61AB49632AE6AB47549D385E /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F802D2C3C67788CB617FE5DB /* QuartzCore.framework */; };
 		71C8BA438A5B5459FE1C94AC /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 064E084588FF60F3E691F9BF /* MetalKit.framework */; };
+		89FE51C8EC746384976C6E50 /* QuarkNSE.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BE8186A178C2E24CC76D850C /* QuarkNSE.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B8AC53A8A4EA633BC1B0B43C /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6C767C0B388C3A6F800A865E /* UserNotifications.framework */; };
+		BB449AF5E95AD615E98A1B49 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A48257C35B25AF383EF1D5 /* NotificationService.swift */; };
 		DD4FD50E09A58765A7F4B08F /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9543BF492D7C6FCC7F54E40A /* main.mm */; };
 		DEC05FF889A653F06DC453B6 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E2BFC48F008E8ED8BE348317 /* CoreGraphics.framework */; };
 		E03E8A1C7A9622621CC96252 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8E7F544E5A12B91EABD17494 /* Metal.framework */; };
 		E06EAB25A948FB9232987A6F /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 97267C532EEACAEB979EDC71 /* WebKit.framework */; };
 		E3EBA699AF02CA5521855820 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 71BB63E26C00CC3B1AE6B91B /* UIKit.framework */; };
 		E5E01B34F81C0F41A3F4BFB8 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4C4BEC4F6DDBE7868059F69A /* libapp.a */; };
+		F9ED4D88D039F1313812CD2E /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6C767C0B388C3A6F800A865E /* UserNotifications.framework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		297914B94E5DA45721BA26A6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4C2D76F2F71BE7A5FABC97E8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 609B2222D7622DD6B80D2E2B;
+			remoteInfo = QuarkNSE;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		1652AA1B5C4E803EBE80AD77 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				89FE51C8EC746384976C6E50 /* QuarkNSE.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		031D5209FC296C2E8A01DFCA /* apns.rs */ = {isa = PBXFileReference; path = apns.rs; sourceTree = "<group>"; };
@@ -40,6 +67,7 @@
 		342C18C8DC869204B1F5D506 /* client.rs */ = {isa = PBXFileReference; path = client.rs; sourceTree = "<group>"; };
 		437F82C0EFE1FFB06BBC2D96 /* emoji.rs */ = {isa = PBXFileReference; path = emoji.rs; sourceTree = "<group>"; };
 		4C4BEC4F6DDBE7868059F69A /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		63A48257C35B25AF383EF1D5 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		64AB5F1809196600E24D4A12 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		6C767C0B388C3A6F800A865E /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		71BB63E26C00CC3B1AE6B91B /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
@@ -50,6 +78,7 @@
 		846A911DE49E408752AF0291 /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		86F628E976C670EA6B051DC5 /* push_wake.rs */ = {isa = PBXFileReference; path = push_wake.rs; sourceTree = "<group>"; };
 		88CCC89E6787EC25C8CD31F9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		8A2E4B8B0841269921007E99 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		8A5BAA535012C90C17573B56 /* updater.rs */ = {isa = PBXFileReference; path = updater.rs; sourceTree = "<group>"; };
 		8E36620ADC5519E9D18C4106 /* notifications.rs */ = {isa = PBXFileReference; path = notifications.rs; sourceTree = "<group>"; };
 		8E7F544E5A12B91EABD17494 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
@@ -64,6 +93,7 @@
 		AC5E083C2AA6A348016479A1 /* app_config.rs */ = {isa = PBXFileReference; path = app_config.rs; sourceTree = "<group>"; };
 		ADC428ECB3C7B6959D50BD25 /* crypto.rs */ = {isa = PBXFileReference; path = crypto.rs; sourceTree = "<group>"; };
 		BB561C0A2474B24399762E33 /* html.rs */ = {isa = PBXFileReference; path = html.rs; sourceTree = "<group>"; };
+		BE8186A178C2E24CC76D850C /* QuarkNSE.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = QuarkNSE.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		C056B44E456BE1140DBBC37D /* media.rs */ = {isa = PBXFileReference; path = media.rs; sourceTree = "<group>"; };
 		C2086E8BAD268180D80E06DD /* unifiedpush.rs */ = {isa = PBXFileReference; path = unifiedpush.rs; sourceTree = "<group>"; };
 		C834A6797F8D3337F1F575F0 /* push.rs */ = {isa = PBXFileReference; path = push.rs; sourceTree = "<group>"; };
@@ -80,10 +110,19 @@
 		F7165896A5EB3177E7AC440D /* giphy.rs */ = {isa = PBXFileReference; path = giphy.rs; sourceTree = "<group>"; };
 		F802D2C3C67788CB617FE5DB /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		F85614369567937F3AC38D5F /* net_guard.rs */ = {isa = PBXFileReference; path = net_guard.rs; sourceTree = "<group>"; };
+		FB35EF0B050B08B0248E62F5 /* QuarkNSE.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = QuarkNSE.entitlements; sourceTree = "<group>"; };
 		FDF40CB6E9688DC34274A218 /* search_index.rs */ = {isa = PBXFileReference; path = search_index.rs; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		9D14DBEF0E14171138459D64 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F9ED4D88D039F1313812CD2E /* UserNotifications.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		9ED5F4E5918C122309E3077A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -122,6 +161,7 @@
 				11E698919B7DF03B5F1DFAA2 /* LaunchScreen.storyboard */,
 				E906E062A91AA4301F4FEA32 /* Externals */,
 				F94FFAC2C410F808CAD384B9 /* quark_iOS */,
+				950B05C40D85A965D4D5A624 /* QuarkNSE */,
 				415E394B8F2D62F60E55729F /* Sources */,
 				C5956DE509098AD181295C2D /* src */,
 				EEA962BD47B45C0FF3C871C2 /* Frameworks */,
@@ -145,10 +185,21 @@
 			path = bindings;
 			sourceTree = "<group>";
 		};
+		950B05C40D85A965D4D5A624 /* QuarkNSE */ = {
+			isa = PBXGroup;
+			children = (
+				8A2E4B8B0841269921007E99 /* Info.plist */,
+				63A48257C35B25AF383EF1D5 /* NotificationService.swift */,
+				FB35EF0B050B08B0248E62F5 /* QuarkNSE.entitlements */,
+			);
+			path = QuarkNSE;
+			sourceTree = "<group>";
+		};
 		A23186DF75211EF1C155E653 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				1B265EB83940C8C0901A3611 /* Quark.app */,
+				BE8186A178C2E24CC76D850C /* QuarkNSE.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -271,7 +322,7 @@
 			path = gif;
 			sourceTree = "<group>";
 		};
-		"TEMP_FB0BF95C-68FE-4365-A4B2-B1C35338DA8D" /* x86_64 */ = {
+		"TEMP_80A8D3AC-E776-4952-B18A-401E8CCB902D" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -281,6 +332,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		609B2222D7622DD6B80D2E2B /* QuarkNSE */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 18CC622BF200911E4F010AA9 /* Build configuration list for PBXNativeTarget "QuarkNSE" */;
+			buildPhases = (
+				16CA6F31E6BEEFAB96FF390C /* Sources */,
+				9D14DBEF0E14171138459D64 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuarkNSE;
+			packageProductDependencies = (
+			);
+			productName = QuarkNSE;
+			productReference = BE8186A178C2E24CC76D850C /* QuarkNSE.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		B945568A22A59592412D8CE8 /* quark_iOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 95D03D3EB026902C928718EB /* Build configuration list for PBXNativeTarget "quark_iOS" */;
@@ -289,10 +358,12 @@
 				8E2C768169A3AEBC0DAAD893 /* Sources */,
 				7DC86A9C3EED8B81F38393A5 /* Resources */,
 				9ED5F4E5918C122309E3077A /* Frameworks */,
+				1652AA1B5C4E803EBE80AD77 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				EC6CBBE99FE6713E472F8189 /* PBXTargetDependency */,
 			);
 			name = quark_iOS;
 			packageProductDependencies = (
@@ -310,6 +381,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					609B2222D7622DD6B80D2E2B = {
+						DevelopmentTeam = STY28WCV84;
+					};
 					B945568A22A59592412D8CE8 = {
 						DevelopmentTeam = STY28WCV84;
 					};
@@ -329,6 +403,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				609B2222D7622DD6B80D2E2B /* QuarkNSE */,
 				B945568A22A59592412D8CE8 /* quark_iOS */,
 			);
 		};
@@ -373,6 +448,14 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		16CA6F31E6BEEFAB96FF390C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB449AF5E95AD615E98A1B49 /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8E2C768169A3AEBC0DAAD893 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -382,6 +465,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		EC6CBBE99FE6713E472F8189 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 609B2222D7622DD6B80D2E2B /* QuarkNSE */;
+			targetProxy = 297914B94E5DA45721BA26A6 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		14D9BD9B0F96DB4B7212F509 /* release */ = {
@@ -472,6 +563,29 @@
 			};
 			name = release;
 		};
+		97CF76D7E54A1567FE23E30A /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;
+				ARCHS = (
+					arm64,
+				);
+				CODE_SIGN_ENTITLEMENTS = QuarkNSE/QuarkNSE.entitlements;
+				DEVELOPMENT_TEAM = STY28WCV84;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				INFOPLIST_FILE = QuarkNSE/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = tel.quark.app.nse;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = debug;
+		};
 		A4D37E6FB9A6E9F730D12ADA /* debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -503,6 +617,29 @@
 				VALID_ARCHS = arm64;
 			};
 			name = debug;
+		};
+		C46577D5190F0A3C89D6876A /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = NO;
+				ARCHS = (
+					arm64,
+				);
+				CODE_SIGN_ENTITLEMENTS = QuarkNSE/QuarkNSE.entitlements;
+				DEVELOPMENT_TEAM = STY28WCV84;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				INFOPLIST_FILE = QuarkNSE/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = tel.quark.app.nse;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = release;
 		};
 		D4C8B1BAF5A92ECA624EF9F0 /* debug */ = {
 			isa = XCBuildConfiguration;
@@ -570,6 +707,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		18CC622BF200911E4F010AA9 /* Build configuration list for PBXNativeTarget "QuarkNSE" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				97CF76D7E54A1567FE23E30A /* debug */,
+				C46577D5190F0A3C89D6876A /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
 		2EC7F2D3C93FBC6298726C99 /* Build configuration list for PBXProject "quark" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
