@@ -159,10 +159,12 @@ push through the notification service extension.
 Push is opt-in and off by default (`push_enabled` in `notifications.toml`),
 toggled in Settings → Notifications. That section appears only where the
 platform is capable *and* the build wires a transport up
-(`push.rs::supports_push`). The two are separate claims because the platforms
-are not in step: Android has UnifiedPush, iOS is push-capable but has no
-transport until the APNs phase, and advertising a toggle there would strand the
-user on "waiting" with no way to progress. The opt-in is enforced inside
+(`push.rs::supports_push`). Both mobile platforms now satisfy both halves —
+Android through UnifiedPush, iOS through APNs — but the claims stay separate
+rather than collapsing into one const, because a capable platform whose build
+supplies no pushkey would otherwise advertise a toggle that can never leave
+"waiting". That is exactly what iOS was between the shared plumbing landing and
+the APNs transport landing. The opt-in is enforced inside
 `push::register`, not by each transport remembering to check: registration is
 what hands a third-party gateway this device's address, so the gate belongs on
 the handing over.
@@ -312,6 +314,61 @@ Consulting the public receipt alone made the filter a permanent no-op for
 everyone who had turned that preference off — silently, because a filter that
 never fires is indistinguishable from one with nothing to do. Both receipt types
 are read, unthreaded and main, and the newest wins.
+
+#### iOS: the notification service extension
+
+iOS has no cold path in the Android sense, because there is nothing to wake: the
+app is suspended or gone, and it does not get to run. What runs instead is a
+**notification service extension** (`gen/apple/QuarkNSE`), a second process iOS
+launches for each push carrying `mutable-content: 1`, with roughly 30 seconds
+and 24 MB to rewrite the notification before it is shown. Without that flag —
+emitted in the pusher's `default_payload` by `push::apns_default_payload` — the
+extension is never consulted and the user sees the `loc-key` placeholder.
+
+The homeserver POSTs to our own Sygnal at `push.quark.tel`, which signs for APNs;
+`apns.rs` is the transport module, and unlike `unifiedpush.rs` it discovers
+nothing. The OS is the transport and the only gateway that can sign for
+`tel.quark.app` is the one holding the APNs key, so both are constants. The
+pushkey is the device token base64-encoded, because Sygnal's
+`convert_device_token_to_hex` default makes it base64-*decode* what it is given;
+hex registers cleanly and never delivers. `app_id` selects sandbox or production
+(`tel.quark.app.ios.dev` / `.prod`) off `debug_assertions`, and must agree with
+the `aps-environment` entitlement — a mismatch fails silently at APNs, visible
+only in Sygnal's logs.
+
+**Tauri owns the app delegate**, so there is no compile-time place to put the
+remote-notification callbacks: `main.mm` adds them at runtime to whichever class
+wry instantiated, then re-assigns the delegate to itself so UIKit re-reads which
+methods exist. A token that arrives before Tauri's `setup()` has resolved a
+config dir is parked in `apns.rs` and drained by `settle_pending_pushers`; APNs
+does not re-issue on request, so without that the ordering would leave push dead
+until the next launch.
+
+**The extension is Swift only** — no Rust, no matrix-sdk, and so no decryption.
+It resolves the room id and event id the pusher sends with one authenticated
+`/context` request and renders through the same shape as
+`notifications::format_notification`, so a pushed notification reads like one
+the running app posts. Encrypted rooms render a fixed string; decryption needs a
+crypto store the extension can open, which is a later phase.
+
+Two things cross into it, and both go through the **app group**
+(`group.tel.quark.app`), because an extension cannot read the app's keychain —
+the `keyring` crate cannot set a keychain access group. `secrets.rs` writes the
+homeserver and access token, marked
+`NSFileProtectionCompleteUntilFirstUserAuthentication`: the default class would
+make the file unreadable while the device is locked, which is precisely when
+pushes arrive, so the bug would pass every hand test. It writes the
+`show_body` / `show_sender` flags separately and *unprotected*, because the
+failure mode of an unreadable flags file has to be showing less rather than
+more. Logout deletes the credentials — a token in a shared container outlives
+the session otherwise — and keeps the flags, which are a preference.
+
+What the extension cannot do is decline to show a notification. Quiet hours are
+therefore not honoured on a pushed iOS notification, and cannot be from here;
+the only mechanism that can suppress delivery is a server-side push rule, which
+is what room mutes already use.
+
+#### The pusher ledger
 
 `push.json` stores the transport address separately from the registered pusher.
 `last.pushkey` is what the homeserver was told; `endpoint` is what the platform
