@@ -161,6 +161,46 @@ pub unsafe extern "C" fn quark_apns_token(token: *const std::os::raw::c_char) {
     });
 }
 
+// ─── Clearing delivered notifications ────────────────────────────────────────
+
+/// Removes a room's delivered notifications by thread id. Implemented in
+/// `main.mm`; handed in as a pointer for the same reason the app-group calls
+/// are — Rust naming an ObjC symbol fails the cdylib link.
+type RoomCleaner = unsafe extern "C" fn(*const std::os::raw::c_char);
+
+static ROOM_CLEANER: std::sync::OnceLock<RoomCleaner> = std::sync::OnceLock::new();
+
+/// Called once from `main()`, before Tauri starts.
+///
+/// # Safety
+/// `clear_room` must stay valid for the life of the process.
+#[no_mangle]
+pub unsafe extern "C" fn quark_register_notification_cleaner(clear_room: Option<RoomCleaner>) {
+    if let Some(clear_room) = clear_room {
+        let _ = ROOM_CLEANER.set(clear_room);
+    }
+}
+
+/// Dismiss every pushed notification for a room.
+///
+/// The NSE stamps `threadIdentifier = room id` on everything it renders, and
+/// that is the only handle the app has on them — their request identifiers
+/// were assigned by the system in a process that was never ours, so the
+/// registry-based removal cannot reach them. Fire-and-forget: the native side
+/// enumerates and removes asynchronously.
+pub fn cancel_room_notifications(room_id: &str) {
+    let Some(clear) = ROOM_CLEANER.get() else {
+        return; // Not on iOS, or main() has not registered yet.
+    };
+    let Ok(c_room) = std::ffi::CString::new(room_id) else {
+        return;
+    };
+    // SAFETY: the pointer came from main() where it names a function in this
+    // binary, and c_room outlives the call — the ObjC side copies the string
+    // before returning.
+    unsafe { clear(c_room.as_ptr()) };
+}
+
 /// Event telling a live webview a notification tap just landed, so it can
 /// consume the pending-action file without waiting for the next boot.
 pub const EVENT_NOTIFICATION_TAP: &str = "quark://notification/tap";

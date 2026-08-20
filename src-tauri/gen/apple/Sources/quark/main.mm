@@ -189,6 +189,32 @@ static bool quark_protect_until_first_unlock(const char *path) {
     return ok;
 }
 
+// Remove every delivered notification belonging to a room, by the
+// threadIdentifier the NSE stamps on pushed notifications. The registry-based
+// removal in notify.rs cannot reach these: a pushed notification's identifier
+// is assigned by the system in a process that was never ours.
+static void quark_clear_room_delivered(const char *room_id) {
+    if (room_id == NULL) {
+        return;
+    }
+    NSString *room = [NSString stringWithUTF8String:room_id];
+    if (room.length == 0) {
+        return;
+    }
+    UNUserNotificationCenter *center = UNUserNotificationCenter.currentNotificationCenter;
+    [center getDeliveredNotificationsWithCompletionHandler:^(NSArray<UNNotification *> *delivered) {
+        NSMutableArray<NSString *> *ids = [NSMutableArray array];
+        for (UNNotification *notification in delivered) {
+            if ([notification.request.content.threadIdentifier isEqualToString:room]) {
+                [ids addObject:notification.request.identifier];
+            }
+        }
+        if (ids.count > 0) {
+            [center removeDeliveredNotificationsWithIdentifiers:ids];
+        }
+    }];
+}
+
 int main(int argc, char * argv[]) {
     @autoreleasepool {
         // Hand Rust the shared container and the one Foundation call it needs
@@ -196,6 +222,11 @@ int main(int argc, char * argv[]) {
         // has somewhere to write the extension's credentials.
         ffi::quark_register_app_group(quark_app_group_path(),
                                       quark_protect_until_first_unlock);
+
+        // And the call that clears a room's pushed notifications — same
+        // direction, same reason: Rust naming an ObjC symbol breaks the
+        // cdylib link that runs with no main.mm present.
+        ffi::quark_register_notification_cleaner(quark_clear_room_delivered);
 
         // Registered before start_app because start_app runs the run loop and
         // never returns. The observer fires once the delegate exists, which is

@@ -364,6 +364,20 @@ id the moment it is known, before any fetch, so even a notification whose
 resolution failed stacks with its room. Encrypted rooms render a fixed string;
 decryption needs a crypto store the extension can open, which is a later phase.
 
+**Read-state hygiene reaches pushed notifications.** The receipt handler in
+`events.rs` already dismissed a room's notifications on any of the own user's
+read receipts, from any device — but on iOS `notify::cancel_room` could only
+remove what this process posted through the plugin, and a pushed notification's
+identifier is assigned by the system in a process that was never ours. The one
+handle the app has on those is the `threadIdentifier` the NSE stamps, so
+`main.mm` supplies a cleaner that removes delivered notifications by thread id
+and `cancel_room` calls both removals; the two sets are disjoint. Read a room
+on the device and its stack clears immediately; read it elsewhere and the stack
+clears when the receipt reaches this device's sync — on launch or resume for a
+suspended app, since nothing here can run before then (see the Signal
+comparison: their gateway pushes read-syncs as NSE-waking alerts, which for us
+would be a Sygnal patch, deliberately not taken on).
+
 **Taps route through Android's pipeline.** tauri-plugin-notification owns the
 `UNUserNotificationCenter` delegate, and its `didReceive` deliberately ignores
 push-triggered responses — so `main.mm` hooks that method and takes exactly the

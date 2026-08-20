@@ -304,11 +304,19 @@ pub fn cancel_room(app: &tauri::AppHandle, room_id: &str) {
     }
     #[cfg(target_os = "ios")]
     {
-        if ids.is_empty() {
-            return;
-        }
-        if let Err(e) = app.notification().remove_active(ids) {
-            tracing::warn!("Failed to clear notifications for {room_id}: {e}");
+        // Pushed notifications first: the NSE stamps them with the room id as
+        // threadIdentifier, and that is the only handle this process has on
+        // them — their identifiers were assigned by the system, so the
+        // registry above never saw them and `remove_active` cannot name them.
+        crate::apns::cancel_room_notifications(room_id);
+
+        // Then whatever this process posted through the plugin, which carries
+        // no thread id and is invisible to the sweep above. The two sets are
+        // disjoint, so both calls are needed and neither can double-remove.
+        if !ids.is_empty() {
+            if let Err(e) = app.notification().remove_active(ids) {
+                tracing::warn!("Failed to clear notifications for {room_id}: {e}");
+            }
         }
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]

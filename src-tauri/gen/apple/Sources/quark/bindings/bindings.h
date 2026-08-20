@@ -23,5 +23,8 @@ namespace ffi {
 
         /// The user tapped a pushed notification for this room.
         void quark_notification_tapped(const char *room_id);
+
+        /// The call that removes a room's delivered notifications by thread id.
+        void quark_register_notification_cleaner(void (*clear_room)(const char *room_id));
     }
 }
