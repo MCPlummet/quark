@@ -2733,16 +2733,38 @@ pub async fn set_push_enabled(
         // none: `should_request_endpoint` reads it as "already have one" and no
         // later login ever asks the transport again, leaving push permanently
         // dead with nothing in Settings admitting it.
+        //
+        // Android only. The APNs token is not a subscription — opting out tears
+        // nothing down, and the OS re-issues the same token on every launch —
+        // so it cannot go stale the way a distributor endpoint can. Keeping it
+        // is what lets re-enabling register again without an app restart, since
+        // iOS has no way to ask for the token again mid-session.
+        #[cfg(target_os = "android")]
         if let Err(e) = crate::push::forget_endpoint(&paths.config_dir) {
             tracing::warn!("Could not forget the push endpoint: {e}");
         }
         return Ok(());
     }
 
-    // Turning push on asks the distributor for an address. The endpoint does not
-    // come back here — it arrives at PushEventService moments later and
-    // registers itself — so a `true` return means "asked", not "receiving".
-    // Settings reports the difference from `registered`.
+    // Turning push on, iOS: the address is already on disk — the OS issued the
+    // token at launch and `on_new_token` stored it unconditionally — so there
+    // is nothing to ask for, only a registration to perform. Without this the
+    // toggle reads "on" while no pusher exists until the next launch's
+    // `settle_pending_pushers`, which is exactly the lying-switch state the
+    // readiness ladder exists to prevent.
+    #[cfg(target_os = "ios")]
+    {
+        if let Err(e) = crate::apns::register_stored_token(&paths.config_dir).await {
+            tracing::warn!("Could not register the stored APNs token: {e}");
+        }
+        return Ok(());
+    }
+
+    // Turning push on, Android: ask the distributor for an address. The
+    // endpoint does not come back here — it arrives at PushEventService moments
+    // later and registers itself — so a `true` return means "asked", not
+    // "receiving". Settings reports the difference from `registered`.
+    #[allow(unreachable_code)]
     match crate::unifiedpush::subscribe_async(&app_handle).await {
         Ok(true) => {}
         Ok(false) => {
