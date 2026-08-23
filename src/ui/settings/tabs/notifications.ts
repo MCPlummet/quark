@@ -2,8 +2,8 @@
 //
 // Enable/preview toggles, Android background-sync controls, and a
 // test-notification button. Migrated from SettingsDialog._buildNotificationsTab;
-// behaviour is unchanged. The bespoke background-sync / quiet-hours / test DOM
-// stays inline (no shared control covers it); the standard rows use controls.
+// behaviour is unchanged. The bespoke background-sync / test DOM stays inline
+// (no shared control covers it); the standard rows use controls.
 
 import { getConfig, setNotificationConfig } from "../../../app/notifications.js";
 import type { NotificationConfig } from "../../../app/notifications.js";

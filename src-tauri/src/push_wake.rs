@@ -19,8 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushWake {
     /// An event happened. Sync and let the existing pipeline decide whether it
-    /// is worth showing — the push rules already said it might be, but quiet
-    /// hours, focus and mutes have not been consulted yet.
+    /// is worth showing — the push rules already said it might be, but focus,
+    /// mutes and the master switch have not been consulted yet.
     Event { room_id: String, event_id: String },
     /// A counts-only push: the unread count moved with no event to show. Sent
     /// when notifications are read elsewhere, so the answer is never "notify"
