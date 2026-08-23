@@ -123,11 +123,11 @@ fn settle_pending_pushers(
         if let Err(e) = crate::unifiedpush::register_stored_endpoint(&config_dir).await {
             tracing::warn!("Could not register the stored push endpoint: {e}");
         }
-        // The same recovery on iOS, plus one the Android path does not need: a
-        // token the OS issued before `setup()` had resolved a config dir is
-        // parked in `apns.rs` and has nowhere else to be picked up. APNs does
-        // not re-issue on request, so this is the only thing standing between
-        // that ordering and push staying dead until the next launch.
+        // The same recovery on iOS, plus two things the Android path does not
+        // need: it asks the OS for a token when push is on (nothing registers
+        // for remote notifications at launch any more), and it picks up a token
+        // parked in `apns.rs` by a callback that landed before `setup()` had
+        // resolved a config dir to write it to.
         #[cfg(target_os = "ios")]
         if let Err(e) = crate::apns::register_stored_token(&config_dir).await {
             tracing::warn!("Could not register the stored APNs token: {e}");
@@ -2735,10 +2735,10 @@ pub async fn set_push_enabled(
         // dead with nothing in Settings admitting it.
         //
         // Android only. The APNs token is not a subscription — opting out tears
-        // nothing down, and the OS re-issues the same token on every launch —
-        // so it cannot go stale the way a distributor endpoint can. Keeping it
-        // is what lets re-enabling register again without an app restart, since
-        // iOS has no way to ask for the token again mid-session.
+        // nothing down, and asking again hands back the same token — so it
+        // cannot go stale the way a distributor endpoint can, and keeping it
+        // lets re-enabling register immediately instead of waiting on a round
+        // trip through the OS.
         #[cfg(target_os = "android")]
         if let Err(e) = crate::push::forget_endpoint(&paths.config_dir) {
             tracing::warn!("Could not forget the push endpoint: {e}");
@@ -2746,12 +2746,12 @@ pub async fn set_push_enabled(
         return Ok(());
     }
 
-    // Turning push on, iOS: the address is already on disk — the OS issued the
-    // token at launch and `on_new_token` stored it unconditionally — so there
-    // is nothing to ask for, only a registration to perform. Without this the
-    // toggle reads "on" while no pusher exists until the next launch's
-    // `settle_pending_pushers`, which is exactly the lying-switch state the
-    // readiness ladder exists to prevent.
+    // Turning push on, iOS: ask the OS for a token — this opt-in is the first
+    // moment one is warranted, since registering at launch minted one for every
+    // install that never opted in — and register whatever is already on disk
+    // from an earlier opt-in. Without this the toggle reads "on" while no
+    // pusher exists until the next launch's `settle_pending_pushers`, which is
+    // exactly the lying-switch state the readiness ladder exists to prevent.
     #[cfg(target_os = "ios")]
     {
         if let Err(e) = crate::apns::register_stored_token(&paths.config_dir).await {

@@ -325,6 +325,16 @@ and 24 MB to rewrite the notification before it is shown. Without that flag —
 emitted in the pusher's `default_payload` by `push::apns_default_payload` — the
 extension is never consulted and the user sees the `loc-key` placeholder.
 
+Nothing registers for remote notifications at launch. `main.mm` installs the
+delegate callbacks and stops there; asking APNs for a token is a call Rust makes
+(`apns::request_device_token`, handed in as a function pointer like the rest of
+the ObjC side) once push is actually enabled, so an install that never opts in
+never mints a token or hands the gateway an address. The notification
+*permission* is likewise the frontend's to request, after login where the prompt
+follows something the user just did — the launch-time ask arrived in front of
+the login screen and pre-empted it. A token without permission is harmless: it
+arrives, and nothing is displayed until they agree.
+
 The homeserver POSTs to our own Sygnal at `push.quark.tel`, which signs for APNs;
 `apns.rs` is the transport module, and unlike `unifiedpush.rs` it discovers
 nothing. The OS is the transport and the only gateway that can sign for

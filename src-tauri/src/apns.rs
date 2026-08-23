@@ -137,11 +137,12 @@ fn device_display_name() -> String {
 /// A device token the OS issued before app setup finished.
 ///
 /// The delegate callback fires whenever apsd answers, which is not ordered
-/// against Tauri's `setup()` — and `Paths` only exists after it. APNs does not
-/// re-issue a token on request, so a callback that lands in that window and is
-/// merely logged leaves push dead until the next launch, silently. Parking it
-/// here costs a `Mutex<Option<String>>` and closes that window: the next caller
-/// with a config dir in hand drains it.
+/// against Tauri's `setup()` — and `Paths` only exists after it. A callback
+/// that lands in that window and is merely logged leaves push dead until
+/// something asks again, and the only thing that does is `request_device_token`
+/// on the next opt-in or login. Parking it here costs a `Mutex<Option<String>>`
+/// and closes the window outright: the next caller with a config dir in hand
+/// drains it.
 static PENDING_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 fn stash_token(token: &str) {
@@ -152,6 +153,47 @@ fn stash_token(token: &str) {
 
 fn take_stashed_token() -> Option<String> {
     PENDING_TOKEN.lock().ok().and_then(|mut slot| slot.take())
+}
+
+// ─── Asking the OS for a device token ────────────────────────────────────────
+
+/// Calls `registerForRemoteNotifications`. Implemented in `main.mm` and handed
+/// in as a pointer for the same reason the cleaner below is — Rust naming an
+/// ObjC symbol fails the cdylib link.
+type TokenRequester = unsafe extern "C" fn();
+
+static TOKEN_REQUESTER: std::sync::OnceLock<TokenRequester> = std::sync::OnceLock::new();
+
+/// Called once from `main()`, before Tauri starts.
+///
+/// # Safety
+/// `request` must stay valid for the life of the process.
+#[no_mangle]
+pub unsafe extern "C" fn quark_register_token_requester(request: Option<TokenRequester>) {
+    if let Some(request) = request {
+        let _ = TOKEN_REQUESTER.set(request);
+    }
+}
+
+/// Ask iOS for this device's APNs token.
+///
+/// Deliberately not called at launch: registering mints a token and hands the
+/// gateway an address belonging to an install that may never opt in, so it
+/// waits until push is actually on. The answer arrives asynchronously at
+/// `quark_apns_token` however it turns out.
+///
+/// Safe to call repeatedly. The OS answers with the token it already holds when
+/// nothing has changed, and `store_endpoint` recognises that and stops there —
+/// which is what makes asking on every launch worth it, since it is also the
+/// only thing that notices the rotation (a restore from backup, a reinstall)
+/// that would otherwise leave the homeserver pushing at a dead address.
+pub fn request_device_token() {
+    let Some(request) = TOKEN_REQUESTER.get() else {
+        return; // Not on iOS, or main() has not registered one.
+    };
+    // SAFETY: the pointer came from main(), where it names a function in this
+    // binary; the ObjC side hops to the main queue itself.
+    unsafe { request() };
 }
 
 // ─── Reacting to the OS ──────────────────────────────────────────────────────
@@ -172,10 +214,12 @@ pub async fn on_new_token(data_dir: &std::path::Path, token_base64: &str) -> Res
     register_stored_token(data_dir).await
 }
 
-/// Register whatever token is on disk with the homeserver.
+/// Register whatever token is on disk with the homeserver, asking the OS for
+/// one if push is on.
 ///
-/// Safe to call whenever a session appears — `push::register` returns without a
-/// round-trip when push is off or the address is already registered.
+/// Safe to call whenever a session appears — it returns before touching the
+/// network when push is off, and `push::register` makes no round-trip when the
+/// address is already registered.
 pub async fn register_stored_token(data_dir: &std::path::Path) -> Result<(), String> {
     // Fold in a token that arrived before there was a config dir to write it to.
     // This is the first moment one exists, and the only place that window is
@@ -184,13 +228,20 @@ pub async fn register_stored_token(data_dir: &std::path::Path) -> Result<(), Str
         crate::push::store_endpoint(data_dir, &token)?;
     }
 
-    let Some(token) = crate::push::load_push_state(data_dir).and_then(|state| state.endpoint) else {
-        return Ok(()); // The OS has not issued a token yet.
-    };
     let config = crate::notifications::load_notification_config_from(data_dir);
     if !config.push_enabled {
         return Ok(());
     }
+
+    // Push is on, so a token is now worth minting. Checked before reading the
+    // stored one because the first call after the user opts in is exactly the
+    // case where there is nothing on disk to read.
+    request_device_token();
+
+    let Some(token) = crate::push::load_push_state(data_dir).and_then(|state| state.endpoint) else {
+        // The OS has not answered yet; `quark_apns_token` finishes the job.
+        return Ok(());
+    };
 
     let client = crate::push_wake::background_client(data_dir).await?;
     crate::push::register(
@@ -384,6 +435,14 @@ pub unsafe extern "C" fn quark_apns_failed(reason: *const std::os::raw::c_char) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every platform but iOS reaches `register_stored_token` with no requester
+    /// registered — `main.mm` is the only thing that ever sets one — and the
+    /// call has to be inert there rather than dereferencing an empty slot.
+    #[test]
+    fn asking_for_a_token_without_a_requester_does_nothing() {
+        request_device_token();
+    }
 
     /// The sandbox flag picks the `app_id`, and Sygnal keys its config by that
     /// exact string. A sandbox token registered as `.ios.prod` is rejected at

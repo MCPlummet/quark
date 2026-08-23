@@ -134,20 +134,24 @@ static void quark_install_push_delegate(void) {
     // not cache — and the first thing to suspect if the app misbehaves at
     // launch in a way that predates push.
     app.delegate = delegate;
+}
 
-    // A token arrives without permission, but nothing is displayed. Asking here
-    // rather than at first-notification keeps the prompt next to the launch the
-    // user just performed.
-    [UNUserNotificationCenter.currentNotificationCenter
-        requestAuthorizationWithOptions:(UNAuthorizationOptionAlert |
-                                         UNAuthorizationOptionSound |
-                                         UNAuthorizationOptionBadge)
-                      completionHandler:^(BOOL granted, NSError *error) {
-                          NSLog(@"[quark] notification permission granted=%d error=%@",
-                                granted, error.localizedDescription);
-                      }];
-
-    [app registerForRemoteNotifications];
+// Ask APNs for this device's token. Called from Rust, and only once push is
+// on: registering here at launch minted a token — and handed the gateway an
+// address — for installs that never opted in, and did it before the user had
+// even logged in.
+//
+// Permission is not requested here either. It arrives from the frontend's
+// notification init after login, where the user has just done something that
+// explains the prompt; asking at launch put the system alert in front of the
+// login screen and made that contextual request dead code. A token without
+// permission is fine — it arrives, and nothing is displayed until they agree.
+static void quark_request_apns_token(void) {
+    // registerForRemoteNotifications is main-thread-only, and Rust calls this
+    // from whichever runtime thread settled the pushers.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [UIApplication.sharedApplication registerForRemoteNotifications];
+    });
 }
 
 // ─── The app group shared with the notification service extension ────────────
@@ -227,6 +231,10 @@ int main(int argc, char * argv[]) {
         // direction, same reason: Rust naming an ObjC symbol breaks the
         // cdylib link that runs with no main.mm present.
         ffi::quark_register_notification_cleaner(quark_clear_room_delivered);
+
+        // Likewise the call that asks APNs for a device token, which Rust makes
+        // when push is enabled rather than unconditionally at launch.
+        ffi::quark_register_token_requester(quark_request_apns_token);
 
         // Registered before start_app because start_app runs the run loop and
         // never returns. The observer fires once the delegate exists, which is

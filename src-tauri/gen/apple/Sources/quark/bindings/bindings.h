@@ -26,5 +26,9 @@ namespace ffi {
 
         /// The call that removes a room's delivered notifications by thread id.
         void quark_register_notification_cleaner(void (*clear_room)(const char *room_id));
+
+        /// The call that asks APNs for a device token. Rust makes it when push
+        /// is enabled, rather than the app registering unconditionally at launch.
+        void quark_register_token_requester(void (*request)());
     }
 }
