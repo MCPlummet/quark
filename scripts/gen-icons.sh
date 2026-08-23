@@ -36,6 +36,10 @@ python3 scripts/gen-master-icon.py --scale "$FG_SCALE"     --output "$ICONS/andr
 step "2/5  tauri icon (desktop, Windows tiles, Android, iOS)"
 pnpm tauri icon "$ICONS/app-icon.json"
 
+# tauri icon shuffles the .icns chunk order run to run; stabilise it so an
+# unchanged icon does not show up as a 190KB binary diff.
+python3 scripts/canonicalize-icns.py "$ICONS/icon.icns"
+
 step "3/5  restore the master that tauri icon just resampled"
 python3 scripts/gen-master-icon.py --scale "$MASTER_SCALE" --output "$ICONS/icon.png"
 

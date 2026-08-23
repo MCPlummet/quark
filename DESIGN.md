@@ -1086,6 +1086,10 @@ The pipeline exists because `pnpm tauri icon` alone gets three things wrong here
 `android_fg`). Note that its documented `android_fg_scale` key is a **no-op** in the
 current CLI — padding the `android_fg` image is what actually works.
 
+`tauri icon` also emits the `.icns` chunks in a nondeterministic order, so the
+pipeline canonicalizes them; without that, an unchanged icon shows up as a ~190KB
+binary diff on every run. Regenerating with no source change is a no-op.
+
 ## Project Structure
 
 ```
@@ -1149,6 +1153,7 @@ quark/
 │   ├── gen-icons.sh          # Full icon pipeline (run this)
 │   ├── gen-master-icon.py    # 32px art -> padded master
 │   ├── gen-ios-icons.py      # iOS set (black-composited, no alpha)
+│   ├── canonicalize-icns.py  # Stable .icns chunk order (idempotent regen)
 │   ├── pnglib.py             # Dependency-free PNG read/write
 │   └── gen-emoji.mjs         # Emoji shortcode data
 ├── themes/                   # Built-in theme files
