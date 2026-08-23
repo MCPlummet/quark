@@ -98,7 +98,7 @@ Rust backend (matrix-sdk 0.9)
 - `media_cache.rs` — disk-based LRU cache (200MB default)
 - `notifications.rs` — system notifications with room muting and privacy flags
 - `config/` — TOML theme parser, vimrc-style keybinding parser
-- `gif/` — Tenor, Giphy & Klipy API integration
+- `gif/` — Giphy & Klipy API integration
 
 ### IPC Contract
 

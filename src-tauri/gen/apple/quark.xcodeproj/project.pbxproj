@@ -101,7 +101,6 @@
 		C834A6797F8D3337F1F575F0 /* push.rs */ = {isa = PBXFileReference; path = push.rs; sourceTree = "<group>"; };
 		CC6960C4FE8303D734EB7A9C /* timeline.rs */ = {isa = PBXFileReference; path = timeline.rs; sourceTree = "<group>"; };
 		CD6C42F38C5035118DE3DEAB /* media_cache.rs */ = {isa = PBXFileReference; path = media_cache.rs; sourceTree = "<group>"; };
-		D155880044C89A73C8B826EB /* tenor.rs */ = {isa = PBXFileReference; path = tenor.rs; sourceTree = "<group>"; };
 		D44DC7156AE2715E61044134 /* theme.rs */ = {isa = PBXFileReference; path = theme.rs; sourceTree = "<group>"; };
 		E25F3783B73DC867A83EBB4A /* stickers.rs */ = {isa = PBXFileReference; path = stickers.rs; sourceTree = "<group>"; };
 		E2BFC48F008E8ED8BE348317 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
@@ -330,7 +329,6 @@
 				F7165896A5EB3177E7AC440D /* giphy.rs */,
 				99D8F9D36BE95A2225EFD167 /* klipy.rs */,
 				F4933279D0E4E8C4EEEC6EF1 /* mod.rs */,
-				D155880044C89A73C8B826EB /* tenor.rs */,
 			);
 			path = gif;
 			sourceTree = "<group>";

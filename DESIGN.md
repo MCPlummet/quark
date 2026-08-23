@@ -654,7 +654,7 @@ nunmap gs
 " Set options (like :set in vim)
 set scrolloff=5               " keep 5 messages visible above/below cursor
 set shortcode_preview=true    " show emoji preview while typing :shortcode:
-set gif_provider=tenor        " tenor | giphy
+set gif_provider=klipy        " klipy | giphy
 set gif_rating=pg             " g | pg | pg-13 | r
 set home_dm_limit=12          " chats shown on the Home canvas
 ```
@@ -711,7 +711,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 | **General** | Theme selector, notification toggles, send-key behaviour, read-receipt toggles, confirm-redact toggle |
 | **Account** | Devices & Verification — see below |
 | **Media** | Image auto-load, max dimensions, cache-size limit |
-| **GIF** | Provider (Tenor / Giphy / Klipy), API key, content rating |
+| **GIF** | Provider (Klipy / Giphy), API key, content rating |
 | **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
 | **Notifications** | Enable / preview / sender toggles, push and background-sync controls, test notification |
 | **Themes** | Theme picker and hot-reload path |
@@ -797,9 +797,8 @@ Full compatibility with Cinny, FluffyChat, Nheko, and SchildiChat.
 Discord-style integrated GIF search, accessible from insert mode or command bar.
 
 **Providers (configurable in quarkrc):**
-- Tenor (default) — `set gif_provider=tenor`
+- Klipy (default) — `set gif_provider=klipy`
 - Giphy — `set gif_provider=giphy`
-- Klipy — `set gif_provider=klipy`
 - Content rating filter: `set gif_rating=pg` (g / pg / pg-13 / r)
 
 **UX flow:**
@@ -811,7 +810,7 @@ Discord-style integrated GIF search, accessible from insert mode or command bar.
 6. Selected GIF is uploaded to the homeserver as media and sent as an `m.image` event with `info.mimetype: "image/gif"` — this avoids linking to external URLs that may break or track users
 
 **Backend:**
-- Rust backend handles API calls to Tenor/Giphy/Klipy (API keys stored in config)
+- Rust backend handles API calls to Klipy/Giphy (API keys stored in config)
 - Downloads selected GIF, uploads to homeserver via media API
 - Caches recent search results and thumbnails locally
 
@@ -985,7 +984,7 @@ sticker_max_size = 256
 cache_size_mb = 500
 
 [gif]
-provider = "tenor"            # tenor | giphy
+provider = "klipy"            # klipy | giphy
 api_key = ""                  # user provides their own API key
 rating = "pg"                 # g | pg | pg-13 | r
 cache_results = true
@@ -1073,7 +1072,6 @@ quark/
 │   │   │   └── spaces.rs     # Space hierarchy
 │   │   ├── gif/              # GIF search integration
 │   │   │   ├── mod.rs
-│   │   │   ├── tenor.rs      # Tenor API client
 │   │   │   ├── giphy.rs      # Giphy API client
 │   │   │   └── klipy.rs      # Klipy API client
 │   │   ├── config/           # Config & theme loading

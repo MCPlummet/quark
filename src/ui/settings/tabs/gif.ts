@@ -30,8 +30,8 @@ export const gifTab: SettingsTab = {
     section.appendChild(controls.selectRow(
       "Provider",
       draft.gif.provider,
-      [["tenor", "Tenor"], ["giphy", "Giphy"], ["klipy", "Klipy"]],
-      (v) => { draft = { ...draft, gif: { ...draft.gif, provider: v as "tenor" | "giphy" | "klipy" } }; },
+      [["giphy", "Giphy"], ["klipy", "Klipy"]],
+      (v) => { draft = { ...draft, gif: { ...draft.gif, provider: v as "giphy" | "klipy" } }; },
     ));
 
     section.appendChild(controls.textRow(

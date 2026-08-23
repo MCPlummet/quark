@@ -48,7 +48,7 @@ export function applySetOptions(cfg: AppConfig, sets: SetOption[]): AppConfig {
       case "sticker_max_size":  if (typeof value === "number")  updated.media.sticker_max_size = value; break;
       case "cache_size_mb":     if (typeof value === "number")  updated.media.cache_size_mb = value; break;
       // gif
-      case "gif_provider":      if (typeof value === "string")  updated.gif.provider = value as "tenor" | "giphy"; break;
+      case "gif_provider":      if (value === "giphy" || value === "klipy") updated.gif.provider = value; break;
       case "gif_rating":        if (typeof value === "string")  updated.gif.rating = value as "g" | "pg" | "pg-13" | "r"; break;
       case "gif_api_key":       if (typeof value === "string")  updated.gif.api_key = value; break;
       case "gif_cache_results": if (typeof value === "boolean") updated.gif.cache_results = value; break;

@@ -93,9 +93,32 @@ pub struct MediaConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum GifProvider {
-    Tenor,
     Giphy,
     Klipy,
+}
+
+/// Deserialize a GIF provider, falling back to the default for any value this
+/// build no longer knows.
+///
+/// Tenor was dropped when the service was sunset, but configs written by older
+/// versions still carry `provider = "tenor"`. A plain enum deserialize would
+/// fail on that, and `load_app_config_from` treats a parse failure as
+/// "use defaults" — silently resetting the user's theme and every other setting
+/// alongside the dead provider. Normalising here keeps the blast radius to the
+/// one field that actually went away.
+fn de_gif_provider<'de, D>(deserializer: D) -> Result<GifProvider, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    Ok(match raw.as_str() {
+        "giphy" => GifProvider::Giphy,
+        "klipy" => GifProvider::Klipy,
+        other => {
+            tracing::warn!("Unknown gif provider '{other}' in config.toml; falling back to default");
+            default_gif_provider()
+        }
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -112,7 +135,7 @@ pub enum GifRating {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GifConfig {
-    #[serde(default = "default_gif_provider")]
+    #[serde(default = "default_gif_provider", deserialize_with = "de_gif_provider")]
     pub provider: GifProvider,
     /// User-supplied API key for the selected GIF provider.
     #[serde(default)]
@@ -205,7 +228,7 @@ fn default_max_image_width() -> u32 { 600 }
 fn default_max_image_height() -> u32 { 400 }
 fn default_sticker_max_size() -> u32 { 256 }
 fn default_cache_size_mb() -> u64 { 500 }
-fn default_gif_provider() -> GifProvider { GifProvider::Tenor }
+fn default_gif_provider() -> GifProvider { GifProvider::Klipy }
 fn default_gif_rating() -> GifRating { GifRating::Pg }
 fn default_autocomplete_min_chars() -> u32 { 2 }
 fn default_home_dm_limit() -> u32 { 12 }
@@ -240,7 +263,7 @@ impl Default for MediaConfig {
 
 impl Default for GifConfig {
     fn default() -> Self {
-        Self { provider: GifProvider::Tenor, api_key: String::new(), rating: GifRating::Pg, cache_results: true }
+        Self { provider: GifProvider::Klipy, api_key: String::new(), rating: GifRating::Pg, cache_results: true }
     }
 }
 
@@ -392,5 +415,40 @@ mod send_key_behavior_tests {
         assert_eq!(toml.as_str(), Some("newline"));
         let back: SendKeyBehavior = toml.try_into().unwrap();
         assert_eq!(back, SendKeyBehavior::Newline);
+    }
+}
+
+#[cfg(test)]
+mod gif_provider_tests {
+    use super::*;
+
+    #[test]
+    fn default_provider_is_klipy() {
+        assert_eq!(GifConfig::default().provider, GifProvider::Klipy);
+    }
+
+    #[test]
+    fn retired_tenor_provider_falls_back_without_losing_the_config() {
+        // Configs written before Tenor was removed must still load in full —
+        // a hard parse failure would reset every unrelated setting too.
+        let cfg: AppConfig = toml::from_str(
+            "[general]\ntheme = \"phosphor\"\n\n[gif]\nprovider = \"tenor\"\napi_key = \"KEY\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.gif.provider, GifProvider::Klipy);
+        assert_eq!(cfg.gif.api_key, "KEY");
+        assert_eq!(cfg.general.theme, "phosphor");
+    }
+
+    #[test]
+    fn known_providers_still_parse() {
+        let cfg: AppConfig = toml::from_str("[gif]\nprovider = \"giphy\"\n").unwrap();
+        assert_eq!(cfg.gif.provider, GifProvider::Giphy);
+    }
+
+    #[test]
+    fn round_trips_lowercase() {
+        let toml = toml::Value::try_from(GifProvider::Klipy).unwrap();
+        assert_eq!(toml.as_str(), Some("klipy"));
     }
 }

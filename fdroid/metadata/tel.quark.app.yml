@@ -24,7 +24,7 @@ Description: |
     indicators, read receipts, and presence
   * Custom emoji and stickers (MSC2545), compatible with Cinny, FluffyChat,
     Nheko, and SchildiChat
-  * Integrated GIF search (Tenor / Giphy / Klipy) — GIFs are uploaded to
+  * Integrated GIF search (Giphy / Klipy) — GIFs are uploaded to
     your homeserver, not hot-linked
   * Authenticated media, inline image and video playback, blurhash
     placeholders, disk-backed media cache

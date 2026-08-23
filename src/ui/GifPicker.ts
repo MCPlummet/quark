@@ -154,7 +154,7 @@ export class GifPicker extends PickerBase {
   }
 
   setProvider(provider: string): void {
-    const label = provider === "tenor" ? "Tenor" : provider === "giphy" ? "Giphy" : provider;
+    const label = provider === "giphy" ? "Giphy" : provider === "klipy" ? "Klipy" : provider;
     this._poweredByEl.textContent = label ? `Powered by ${label}` : "";
   }
 
