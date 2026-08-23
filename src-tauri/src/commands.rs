@@ -1963,10 +1963,6 @@ pub async fn search_gifs(
     let rating_str = rating.as_deref().unwrap_or("pg");
 
     match provider.as_str() {
-        "tenor" => {
-            let client = crate::gif::tenor::TenorClient::new(api_key);
-            client.search(&query, limit, rating_str).await
-        }
         "giphy" => {
             let client = crate::gif::giphy::GiphyClient::new(api_key);
             client.search(&query, limit, rating_str).await

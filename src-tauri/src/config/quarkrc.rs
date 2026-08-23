@@ -487,7 +487,7 @@ nunmap gs
 " Set options
 set scrolloff=5
 set shortcode_preview=true
-set gif_provider=tenor
+set gif_provider=klipy
 set gif_rating=pg
 "#;
 
@@ -584,11 +584,11 @@ set gif_rating=pg
 
     #[test]
     fn test_parse_set_string() {
-        let rc = parse_quarkrc("set gif_provider=tenor");
+        let rc = parse_quarkrc("set gif_provider=klipy");
         assert_eq!(rc.errors.len(), 0);
         if let RcDirective::Set(s) = &rc.directives[0] {
             assert_eq!(s.name, "gif_provider");
-            assert_eq!(s.value, OptionValue::Str("tenor".to_string()));
+            assert_eq!(s.value, OptionValue::Str("klipy".to_string()));
         } else {
             panic!("Expected Set directive");
         }

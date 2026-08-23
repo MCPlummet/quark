@@ -368,15 +368,15 @@ describe("ThreadRoot", () => {
 describe("GifResult", () => {
   it("accepts a GIF result", () => {
     const gif = assertShape<GifResult>({
-      id: "tenor_12345",
+      id: "klipy_12345",
       title: "Funny cat GIF",
-      url: "https://media.tenor.com/abc.gif",
-      preview_url: "https://media.tenor.com/abc_small.gif",
+      url: "https://media.klipy.com/abc.gif",
+      preview_url: "https://media.klipy.com/abc_small.gif",
       width: 480,
       height: 270,
     });
     expect(gif.width).toBe(480);
-    expect(gif.preview_url).toContain("tenor.com");
+    expect(gif.preview_url).toContain("klipy.com");
   });
 });
 

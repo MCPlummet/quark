@@ -15,7 +15,7 @@ Quark is a [Matrix](https://matrix.org) chat client that looks like a terminal b
 - **End-to-end encryption** — Megolm via Vodozemac, cross-signing, and device verification (SAS emoji + QR).
 - **Messaging** — rich replies, threads, reactions (Unicode *and* custom emoji), message editing & redaction, typing indicators, read receipts (public + private), and presence.
 - **Custom emoji & stickers** — MSC2545 (`im.ponies`) packs from rooms and your account data, compatible with Cinny, FluffyChat, Nheko, and SchildiChat. Type `:shortcode:` for inline autocomplete with image previews.
-- **GIF search** — integrated Tenor / Giphy / Klipy search; selected GIFs are uploaded to your homeserver (not hot-linked) and sent as `m.image`.
+- **GIF search** — integrated Giphy / Klipy search; selected GIFs are uploaded to your homeserver (not hot-linked) and sent as `m.image`.
 - **Media** — authenticated media (MSC3916), inline image and `m.video` playback, blurhash placeholders, disk-backed LRU cache.
 - **Spaces** — Cinny-style icon strip + text-only room list in a stable, non-jumpy order.
 - **Room directory** — `:directory` opens a searchable public-room browser with `j/k` navigation.
@@ -134,7 +134,7 @@ auto_load_images = true
 cache_size_mb = 500
 
 [gif]
-provider = "tenor"   # tenor | giphy | klipy
+provider = "klipy"   # klipy | giphy
 api_key = ""         # bring your own
 rating = "pg"        # g | pg | pg-13 | r
 ```
@@ -153,7 +153,7 @@ nmap <leader>e  emoji-picker
 nmap <leader>g  gif-search
 
 set scrolloff=5
-set gif_provider=tenor
+set gif_provider=klipy
 ```
 
 Full keybinding command list, scoped maps (`tmap`/`rmap`/`pmap`), `autocmd`, and the complete theme schema are documented in [DESIGN.md](DESIGN.md).
@@ -213,7 +213,7 @@ quark/
 │       ├── lib.rs        # Tauri builder, managed state, plugins
 │       ├── commands.rs   # #[tauri::command] IPC handlers
 │       ├── matrix/       # client, timeline, rooms, crypto, emoji, media…
-│       ├── gif/          # Tenor / Giphy / Klipy clients
+│       ├── gif/          # Giphy / Klipy clients
 │       ├── config/       # TOML theme + quarkrc parsers
 │       ├── media_cache.rs
 │       └── notifications.rs

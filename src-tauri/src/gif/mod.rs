@@ -1,6 +1,5 @@
 pub mod giphy;
 pub mod klipy;
-pub mod tenor;
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
