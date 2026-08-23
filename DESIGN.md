@@ -169,6 +169,19 @@ the APNs transport landing. The opt-in is enforced inside
 what hands a third-party gateway this device's address, so the gate belongs on
 the handing over.
 
+**On iOS the opt-in is the master notification switch**, not a second one.
+`derivedPushEnabled` (`app/notifications.ts`) sets `push_enabled` from
+`enabled` and the OS permission together, on login and on every settings save,
+and the Settings toggle there reports rather than sets — a flip would be undone
+by the next save. iOS has no other way to hear about a message while the app is
+closed: no background-sync service, no connection left open. A separate opt-in
+could therefore only produce the state where notifications are on and nothing
+ever arrives. Android keeps its own switch, because background sync is a real
+alternative there and choosing a distributor is choosing who carries this
+device's traffic. The permission is part of the condition for the same reason
+registration is gated at all: a pusher for a device that cannot display
+anything hands the gateway an address for nothing.
+
 **"Enabled" and "working" are different states**, and everything between them is
 software Quark doesn't control — a distributor the user installs, a gateway that
 may decline, a homeserver round-trip that may fail. `PushReadiness` names the

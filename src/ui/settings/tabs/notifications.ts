@@ -64,7 +64,10 @@ export function pushHint(s: PushStatus): string {
   const privacy =
     "Only a room ID and event ID ever reach the push gateway — never message content.";
   if (s.transport === "apns") {
-    return `Delivered through Apple's push service and Quark's own gateway; nothing to install. ${privacy}`;
+    // Not a switch on iOS: it follows "Enable notifications" above, because
+    // push is the only way the app hears anything while it is closed.
+    return `Follows Enable notifications — iOS can only reach you through push while Quark is closed. \
+Delivered through Apple's push service and Quark's own gateway; nothing to install. ${privacy}`;
   }
   if (s.readiness === "no_transport") {
     // Somewhere to go, rather than a restatement of what's missing.
@@ -113,6 +116,10 @@ export const notificationsTab: SettingsTab = {
       set: setPushEnabled,
       status: pushStatusLine,
       hint: pushHint,
+      // iOS derives this from the master switch (see `derivedPushEnabled`), so
+      // the toggle reports rather than sets — a flip here would be undone by
+      // the next settings save.
+      readOnly: (s) => s.transport === "apns",
       // The tie-break UnifiedPush won't make: with two or more distributors
       // installed and none saved it declines to guess, since choosing would be
       // choosing the user's notification provider for them. Nobody else can

@@ -11,7 +11,9 @@ import {
   unmuteRoomIpc,
   initNotificationChannels,
   setBackgroundSync,
+  setPushEnabled,
 } from "../ipc/notifications.js";
+import { getPlatform } from "../ipc/index.js";
 import { invoke } from "../ipc/invoke.js";
 import { isTauri } from "../ipc/mock.js";
 import { showToast } from "../ui/NotificationToast.js";
@@ -71,7 +73,7 @@ function _shouldShowInAppToast(roomId: string): boolean {
  */
 export async function initNotifications(): Promise<void> {
   await _loadConfig();
-  await _ensureNotificationPermission();
+  await _syncPushWithNotifications(await _ensureNotificationPermission());
   // Create the Android notification channels (Messages / Mentions /
   // Background sync) — the backend's rich notifications post to them, and a
   // notification on a missing channel never fires. No-op off Android.
@@ -93,25 +95,85 @@ export async function initNotifications(): Promise<void> {
 }
 
 /**
- * Check + request the OS notification permission. No-op on desktop and in
- * non-Tauri contexts. On Android 13+ this surfaces the system permission
- * dialog the first time it runs. The result is fire-and-forget — if the
- * user denies, we keep going (in-app toasts still work).
+ * Is the OS notification permission granted? `null` when the question could not
+ * be asked at all — desktop, mock mode, or a build without the plugin.
+ *
+ * The three-way answer matters because push follows it: an unknown must leave
+ * push exactly as it is, while a plain `false` is a decision to act on.
  */
-async function _ensureNotificationPermission(): Promise<void> {
-  if (!isTauri()) return;
+async function _permissionGranted(): Promise<boolean | null> {
+  if (!isTauri()) return null;
   try {
-    const granted = await invoke<boolean>("plugin:notification|is_permission_granted");
-    if (granted) return;
-    // request_permission returns "granted" | "denied" | "default" on most
-    // platforms. We don't act on the result here — the user's choice is
-    // remembered by the OS and the Rust backend will simply fail to emit
-    // notifications if they declined.
-    await invoke("plugin:notification|request_permission");
+    return await invoke<boolean>("plugin:notification|is_permission_granted");
   } catch (err) {
     // Plugin may be missing in some build configurations (e.g. minimal mobile
     // smoke builds). Log and keep going — in-app toasts still function.
     console.warn("Notification permission check failed:", err);
+    return null;
+  }
+}
+
+/**
+ * Check + request the OS notification permission, reporting where it landed.
+ *
+ * On Android 13+ and iOS this surfaces the system dialog the first time it
+ * runs. Called after login rather than at launch: the prompt then follows
+ * something the user just did, instead of meeting them on the login screen.
+ */
+async function _ensureNotificationPermission(): Promise<boolean | null> {
+  const granted = await _permissionGranted();
+  if (granted !== false) return granted;
+  try {
+    // request_permission returns "granted" | "denied" | "default".
+    const result = await invoke<string>("plugin:notification|request_permission");
+    return result === "granted";
+  } catch (err) {
+    console.warn("Notification permission request failed:", err);
+    return null;
+  }
+}
+
+/**
+ * What `push_enabled` has to be, or `null` where push is the user's own switch.
+ *
+ * iOS has no second way to hear about a message while the app is closed — no
+ * background sync service, no long-lived connection — so a separate push opt-in
+ * there only produces the state where notifications are on and nothing ever
+ * arrives. It follows the master switch instead, and the permission with it: a
+ * pusher for a device that cannot display anything hands the gateway an address
+ * for nothing.
+ *
+ * Android keeps its own switch. Background sync is a real alternative there,
+ * and choosing a distributor is choosing who carries this device's push
+ * traffic — not a decision to make on the user's behalf.
+ */
+export function derivedPushEnabled(
+  platform: string,
+  enabled: boolean,
+  permissionGranted: boolean
+): boolean | null {
+  if (platform !== "ios") return null;
+  return enabled && permissionGranted;
+}
+
+/** Bring the pusher into line with the notification settings, where it follows. */
+async function _syncPushWithNotifications(granted: boolean | null): Promise<void> {
+  if (granted === null || !_config) return;
+  let platform: string;
+  try {
+    platform = await getPlatform();
+  } catch {
+    return;
+  }
+  const desired = derivedPushEnabled(platform, _config.enabled, granted);
+  // Nothing to do is the common case — this runs on every login, and asserting
+  // a value that already holds would put a pusher round-trip on that path.
+  if (desired === null || desired === _config.push_enabled) return;
+  try {
+    await setPushEnabled(desired);
+    _config = { ..._config, push_enabled: desired };
+  } catch (err) {
+    console.warn("Could not bring push into line with the notification setting:", err);
   }
 }
 
@@ -199,7 +261,12 @@ export async function setNotificationConfig(
   config: NotificationConfig
 ): Promise<void> {
   await setNotificationConfigIpc(config);
-  _config = config;
+  // Re-read rather than cache the draft: the backend takes only the fields
+  // Settings owns (`NotificationConfig::with_preferences`), so a draft built
+  // when the dialog opened can carry a push_enabled or mute list the save
+  // deliberately ignored.
+  await _loadConfig();
+  await _syncPushWithNotifications(await _permissionGranted());
 }
 
 /**
