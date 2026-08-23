@@ -99,8 +99,26 @@ read_nse_plist(){ awk '/CFBundleShortVersionString/{getline; gsub(/[[:space:]]*<
 # project.yml: both keys are inline YAML values, but quoted inconsistently
 # (`CFBundleShortVersionString: X.Y.Z` bare vs `CFBundleVersion: "X.Y.Z"`), so
 # strip spaces and quotes. Read separately — they can drift from each other.
-read_yml_short(){ awk -F: '/CFBundleShortVersionString:/{gsub(/[[:space:]"]/,"",$2); print $2; exit}' "$XCODEGEN"; }
-read_yml_build(){ awk -F: '/CFBundleVersion:/{gsub(/[[:space:]"]/,"",$2); print $2; exit}' "$XCODEGEN"; }
+#
+# Each key appears once per iOS target (the app and QuarkNSE), and every match
+# has to be read. Stopping at the first one let the extension's copy sit at an
+# older version unnoticed through both checks below: the drift guard compared
+# only the app's value, and the rewrite substitutes solely occurrences equal to
+# that value, so the post-rewrite verify then re-read the one line that had in
+# fact been updated. Matching values collapse to the single value; a
+# disagreement prints joined ("0.18.0/0.17.2"), which no comparison can equal,
+# so the mismatch surfaces named rather than passing silently.
+read_yml_key() {
+  awk -F: -v key="$1" '
+    index($0, key ":") {
+      gsub(/[[:space:]"]/, "", $2)
+      out = (n++ ? out "/" $2 : $2)
+      if (n == 1) first = $2; else if ($2 != first) differ = 1
+    }
+    END { print (differ ? out : first) }' "$XCODEGEN"
+}
+read_yml_short(){ read_yml_key CFBundleShortVersionString; }
+read_yml_build(){ read_yml_key CFBundleVersion; }
 
 CURRENT="$(read_pkg)"
 [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "could not parse current version from $PKG_JSON (got '$CURRENT')"
