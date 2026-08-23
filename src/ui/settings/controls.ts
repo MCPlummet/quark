@@ -43,24 +43,19 @@ export interface ToggleSectionSpec<S extends ToggleState> {
    */
   extra?: (state: S, refresh: () => Promise<S>) => HTMLElement | null;
   /**
-   * Show the toggle, but don't let it be flipped. For a switch this section
-   * reports rather than owns — iOS push follows the master notification
-   * setting — where hiding it would leave the status line with nothing to
-   * belong to, and leaving it live would let the user set a value the next
-   * save overwrites.
+   * Drop the toggle, keeping the title, status and hint. For a switch this
+   * section reports rather than owns — iOS push follows the master
+   * notification setting — where a control of any kind, live or greyed out,
+   * implies a decision the user does not have to make. What the section is
+   * still for there is saying what push is currently doing.
    */
-  readOnly?: (state: S) => boolean;
+  hideToggle?: (state: S) => boolean;
   /** Prefix for the toast shown when a flip fails. */
   failureLabel: string;
 }
 
 export interface SettingsControls {
-  checkbox(
-    label: string,
-    checked: boolean,
-    onChange: (v: boolean) => void,
-    opts?: { disabled?: boolean }
-  ): HTMLElement;
+  checkbox(label: string, checked: boolean, onChange: (v: boolean) => void): HTMLElement;
   numberRow(label: string, value: number, min: number, max: number, onChange: (v: number) => void): HTMLElement;
   selectRow(label: string, value: string, options: [string, string][], onChange: (v: string) => void): HTMLElement;
   textRow(label: string, value: string, placeholder: string, onChange: (v: string) => void): HTMLElement;
@@ -75,12 +70,7 @@ export interface SettingsControls {
 export function makeControls(): SettingsControls {
   return {
     /** Checkbox row — label wraps the input (matches DialogBase.makeCheckbox). */
-    checkbox(
-      label: string,
-      checked: boolean,
-      onChange: (v: boolean) => void,
-      opts?: { disabled?: boolean }
-    ): HTMLElement {
+    checkbox(label: string, checked: boolean, onChange: (v: boolean) => void): HTMLElement {
       const row = document.createElement("div");
       row.className = "settings-dialog__row";
       const lbl = document.createElement("label");
@@ -88,7 +78,6 @@ export function makeControls(): SettingsControls {
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = checked;
-      cb.disabled = opts?.disabled ?? false;
       cb.addEventListener("change", () => onChange(cb.checked));
       lbl.appendChild(cb);
       lbl.append(" " + label);
@@ -282,16 +271,13 @@ export function makeControls(): SettingsControls {
         return next;
       };
 
-      section.appendChild(this.checkbox(
-        spec.label,
-        state.enabled,
-        (v) => {
+      if (!(spec.hideToggle?.(state) ?? false)) {
+        section.appendChild(this.checkbox(spec.label, state.enabled, (v) => {
           void spec.set(v)
             .then(refresh)
             .catch((err) => showError(`${spec.failureLabel} failed: ${errorText(err)}`));
-        },
-        { disabled: spec.readOnly?.(state) ?? false }
-      ));
+        }));
+      }
       section.appendChild(status);
 
       const extra = spec.extra?.(state, refresh);

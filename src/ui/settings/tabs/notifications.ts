@@ -117,9 +117,9 @@ export const notificationsTab: SettingsTab = {
       status: pushStatusLine,
       hint: pushHint,
       // iOS derives this from the master switch (see `derivedPushEnabled`), so
-      // the toggle reports rather than sets — a flip here would be undone by
-      // the next settings save.
-      readOnly: (s) => s.transport === "apns",
+      // there is no toggle to show — only the status, which is worth keeping
+      // for the times push is enabled and still not working.
+      hideToggle: (s) => s.transport === "apns",
       // The tie-break UnifiedPush won't make: with two or more distributors
       // installed and none saved it declines to guess, since choosing would be
       // choosing the user's notification provider for them. Nobody else can

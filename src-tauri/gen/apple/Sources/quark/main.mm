@@ -38,8 +38,23 @@ static void quark_did_fail(id self, SEL _cmd, UIApplication *app, NSError *error
 // declines: the two partition on the same trigger check, so neither ever sees
 // the other's notifications.
 
-static void (*quark_orig_did_receive_response)(id, SEL, UNUserNotificationCenter *,
-                                               UNNotificationResponse *, void (^)(void)) = NULL;
+// Where each hooked class keeps the implementation we displaced.
+//
+// A single global slot could not survive being pointed at two classes, and the
+// delegate property is weak, so more than one is entirely reachable: a
+// deallocated plugin manager empties the slot, the next foreground hooks the
+// fallback delegate below instead, and a later plugin re-registration hooks a
+// third. Each would overwrite the one saved implementation while the classes
+// hooked before it still carried ours, so a response routed to an earlier one
+// would call a later class's original with a mismatched `self`. Parking it on
+// the class itself removes the shared slot, and inherits correctly for free.
+//
+// Registered by name rather than @selector: no class declares this, and
+// -Wundeclared-selector would be right to say so.
+static SEL quark_original_response_selector(void) {
+    return sel_registerName("quark_original_userNotificationCenter:"
+                            "didReceiveNotificationResponse:withCompletionHandler:");
+}
 
 static void quark_did_receive_response(id self, SEL _cmd, UNUserNotificationCenter *center,
                                        UNNotificationResponse *response, void (^completion)(void)) {
@@ -51,8 +66,16 @@ static void quark_did_receive_response(id self, SEL _cmd, UNUserNotificationCent
             ffi::quark_notification_tapped([(NSString *)roomId UTF8String]);
         }
     }
-    if (quark_orig_did_receive_response != NULL) {
-        quark_orig_did_receive_response(self, _cmd, center, response, completion);
+    // Whatever this class implemented before we took the selector over. Absent
+    // on a class that had none — the fallback delegate below, or a plugin
+    // delegate that never implemented the method — where completing is the
+    // whole job.
+    Method original = class_getInstanceMethod(object_getClass(self),
+                                              quark_original_response_selector());
+    if (original != NULL) {
+        ((void (*)(id, SEL, UNUserNotificationCenter *, UNNotificationResponse *,
+                   void (^)(void)))method_getImplementation(original))(
+            self, _cmd, center, response, completion);
     } else {
         completion();
     }
@@ -90,19 +113,30 @@ static void quark_install_response_hook(void) {
 
     Class cls = object_getClass(delegate);
     SEL sel = @selector(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:);
+    if (class_getMethodImplementation(cls, sel) == (IMP)quark_did_receive_response) {
+        // Idempotent — the re-arm below runs on every foreground. Also covers a
+        // subclass of a class we already hooked, which inherits both halves.
+        return;
+    }
+
     Method method = class_getInstanceMethod(cls, sel);
     if (method == NULL) {
         class_addMethod(cls, sel, (IMP)quark_did_receive_response, "v@:@@@?");
         return;
     }
-    IMP current = method_getImplementation(method);
-    if (current == (IMP)quark_did_receive_response) {
-        return; // Idempotent — the re-arm below runs on every foreground.
+
+    // Park the original on *this* class, then take the selector over on this
+    // class alone. Adding rather than replacing is what keeps an inherited
+    // implementation inherited: method_setImplementation would rewrite the
+    // superclass's method for every other subclass of it, while class_addMethod
+    // overrides it here and nowhere else.
+    const char *types = method_getTypeEncoding(method);
+    class_addMethod(cls, quark_original_response_selector(),
+                    method_getImplementation(method), types);
+    if (!class_addMethod(cls, sel, (IMP)quark_did_receive_response, types)) {
+        method_setImplementation(class_getInstanceMethod(cls, sel),
+                                 (IMP)quark_did_receive_response);
     }
-    quark_orig_did_receive_response =
-        (void (*)(id, SEL, UNUserNotificationCenter *, UNNotificationResponse *,
-                  void (^)(void)))current;
-    method_setImplementation(method, (IMP)quark_did_receive_response);
 }
 
 static void quark_install_push_delegate(void) {

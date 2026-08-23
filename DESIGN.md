@@ -416,7 +416,22 @@ case the plugin declines, the two partitioning on the same trigger check. The
 tap is written as the same `PendingNotificationAction` file MainActivity
 mirrors on Android, an event nudges a live webview to consume it immediately,
 and the boot-time replay covers the cold start — one dispatch path
-(`routeNotificationAction`) for both platforms, warm or cold.
+(`routeNotificationAction`) for both platforms, warm or cold. The extension
+stamps `categoryIdentifier = quark_message` on what it renders, which is what
+puts the Reply and Mark-as-read actions registered there on a *pushed*
+notification; an aps payload names no category, and the app's registration
+alone is not enough.
+
+The displaced implementation is parked on the hooked class under a private
+selector, not in a global. The delegate property is weak, so more than one
+class is reachable over a session — a deallocated plugin manager leaves the
+slot empty, the next foreground hooks `main.mm`'s own fallback delegate, and a
+later plugin re-registration hooks a third — and a single saved pointer would
+have the earlier ones calling a later class's original with a mismatched
+`self`. Taking the selector over with `class_addMethod` rather than
+`method_setImplementation` matters for the same reason in the other direction:
+where the implementation is inherited, replacing it would rewrite the
+superclass's method for every subclass of it.
 
 Two things cross into it, and both go through the **app group**
 (`group.tel.quark.app`), because an extension cannot read the app's keychain —

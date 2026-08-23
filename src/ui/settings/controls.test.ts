@@ -56,19 +56,17 @@ describe("toggleSection", () => {
   const checkbox = (el: HTMLElement) =>
     el.querySelector("input[type=checkbox]") as HTMLInputElement;
 
-  it("locks the toggle where the section only reports the value", async () => {
+  it("drops the toggle where the section only reports the value", async () => {
     const c = makeControls();
-    let flipped = false;
     const section = (await c.toggleSection(spec({
       get: async () => ({ supported: true, enabled: true, detail: "registered" }),
-      readOnly: () => true,
-      set: async () => { flipped = true; },
+      hideToggle: () => true,
     })))!;
 
-    const cb = checkbox(section);
-    expect(cb.disabled).toBe(true);
-    expect(cb.checked).toBe(true);
-    expect(flipped).toBe(false);
+    expect(checkbox(section)).toBeNull();
+    // The status is the whole point of keeping the section.
+    expect(section.textContent).toContain("state: registered");
+    expect(section.textContent).toContain("needs a distributor");
   });
 
   it("renders nothing on a platform that does not support it", async () => {

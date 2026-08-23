@@ -28,6 +28,13 @@ final class NotificationService: UNNotificationServiceExtension {
         // stack, not loose at the top of the list.
         if let roomId {
             content.threadIdentifier = roomId
+            // Reply and Mark as read only appear on a notification that names
+            // the category they were registered under (`initNotificationRouting`
+            // registers `quark_message` on iOS as well as Android). A pushed
+            // notification carries whatever the aps payload set, which is
+            // nothing — so without this the handlers are unreachable on exactly
+            // the notifications an iOS user sees most.
+            content.categoryIdentifier = "quark_message"
         }
 
         // The fallback is a snapshot, not `content` itself. `render` writes
