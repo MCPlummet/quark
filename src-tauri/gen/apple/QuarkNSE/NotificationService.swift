@@ -20,8 +20,6 @@ final class NotificationService: UNNotificationServiceExtension {
     ) {
         let content = (request.content.mutableCopy() as? UNMutableNotificationContent)
             ?? UNMutableNotificationContent()
-        let delivery = Delivery(handler: contentHandler, fallback: content)
-        self.delivery = delivery
 
         let roomId = request.content.userInfo["room_id"] as? String
 
@@ -31,6 +29,20 @@ final class NotificationService: UNNotificationServiceExtension {
         if let roomId {
             content.threadIdentifier = roomId
         }
+
+        // The fallback is a snapshot, not `content` itself. `render` writes
+        // title and body into that object one at a time, from a task this
+        // thread never joins, so for most of the extension's life it holds a
+        // resolved sender over the original loc-key body — precisely the
+        // half-filled notification the fallback exists to prevent — and handing
+        // it to iOS while the task goes on writing is an unsynchronised read of
+        // a class that promises no thread safety. Copied here, before anything
+        // asynchronous starts, it cannot change afterwards.
+        let delivery = Delivery(
+            handler: contentHandler,
+            fallback: (content.copy() as? UNNotificationContent) ?? request.content
+        )
+        self.delivery = delivery
 
         guard
             let roomId,
@@ -62,6 +74,8 @@ final class NotificationService: UNNotificationServiceExtension {
 /// twice is undefined; never calling it drops the notification.
 private final class Delivery {
     private let handler: (UNNotificationContent) -> Void
+    /// Must be an object nothing else is still writing to — the point of it is
+    /// to be deliverable at any instant, including mid-render.
     private let fallback: UNNotificationContent
     private let lock = NSLock()
     private var sent = false

@@ -355,6 +355,32 @@ pub fn cancel_room_notifications(room_id: &str) {
 /// consume the pending-action file without waiting for the next boot.
 pub const EVENT_NOTIFICATION_TAP: &str = "quark://notification/tap";
 
+/// Write a tap down where `take_pending_action_from` will find it.
+///
+/// Split out from the FFI entry point so the directory handling can be tested.
+/// Creating the directory is not a formality: `app_data_dir()` is a sandbox
+/// path nothing in the OS makes, and on iOS it comes into existence when the
+/// search index or matrix-sdk's store is opened — both of which happen during
+/// login, which a cold launch from a tap precedes by a wide margin. Writing
+/// into it unconditionally is how the tap gets dropped and the user lands on
+/// whatever screen was last open.
+fn record_tap(data_dir: &std::path::Path, room_id: &str) -> std::io::Result<()> {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let action = crate::notify::PendingNotificationAction {
+        ts,
+        action_id: Some("tap".to_owned()),
+        input_value: None,
+        notification: Some(serde_json::json!({ "extra": { "room_id": room_id } })),
+    };
+    let json = serde_json::to_string(&action)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::create_dir_all(data_dir)?;
+    std::fs::write(data_dir.join(crate::notify::PENDING_ACTION_FILENAME), json)
+}
+
 /// The user tapped a pushed notification. Route them to its room.
 ///
 /// Reuses Android's whole delivery pipeline from the file down: the tap is
@@ -391,25 +417,8 @@ pub unsafe extern "C" fn quark_notification_tapped(room_id: *const std::os::raw:
         return;
     };
 
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let action = crate::notify::PendingNotificationAction {
-        ts,
-        action_id: Some("tap".to_owned()),
-        input_value: None,
-        notification: Some(serde_json::json!({ "extra": { "room_id": room_id } })),
-    };
-    match serde_json::to_string(&action) {
-        Ok(json) => {
-            if let Err(e) =
-                std::fs::write(data_dir.join(crate::notify::PENDING_ACTION_FILENAME), json)
-            {
-                tracing::warn!("Could not record the notification tap: {e}");
-            }
-        }
-        Err(e) => tracing::warn!("Could not serialise the notification tap: {e}"),
+    if let Err(e) = record_tap(&data_dir, &room_id) {
+        tracing::warn!("Could not record the notification tap: {e}");
     }
 
     use tauri::Emitter;
@@ -435,6 +444,31 @@ pub unsafe extern "C" fn quark_apns_failed(reason: *const std::os::raw::c_char) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cold launch from a tap arrives long before login has opened the search
+    /// index or the matrix store, and those are the only things that create the
+    /// data dir. Writing into a directory nothing has made yet loses the tap,
+    /// silently, in exactly the case it matters most.
+    #[test]
+    fn a_tap_is_recorded_before_anything_has_made_the_data_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path().join("Library").join("Application Support").join("quark");
+
+        record_tap(&data_dir, "!room:example.com").unwrap();
+
+        // Read it back through the frontend's own reader, so the test pins the
+        // contract rather than the file's shape.
+        let action = crate::notify::take_pending_action_from(
+            &data_dir.join(crate::notify::PENDING_ACTION_FILENAME),
+            0,
+        )
+        .expect("the recorded tap is replayable");
+        assert_eq!(action.action_id.as_deref(), Some("tap"));
+        assert_eq!(
+            action.notification.unwrap()["extra"]["room_id"],
+            "!room:example.com"
+        );
+    }
 
     /// Every platform but iOS reaches `register_stored_token` with no requester
     /// registered — `main.mm` is the only thing that ever sets one — and the
