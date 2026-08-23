@@ -103,8 +103,8 @@ pub struct NotificationSpec {
 ///
 /// Pure (no platform calls) so the decision matrix is unit-testable. Returns
 /// `None` for: own messages, focused window, initial-sync catch-up events,
-/// edits (a replacement is not a new message), rooms muted locally or by
-/// config (quiet hours, master switch), and events the push rules silenced.
+/// edits (a replacement is not a new message), rooms muted locally or by the
+/// master switch, and events the push rules silenced.
 pub fn evaluate(input: &NotificationInput, config: &NotificationConfig) -> Option<NotificationSpec> {
     if input.is_own || input.window_focused || input.pre_startup || input.is_edit {
         return None;

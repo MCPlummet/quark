@@ -4606,18 +4606,13 @@ body.quark-mobile .profile-edit-dialog__panel {
   box-sizing: border-box;
 }
 
-.settings-dialog__row--quiet-hours {
-  gap: 6px;
-}
-
 .settings-dialog__row--theme {
   justify-content: space-between;
   padding: 4px 0;
 }
 
 /* Prevent long <select> option text from pushing the row wider than the
- * viewport on mobile. The input[type="text"] selector excludes quiet-hours
- * time inputs (type="time") so those rows are unaffected. */
+ * viewport on mobile. */
 .settings-dialog__row select,
 .settings-dialog__row input[type="text"] {
   max-width: 100%;
@@ -4690,7 +4685,6 @@ body.quark-mobile .profile-edit-dialog__panel {
   outline-offset: 2px;
 }
 
-.settings-dialog__time-input,
 .settings-dialog__number-input,
 .settings-dialog__select,
 .settings-dialog__text-input {
@@ -4703,7 +4697,6 @@ body.quark-mobile .profile-edit-dialog__panel {
   outline: none;
 }
 
-.settings-dialog__time-input:focus,
 .settings-dialog__number-input:focus,
 .settings-dialog__select:focus,
 .settings-dialog__text-input:focus {

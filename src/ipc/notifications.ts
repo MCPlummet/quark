@@ -4,21 +4,12 @@ import { invoke } from "./invoke.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-/** Quiet-hours window — matches notifications::QuietHours */
-export interface QuietHours {
-  start_hour: number;
-  start_minute: number;
-  end_hour: number;
-  end_minute: number;
-}
-
 /** Notification preferences — matches notifications::NotificationConfig */
 export interface NotificationConfig {
   enabled: boolean;
   show_body: boolean;
   show_sender: boolean;
   mute_rooms: string[];
-  quiet_hours: QuietHours | null;
   /** Keep the sync loop alive in the background (Android foreground service). */
   background_sync: boolean;
   /** Register a pusher so the homeserver wakes the device (mobile only). */

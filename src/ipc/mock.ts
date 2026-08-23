@@ -451,7 +451,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         status_msg: "mock status — working on quark",
       };
     case "get_notification_config":
-      return { enabled: true, show_body: true, show_sender: true, mute_rooms: [], quiet_hours: null, background_sync: false, push_enabled: false, push_gateway_override: null };
+      return { enabled: true, show_body: true, show_sender: true, mute_rooms: [], background_sync: false, push_enabled: false, push_gateway_override: null };
     case "get_background_sync_state":
       return { supported: false, enabled: false, running: false, battery_exempt: false };
     // Browser dev mode has no push transport, same as desktop.

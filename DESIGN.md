@@ -132,7 +132,7 @@ room's user-defined rules outright so the account default applies.
 
 Because these each have an effect outside the config file, **`set_notification_config`
 only accepts the fields Settings owns** (`NotificationConfig::with_preferences`):
-enabled, preview, sender, quiet hours. Mutes, background sync and push have
+enabled, preview, sender. Mutes, background sync and push have
 dedicated commands, and the Settings dialog builds its draft from a config it
 cached when it opened — so treating that draft as authoritative would let [save]
 silently undo a mute or a push opt-out taken while the dialog was open.
@@ -407,10 +407,11 @@ failure mode of an unreadable flags file has to be showing less rather than
 more. Logout deletes the credentials — a token in a shared container outlives
 the session otherwise — and keeps the flags, which are a preference.
 
-What the extension cannot do is decline to show a notification. Quiet hours are
-therefore not honoured on a pushed iOS notification, and cannot be from here;
-the only mechanism that can suppress delivery is a server-side push rule, which
-is what room mutes already use.
+What the extension cannot do is decline to show a notification. The only
+mechanism that can suppress a pushed notification is a server-side push rule
+that stops the homeserver sending it — which is what room mutes already use, and
+why anything meant to silence a room has to reach the ruleset rather than a
+local config the extension never reads.
 
 #### The pusher ledger
 
@@ -674,7 +675,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 | **Media** | Image auto-load, max dimensions, cache-size limit |
 | **GIF** | Provider (Tenor / Giphy / Klipy), API key, content rating |
 | **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
-| **Notifications** | Quiet-hours window, per-room mute list |
+| **Notifications** | Enable / preview / sender toggles, push and background-sync controls, test notification |
 | **Themes** | Theme picker and hot-reload path |
 | **About** | App version, Quark on GitHub link, Updates section (desktop only — see below) |
 

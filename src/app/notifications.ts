@@ -42,7 +42,6 @@ async function _loadConfig(): Promise<NotificationConfig> {
       show_body: true,
       show_sender: true,
       mute_rooms: [],
-      quiet_hours: null,
       background_sync: false,
       push_enabled: false,
       push_gateway_override: null,

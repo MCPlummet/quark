@@ -1,6 +1,6 @@
 // Settings → Notifications tab.
 //
-// Enable/preview toggles, Android background-sync controls, quiet hours, and a
+// Enable/preview toggles, Android background-sync controls, and a
 // test-notification button. Migrated from SettingsDialog._buildNotificationsTab;
 // behaviour is unchanged. The bespoke background-sync / quiet-hours / test DOM
 // stays inline (no shared control covers it); the standard rows use controls.
@@ -168,57 +168,11 @@ export const notificationsTab: SettingsTab = {
     });
     if (bgSection) content.appendChild(bgSection);
 
-    // Quiet hours
-    const qhSection = document.createElement("div");
-    qhSection.className = "settings-dialog__section";
-    qhSection.appendChild(controls.sectionTitle("Quiet Hours"));
-
-    const qhRow = document.createElement("div");
-    qhRow.className = "settings-dialog__row settings-dialog__row--quiet-hours";
-
-    const qhLabel = document.createElement("span");
-    qhLabel.className = "settings-dialog__label";
-    qhLabel.textContent = "start";
-    qhRow.appendChild(qhLabel);
-
-    const startInput = document.createElement("input");
-    startInput.type = "time";
-    startInput.className = "settings-dialog__time-input";
-    if (draft.quiet_hours) {
-      const h = String(draft.quiet_hours.start_hour).padStart(2, "0");
-      const m = String(draft.quiet_hours.start_minute).padStart(2, "0");
-      startInput.value = `${h}:${m}`;
-    }
-    qhRow.appendChild(startInput);
-
-    const qhLabel2 = document.createElement("span");
-    qhLabel2.className = "settings-dialog__label";
-    qhLabel2.textContent = "end";
-    qhRow.appendChild(qhLabel2);
-
-    const endInput = document.createElement("input");
-    endInput.type = "time";
-    endInput.className = "settings-dialog__time-input";
-    if (draft.quiet_hours) {
-      const h = String(draft.quiet_hours.end_hour).padStart(2, "0");
-      const m = String(draft.quiet_hours.end_minute).padStart(2, "0");
-      endInput.value = `${h}:${m}`;
-    }
-    qhRow.appendChild(endInput);
-
-    qhSection.appendChild(qhRow);
-
     const footer = document.createElement("div");
     footer.className = "settings-dialog__actions";
 
     const saveBtn = controls.saveButton(async () => {
-      let quiet_hours = null;
-      if (startInput.value && endInput.value) {
-        const [sh, sm] = startInput.value.split(":").map(Number);
-        const [eh, em] = endInput.value.split(":").map(Number);
-        quiet_hours = { start_hour: sh, start_minute: sm, end_hour: eh, end_minute: em };
-      }
-      await setNotificationConfig({ ...draft, quiet_hours });
+      await setNotificationConfig(draft);
     });
     footer.appendChild(saveBtn);
 
@@ -240,7 +194,6 @@ export const notificationsTab: SettingsTab = {
     });
     footer.appendChild(testBtn);
 
-    content.appendChild(qhSection);
     content.appendChild(footer);
   },
 };
