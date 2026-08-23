@@ -42,6 +42,14 @@ export interface ToggleSectionSpec<S extends ToggleState> {
    * state so the caller can react to it.
    */
   extra?: (state: S, refresh: () => Promise<S>) => HTMLElement | null;
+  /**
+   * Drop the toggle, keeping the title, status and hint. For a switch this
+   * section reports rather than owns — iOS push follows the master
+   * notification setting — where a control of any kind, live or greyed out,
+   * implies a decision the user does not have to make. What the section is
+   * still for there is saying what push is currently doing.
+   */
+  hideToggle?: (state: S) => boolean;
   /** Prefix for the toast shown when a flip fails. */
   failureLabel: string;
 }
@@ -263,11 +271,13 @@ export function makeControls(): SettingsControls {
         return next;
       };
 
-      section.appendChild(this.checkbox(spec.label, state.enabled, (v) => {
-        void spec.set(v)
-          .then(refresh)
-          .catch((err) => showError(`${spec.failureLabel} failed: ${errorText(err)}`));
-      }));
+      if (!(spec.hideToggle?.(state) ?? false)) {
+        section.appendChild(this.checkbox(spec.label, state.enabled, (v) => {
+          void spec.set(v)
+            .then(refresh)
+            .catch((err) => showError(`${spec.failureLabel} failed: ${errorText(err)}`));
+        }));
+      }
       section.appendChild(status);
 
       const extra = spec.extra?.(state, refresh);

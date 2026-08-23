@@ -97,6 +97,14 @@ fn settle_pending_pushers(
         // Enabling push before installing a distributor is the ordinary way that
         // happens, and nothing else would ever ask again.
         let config = crate::notifications::load_notification_config_from(&config_dir);
+        // Seed the extension's copy of the privacy flags. `set_notification_config`
+        // keeps it current afterwards; this is what puts it there at all on a
+        // fresh install, or on the first launch of a build that added it.
+        if let Err(e) = crate::secrets::write_nse_display(config.show_body, config.show_sender) {
+            tracing::warn!(
+                "Could not share display preferences with the notification extension: {e}"
+            );
+        }
         let has_endpoint = crate::push::load_push_state(&config_dir)
             .and_then(|state| state.endpoint)
             .is_some();
@@ -114,6 +122,15 @@ fn settle_pending_pushers(
         #[cfg(target_os = "android")]
         if let Err(e) = crate::unifiedpush::register_stored_endpoint(&config_dir).await {
             tracing::warn!("Could not register the stored push endpoint: {e}");
+        }
+        // The same recovery on iOS, plus two things the Android path does not
+        // need: it asks the OS for a token when push is on (nothing registers
+        // for remote notifications at launch any more), and it picks up a token
+        // parked in `apns.rs` by a callback that landed before `setup()` had
+        // resolved a config dir to write it to.
+        #[cfg(target_os = "ios")]
+        if let Err(e) = crate::apns::register_stored_token(&config_dir).await {
+            tracing::warn!("Could not register the stored APNs token: {e}");
         }
     });
 }
@@ -158,6 +175,16 @@ pub async fn login(
 
     let client = crate::matrix::client::build_client(&homeserver_url, data_path.clone(), &store_key).await?;
     let session = crate::matrix::client::login_with_password(&client, &username, &password).await?;
+
+    // Hand the iOS notification service extension its own copy. It runs in a
+    // separate process with no access to the keychain, so the app-group file is
+    // the only channel it has. Best-effort: an unprovisioned app group costs a
+    // notification its sender and room name, not the login.
+    if let Err(e) =
+        crate::secrets::write_nse_credentials(&session.homeserver_url, &session.access_token)
+    {
+        tracing::warn!("Could not share credentials with the notification extension: {e}");
+    }
 
     // Persist the session in the OS keyring — it is never returned to the
     // frontend or written to localStorage.
@@ -289,6 +316,16 @@ pub async fn restore_session(
         return Ok(RestoreOutcome::Invalid);
     }
 
+    // Refresh the extension's copy on every restore, not just at login: nothing
+    // else rewrites it, so a device that logged in once and has been restoring
+    // ever since would otherwise be left with whatever the app group held the
+    // first time — including nothing at all, on a build that predates this.
+    if let Err(e) =
+        crate::secrets::write_nse_credentials(&session.homeserver_url, &session.access_token)
+    {
+        tracing::warn!("Could not share credentials with the notification extension: {e}");
+    }
+
     {
         let mut guard = state.0.lock().map_err(|_| "State lock poisoned")?;
         *guard = Some(client.clone());
@@ -379,6 +416,10 @@ pub async fn logout(
     // and is unreachable now — keeping it would only convince the next login it
     // was already registered.
     crate::push::forget_local_registrations(&paths.config_dir);
+    // Nor does it touch the app group, which is outside the data dir entirely.
+    // An access token left in a container another process can read is a leak,
+    // not untidiness.
+    crate::secrets::clear_nse_credentials();
 
     Ok(())
 }
@@ -400,6 +441,7 @@ pub async fn clear_session(
     // the records would only make the next login think it was already
     // registered and skip registering at all.
     crate::push::forget_local_registrations(&paths.config_dir);
+    crate::secrets::clear_nse_credentials();
     Ok(())
 }
 
@@ -2445,6 +2487,12 @@ pub async fn set_notification_config(
     let mut guard = config_state.lock().map_err(|_| "Notification config lock poisoned")?;
     let merged = guard.with_preferences(config);
     crate::notifications::save_notification_config_to(&paths.config_dir, &merged)?;
+    // The iOS extension renders notifications this process never sees, and it
+    // cannot read the config dir. Without this, turning previews off would leave
+    // message text on the lock screen for every pushed notification.
+    if let Err(e) = crate::secrets::write_nse_display(merged.show_body, merged.show_sender) {
+        tracing::warn!("Could not share display preferences with the notification extension: {e}");
+    }
     *guard = merged;
     Ok(())
 }
@@ -2685,16 +2733,38 @@ pub async fn set_push_enabled(
         // none: `should_request_endpoint` reads it as "already have one" and no
         // later login ever asks the transport again, leaving push permanently
         // dead with nothing in Settings admitting it.
+        //
+        // Android only. The APNs token is not a subscription — opting out tears
+        // nothing down, and asking again hands back the same token — so it
+        // cannot go stale the way a distributor endpoint can, and keeping it
+        // lets re-enabling register immediately instead of waiting on a round
+        // trip through the OS.
+        #[cfg(target_os = "android")]
         if let Err(e) = crate::push::forget_endpoint(&paths.config_dir) {
             tracing::warn!("Could not forget the push endpoint: {e}");
         }
         return Ok(());
     }
 
-    // Turning push on asks the distributor for an address. The endpoint does not
-    // come back here — it arrives at PushEventService moments later and
-    // registers itself — so a `true` return means "asked", not "receiving".
-    // Settings reports the difference from `registered`.
+    // Turning push on, iOS: ask the OS for a token — this opt-in is the first
+    // moment one is warranted, since registering at launch minted one for every
+    // install that never opted in — and register whatever is already on disk
+    // from an earlier opt-in. Without this the toggle reads "on" while no
+    // pusher exists until the next launch's `settle_pending_pushers`, which is
+    // exactly the lying-switch state the readiness ladder exists to prevent.
+    #[cfg(target_os = "ios")]
+    {
+        if let Err(e) = crate::apns::register_stored_token(&paths.config_dir).await {
+            tracing::warn!("Could not register the stored APNs token: {e}");
+        }
+        return Ok(());
+    }
+
+    // Turning push on, Android: ask the distributor for an address. The
+    // endpoint does not come back here — it arrives at PushEventService moments
+    // later and registers itself — so a `true` return means "asked", not
+    // "receiving". Settings reports the difference from `registered`.
+    #[allow(unreachable_code)]
     match crate::unifiedpush::subscribe_async(&app_handle).await {
         Ok(true) => {}
         Ok(false) => {
@@ -2747,15 +2817,17 @@ pub async fn request_battery_exemption(app_handle: AppHandle) -> Result<(), Stri
     crate::mobile_sync::request_battery_exemption(&app_handle)
 }
 
-/// Read-and-delete the cold-start notification action MainActivity captured
-/// (Android only — see `notify::PendingNotificationAction`). The frontend
+/// Read-and-delete the cold-start notification action the platform captured —
+/// MainActivity's mirror file on Android, `apns::quark_notification_tapped` on
+/// iOS; both write the same `notify::PendingNotificationAction`. The frontend
 /// calls this at boot to replay a tap that arrived before its listener was
-/// registered, and after warm taps to discard the duplicate file.
+/// registered, after warm taps to discard the duplicate file, and on iOS
+/// whenever the tap event announces a fresh one.
 #[tauri::command]
 pub async fn take_pending_notification_action(
     app_handle: AppHandle,
 ) -> Result<Option<crate::notify::PendingNotificationAction>, String> {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let path = app_handle
             .path()
@@ -2768,7 +2840,7 @@ pub async fn take_pending_notification_action(
             .unwrap_or(0);
         Ok(crate::notify::take_pending_action_from(&path, now_ms))
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = app_handle;
         Ok(None)

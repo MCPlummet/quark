@@ -95,7 +95,6 @@ export {
 } from "./notifications.js";
 export type {
   NotificationConfig,
-  QuietHours,
   PushStatus,
   PlatformTransport,
   BackgroundSyncState,

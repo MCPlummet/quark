@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # version-bump — bump Quark's version everywhere it appears, in lockstep.
 #
-# The version string lives in SEVEN places. Editing one and forgetting the
+# The version string lives in EIGHT places. Editing one and forgetting the
 # others (a recurring mistake — the README badge and the iOS plist in particular
 # have been bumped in separate, late commits) leaves them out of sync. This
-# script changes all seven atomically and refuses to run if they don't already
+# script changes all eight atomically and refuses to run if they don't already
 # agree.
 #
 #   1. package.json                 "version": "X.Y.Z"
@@ -19,9 +19,15 @@
 #                                    (both <string>X.Y.Z</string>)
 #   7. src-tauri/gen/apple/project.yml
 #                                    CFBundleShortVersionString + CFBundleVersion
-#                                    (xcodegen stamps these into the built iOS
-#                                    app; it sat at 0.5.0 while the tree was at
-#                                    0.17.2 because nothing checked it)
+#                                    for BOTH iOS targets (xcodegen stamps these
+#                                    into the built app; it sat at 0.5.0 while
+#                                    the tree was at 0.17.2 because nothing
+#                                    checked it)
+#   8. src-tauri/gen/apple/QuarkNSE/Info.plist
+#                                    the notification service extension's copy.
+#                                    App Store validation rejects an extension
+#                                    whose version differs from its host app's,
+#                                    so this one is not cosmetic either
 #
 # Usage:   bump.sh <major|minor|patch|X.Y.Z>
 #   major  1.4.2 -> 2.0.0
@@ -39,6 +45,7 @@ CARGO_LOCK="src-tauri/Cargo.lock"
 TAURI_CONF="src-tauri/tauri.conf.json"
 README="README.md"
 PLIST="src-tauri/gen/apple/quark_iOS/Info.plist"
+NSE_PLIST="src-tauri/gen/apple/QuarkNSE/Info.plist"
 XCODEGEN="src-tauri/gen/apple/project.yml"
 
 die() { echo "version-bump: $*" >&2; exit 1; }
@@ -85,12 +92,33 @@ read_lock()  { awk -F'"' '/^name = "quark"$/{getline; print $2; exit}' "$CARGO_L
 # README: the shields.io version badge.
 read_readme(){ grep -m1 -oE 'version-[0-9]+\.[0-9]+\.[0-9]+-' "$README" | sed -E 's/version-(.*)-/\1/'; }
 # Info.plist: the <string> on the line after the CFBundleShortVersionString key.
+# Both iOS plists have the same shape; the extension's must match the app's or
+# App Store validation rejects the pair.
 read_plist(){ awk '/CFBundleShortVersionString/{getline; gsub(/[[:space:]]*<\/?string>/,""); print; exit}' "$PLIST"; }
+read_nse_plist(){ awk '/CFBundleShortVersionString/{getline; gsub(/[[:space:]]*<\/?string>/,""); print; exit}' "$NSE_PLIST"; }
 # project.yml: both keys are inline YAML values, but quoted inconsistently
 # (`CFBundleShortVersionString: X.Y.Z` bare vs `CFBundleVersion: "X.Y.Z"`), so
 # strip spaces and quotes. Read separately — they can drift from each other.
-read_yml_short(){ awk -F: '/CFBundleShortVersionString:/{gsub(/[[:space:]"]/,"",$2); print $2; exit}' "$XCODEGEN"; }
-read_yml_build(){ awk -F: '/CFBundleVersion:/{gsub(/[[:space:]"]/,"",$2); print $2; exit}' "$XCODEGEN"; }
+#
+# Each key appears once per iOS target (the app and QuarkNSE), and every match
+# has to be read. Stopping at the first one let the extension's copy sit at an
+# older version unnoticed through both checks below: the drift guard compared
+# only the app's value, and the rewrite substitutes solely occurrences equal to
+# that value, so the post-rewrite verify then re-read the one line that had in
+# fact been updated. Matching values collapse to the single value; a
+# disagreement prints joined ("0.18.0/0.17.2"), which no comparison can equal,
+# so the mismatch surfaces named rather than passing silently.
+read_yml_key() {
+  awk -F: -v key="$1" '
+    index($0, key ":") {
+      gsub(/[[:space:]"]/, "", $2)
+      out = (n++ ? out "/" $2 : $2)
+      if (n == 1) first = $2; else if ($2 != first) differ = 1
+    }
+    END { print (differ ? out : first) }' "$XCODEGEN"
+}
+read_yml_short(){ read_yml_key CFBundleShortVersionString; }
+read_yml_build(){ read_yml_key CFBundleVersion; }
 
 CURRENT="$(read_pkg)"
 [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "could not parse current version from $PKG_JSON (got '$CURRENT')"
@@ -101,9 +129,9 @@ CURRENT="$(read_pkg)"
 # dev shell's bash 5 alike, so the drift check actually runs on both.
 # project.yml contributes two entries — its two keys are independent values, and
 # a bare label wouldn't say which one drifted.
-FILES=("$PKG_JSON" "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK" "$README" "$PLIST" \
+FILES=("$PKG_JSON" "$TAURI_CONF" "$CARGO_TOML" "$CARGO_LOCK" "$README" "$PLIST" "$NSE_PLIST" \
        "$XCODEGEN (CFBundleShortVersionString)" "$XCODEGEN (CFBundleVersion)")
-FOUND=("$(read_pkg)" "$(read_tauri)" "$(read_cargo)" "$(read_lock)" "$(read_readme)" "$(read_plist)" \
+FOUND=("$(read_pkg)" "$(read_tauri)" "$(read_cargo)" "$(read_lock)" "$(read_readme)" "$(read_plist)" "$(read_nse_plist)" \
        "$(read_yml_short)" "$(read_yml_build)")
 drift=0
 for i in "${!FILES[@]}"; do
@@ -172,10 +200,12 @@ perl -0pi -e "s/(version-)${CUR_RE}(-)/\${1}${NEW}\${2}/"                       
 # updates both. Scoped to <string>X.Y.Z</string> so other plist strings (bundle
 # name, etc.) are untouched — no non-version string equals the version number.
 perl -0pi -e "s/(<string>)${CUR_RE}(<\\/string>)/\${1}${NEW}\${2}/g"                       "$PLIST"
-# project.yml carries the same two keys; the /g updates both. Anchored on the key
-# names and replacing only the number, so each line keeps its own quoting style
-# (one value is bare YAML, the other quoted) and the iOS deployment target and
-# other dotted values in the file are left alone.
+perl -0pi -e "s/(<string>)${CUR_RE}(<\\/string>)/\${1}${NEW}\${2}/g"                       "$NSE_PLIST"
+# project.yml carries the same two keys once per iOS target; the /g updates all
+# of them, which is what keeps the extension's version equal to the app's.
+# Anchored on the key names and replacing only the number, so each line keeps its
+# own quoting style (one value is bare YAML, the other quoted) and the iOS
+# deployment target and other dotted values in the file are left alone.
 perl -0pi -e "s/(CFBundle(?:ShortVersionString|Version):[ \\t]*\"?)${CUR_RE}/\${1}${NEW}/g" "$XCODEGEN"
 
 # ── Verify every file now reports the new version ──
@@ -187,11 +217,12 @@ check "$CARGO_TOML" "$(read_cargo)"
 check "$CARGO_LOCK" "$(read_lock)"
 check "$README"     "$(read_readme)"
 check "$PLIST"      "$(read_plist)"
+check "$NSE_PLIST"  "$(read_nse_plist)"
 check "$XCODEGEN (CFBundleShortVersionString)" "$(read_yml_short)"
 check "$XCODEGEN (CFBundleVersion)"            "$(read_yml_build)"
 [[ $fail -eq 0 ]] || die "one or more files did not update cleanly — inspect the diff."
 
-echo "version-bump: all seven files now at $NEW"
+echo "version-bump: all eight files now at $NEW"
 echo
 echo "Changed lines:"
 grep -nH -m1 '"version"' "$PKG_JSON" "$TAURI_CONF"

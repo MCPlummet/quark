@@ -19,8 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PushWake {
     /// An event happened. Sync and let the existing pipeline decide whether it
-    /// is worth showing — the push rules already said it might be, but quiet
-    /// hours, focus and mutes have not been consulted yet.
+    /// is worth showing — the push rules already said it might be, but focus,
+    /// mutes and the master switch have not been consulted yet.
     Event { room_id: String, event_id: String },
     /// A counts-only push: the unread count moved with no event to show. Sent
     /// when notifications are read elsewhere, so the answer is never "notify"
@@ -913,8 +913,8 @@ async fn collect(
 /// matters because the JNI boundary is the part with no test coverage at all.
 ///
 /// It deliberately reads the *real* config and runs the *real* `evaluate`, so a
-/// notification that fails to appear because of quiet hours or a disabled master
-/// switch reports that rather than looking like a broken bridge.
+/// notification that fails to appear because of a disabled master switch or a
+/// muted room reports that rather than looking like a broken bridge.
 pub fn self_test_spec(
     data_dir: &std::path::Path,
 ) -> Result<crate::notify::NotificationSpec, String> {
@@ -933,7 +933,7 @@ pub fn self_test_spec(
     };
     crate::notify::evaluate(&input, &config).ok_or_else(|| {
         "The push bridge worked, but your notification settings suppressed the result \
-         (notifications disabled, quiet hours, or this room muted)."
+         (notifications disabled, or this room muted)."
             .to_owned()
     })
 }

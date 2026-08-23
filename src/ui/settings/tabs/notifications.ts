@@ -1,9 +1,9 @@
 // Settings → Notifications tab.
 //
-// Enable/preview toggles, Android background-sync controls, quiet hours, and a
+// Enable/preview toggles, Android background-sync controls, and a
 // test-notification button. Migrated from SettingsDialog._buildNotificationsTab;
-// behaviour is unchanged. The bespoke background-sync / quiet-hours / test DOM
-// stays inline (no shared control covers it); the standard rows use controls.
+// behaviour is unchanged. The bespoke background-sync / test DOM stays inline
+// (no shared control covers it); the standard rows use controls.
 
 import { getConfig, setNotificationConfig } from "../../../app/notifications.js";
 import type { NotificationConfig } from "../../../app/notifications.js";
@@ -64,7 +64,10 @@ export function pushHint(s: PushStatus): string {
   const privacy =
     "Only a room ID and event ID ever reach the push gateway — never message content.";
   if (s.transport === "apns") {
-    return `Delivered through Apple's push service and Quark's own gateway; nothing to install. ${privacy}`;
+    // Not a switch on iOS: it follows "Enable notifications" above, because
+    // push is the only way the app hears anything while it is closed.
+    return `Follows Enable notifications — iOS can only reach you through push while Quark is closed. \
+Delivered through Apple's push service and Quark's own gateway; nothing to install. ${privacy}`;
   }
   if (s.readiness === "no_transport") {
     // Somewhere to go, rather than a restatement of what's missing.
@@ -113,6 +116,10 @@ export const notificationsTab: SettingsTab = {
       set: setPushEnabled,
       status: pushStatusLine,
       hint: pushHint,
+      // iOS derives this from the master switch (see `derivedPushEnabled`), so
+      // there is no toggle to show — only the status, which is worth keeping
+      // for the times push is enabled and still not working.
+      hideToggle: (s) => s.transport === "apns",
       // The tie-break UnifiedPush won't make: with two or more distributors
       // installed and none saved it declines to guess, since choosing would be
       // choosing the user's notification provider for them. Nobody else can
@@ -168,57 +175,11 @@ export const notificationsTab: SettingsTab = {
     });
     if (bgSection) content.appendChild(bgSection);
 
-    // Quiet hours
-    const qhSection = document.createElement("div");
-    qhSection.className = "settings-dialog__section";
-    qhSection.appendChild(controls.sectionTitle("Quiet Hours"));
-
-    const qhRow = document.createElement("div");
-    qhRow.className = "settings-dialog__row settings-dialog__row--quiet-hours";
-
-    const qhLabel = document.createElement("span");
-    qhLabel.className = "settings-dialog__label";
-    qhLabel.textContent = "start";
-    qhRow.appendChild(qhLabel);
-
-    const startInput = document.createElement("input");
-    startInput.type = "time";
-    startInput.className = "settings-dialog__time-input";
-    if (draft.quiet_hours) {
-      const h = String(draft.quiet_hours.start_hour).padStart(2, "0");
-      const m = String(draft.quiet_hours.start_minute).padStart(2, "0");
-      startInput.value = `${h}:${m}`;
-    }
-    qhRow.appendChild(startInput);
-
-    const qhLabel2 = document.createElement("span");
-    qhLabel2.className = "settings-dialog__label";
-    qhLabel2.textContent = "end";
-    qhRow.appendChild(qhLabel2);
-
-    const endInput = document.createElement("input");
-    endInput.type = "time";
-    endInput.className = "settings-dialog__time-input";
-    if (draft.quiet_hours) {
-      const h = String(draft.quiet_hours.end_hour).padStart(2, "0");
-      const m = String(draft.quiet_hours.end_minute).padStart(2, "0");
-      endInput.value = `${h}:${m}`;
-    }
-    qhRow.appendChild(endInput);
-
-    qhSection.appendChild(qhRow);
-
     const footer = document.createElement("div");
     footer.className = "settings-dialog__actions";
 
     const saveBtn = controls.saveButton(async () => {
-      let quiet_hours = null;
-      if (startInput.value && endInput.value) {
-        const [sh, sm] = startInput.value.split(":").map(Number);
-        const [eh, em] = endInput.value.split(":").map(Number);
-        quiet_hours = { start_hour: sh, start_minute: sm, end_hour: eh, end_minute: em };
-      }
-      await setNotificationConfig({ ...draft, quiet_hours });
+      await setNotificationConfig(draft);
     });
     footer.appendChild(saveBtn);
 
@@ -240,7 +201,6 @@ export const notificationsTab: SettingsTab = {
     });
     footer.appendChild(testBtn);
 
-    content.appendChild(qhSection);
     content.appendChild(footer);
   },
 };

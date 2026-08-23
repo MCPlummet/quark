@@ -96,7 +96,7 @@ Rust backend (matrix-sdk 0.9)
 - `commands.rs` — all `#[tauri::command]` handlers (IPC surface)
 - `matrix/` — protocol implementation: `client.rs` (login/sync/session), `timeline.rs` (messages/edits/redactions), `rooms.rs`, `crypto.rs` (E2EE/verification), `emoji.rs` (MSC2545), `stickers.rs`, `reactions.rs`, `spaces.rs`, `threads.rs`, `media.rs`
 - `media_cache.rs` — disk-based LRU cache (200MB default)
-- `notifications.rs` — system notifications with quiet hours and room muting
+- `notifications.rs` — system notifications with room muting and privacy flags
 - `config/` — TOML theme parser, vimrc-style keybinding parser
 - `gif/` — Tenor, Giphy & Klipy API integration
 

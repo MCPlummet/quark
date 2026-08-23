@@ -132,7 +132,7 @@ room's user-defined rules outright so the account default applies.
 
 Because these each have an effect outside the config file, **`set_notification_config`
 only accepts the fields Settings owns** (`NotificationConfig::with_preferences`):
-enabled, preview, sender, quiet hours. Mutes, background sync and push have
+enabled, preview, sender. Mutes, background sync and push have
 dedicated commands, and the Settings dialog builds its draft from a config it
 cached when it opened — so treating that draft as authoritative would let [save]
 silently undo a mute or a push opt-out taken while the dialog was open.
@@ -159,13 +159,28 @@ push through the notification service extension.
 Push is opt-in and off by default (`push_enabled` in `notifications.toml`),
 toggled in Settings → Notifications. That section appears only where the
 platform is capable *and* the build wires a transport up
-(`push.rs::supports_push`). The two are separate claims because the platforms
-are not in step: Android has UnifiedPush, iOS is push-capable but has no
-transport until the APNs phase, and advertising a toggle there would strand the
-user on "waiting" with no way to progress. The opt-in is enforced inside
+(`push.rs::supports_push`). Both mobile platforms now satisfy both halves —
+Android through UnifiedPush, iOS through APNs — but the claims stay separate
+rather than collapsing into one const, because a capable platform whose build
+supplies no pushkey would otherwise advertise a toggle that can never leave
+"waiting". That is exactly what iOS was between the shared plumbing landing and
+the APNs transport landing. The opt-in is enforced inside
 `push::register`, not by each transport remembering to check: registration is
 what hands a third-party gateway this device's address, so the gate belongs on
 the handing over.
+
+**On iOS the opt-in is the master notification switch**, not a second one.
+`derivedPushEnabled` (`app/notifications.ts`) sets `push_enabled` from
+`enabled` and the OS permission together, on login and on every settings save,
+and the Settings toggle there reports rather than sets — a flip would be undone
+by the next save. iOS has no other way to hear about a message while the app is
+closed: no background-sync service, no connection left open. A separate opt-in
+could therefore only produce the state where notifications are on and nothing
+ever arrives. Android keeps its own switch, because background sync is a real
+alternative there and choosing a distributor is choosing who carries this
+device's traffic. The permission is part of the condition for the same reason
+registration is gated at all: a pusher for a device that cannot display
+anything hands the gateway an address for nothing.
 
 **"Enabled" and "working" are different states**, and everything between them is
 software Quark doesn't control — a distributor the user installs, a gateway that
@@ -312,6 +327,131 @@ Consulting the public receipt alone made the filter a permanent no-op for
 everyone who had turned that preference off — silently, because a filter that
 never fires is indistinguishable from one with nothing to do. Both receipt types
 are read, unthreaded and main, and the newest wins.
+
+#### iOS: the notification service extension
+
+iOS has no cold path in the Android sense, because there is nothing to wake: the
+app is suspended or gone, and it does not get to run. What runs instead is a
+**notification service extension** (`gen/apple/QuarkNSE`), a second process iOS
+launches for each push carrying `mutable-content: 1`, with roughly 30 seconds
+and 24 MB to rewrite the notification before it is shown. Without that flag —
+emitted in the pusher's `default_payload` by `push::apns_default_payload` — the
+extension is never consulted and the user sees the `loc-key` placeholder.
+
+Nothing registers for remote notifications at launch. `main.mm` installs the
+delegate callbacks and stops there; asking APNs for a token is a call Rust makes
+(`apns::request_device_token`, handed in as a function pointer like the rest of
+the ObjC side) once push is actually enabled, so an install that never opts in
+never mints a token or hands the gateway an address. The notification
+*permission* is likewise the frontend's to request, after login where the prompt
+follows something the user just did — the launch-time ask arrived in front of
+the login screen and pre-empted it. A token without permission is harmless: it
+arrives, and nothing is displayed until they agree.
+
+The homeserver POSTs to our own Sygnal at `push.quark.tel`, which signs for APNs;
+`apns.rs` is the transport module, and unlike `unifiedpush.rs` it discovers
+nothing. The OS is the transport and the only gateway that can sign for
+`tel.quark.app` is the one holding the APNs key, so both are constants. The
+pushkey is the device token base64-encoded, because Sygnal's
+`convert_device_token_to_hex` default makes it base64-*decode* what it is given;
+hex registers cleanly and never delivers. `app_id` selects sandbox or production
+(`tel.quark.app.ios.dev` / `.prod`) and must agree with the `aps-environment`
+entitlement the app was signed with — a mismatch fails silently at APNs,
+visible only in Sygnal's logs. So it is not chosen by a second switch that
+could disagree: `apns::detect_sandbox` reads the entitlement back out of the
+bundle's embedded provisioning profile at runtime, making registration follow
+the signature whatever the build flags were (`debug_assertions` was the old
+proxy, and a release-profile build signed for development registered `.prod`
+against a sandbox token). An absent profile is the App Store's doing and means
+production; the simulator, which has tokens but no profile, is pinned sandbox
+at compile time; only an unreadable profile falls back to the compile-time
+guess.
+
+**Tauri owns the app delegate**, so there is no compile-time place to put the
+remote-notification callbacks: `main.mm` adds them at runtime to whichever class
+wry instantiated, then re-assigns the delegate to itself so UIKit re-reads which
+methods exist. A token that arrives before Tauri's `setup()` has resolved a
+config dir is parked in `apns.rs` and drained by `settle_pending_pushers`; APNs
+does not re-issue on request, so without that the ordering would leave push dead
+until the next launch.
+
+**The extension is Swift only** — no Rust, no matrix-sdk, and so no decryption.
+It resolves the room id and event id the pusher sends with one authenticated
+`/context` request and renders as a **communication notification**: it donates
+an `INSendMessageIntent` and rewrites the content from it, which is the only
+API iOS offers for putting a real avatar and a native sender/group header on a
+notification. DMs — recognisable as rooms with no `m.room.name` — wear the
+sender's avatar and title as just the sender; named rooms wear the room's
+avatar, each falling back to the other. This needs the Communication
+Notifications entitlement and `NSUserActivityTypes` naming `INSendMessageIntent`
+— both on the *app*, not the extension: iOS validates the styled rendering
+against the host app's entitlements even though the extension donates the
+intent, and a profile for the extension's App ID refuses the key outright. When
+any of that is missing, iOS declines the intent and the plain title/body
+rendering — the same shape as `notifications::format_notification` — still
+stands. With `show_sender` off the intent is skipped outright: it exists
+to display exactly what that flag hides. `threadIdentifier` is set to the room
+id the moment it is known, before any fetch, so even a notification whose
+resolution failed stacks with its room. Encrypted rooms render a fixed string;
+decryption needs a crypto store the extension can open, which is a later phase.
+
+**Read-state hygiene reaches pushed notifications.** The receipt handler in
+`events.rs` already dismissed a room's notifications on any of the own user's
+read receipts, from any device — but on iOS `notify::cancel_room` could only
+remove what this process posted through the plugin, and a pushed notification's
+identifier is assigned by the system in a process that was never ours. The one
+handle the app has on those is the `threadIdentifier` the NSE stamps, so
+`main.mm` supplies a cleaner that removes delivered notifications by thread id
+and `cancel_room` calls both removals; the two sets are disjoint. Read a room
+on the device and its stack clears immediately; read it elsewhere and the stack
+clears when the receipt reaches this device's sync — on launch or resume for a
+suspended app, since nothing here can run before then (see the Signal
+comparison: their gateway pushes read-syncs as NSE-waking alerts, which for us
+would be a Sygnal patch, deliberately not taken on).
+
+**Taps route through Android's pipeline.** tauri-plugin-notification owns the
+`UNUserNotificationCenter` delegate, and its `didReceive` deliberately ignores
+push-triggered responses — so `main.mm` hooks that method and takes exactly the
+case the plugin declines, the two partitioning on the same trigger check. The
+tap is written as the same `PendingNotificationAction` file MainActivity
+mirrors on Android, an event nudges a live webview to consume it immediately,
+and the boot-time replay covers the cold start — one dispatch path
+(`routeNotificationAction`) for both platforms, warm or cold. The extension
+stamps `categoryIdentifier = quark_message` on what it renders, which is what
+puts the Reply and Mark-as-read actions registered there on a *pushed*
+notification; an aps payload names no category, and the app's registration
+alone is not enough.
+
+The displaced implementation is parked on the hooked class under a private
+selector, not in a global. The delegate property is weak, so more than one
+class is reachable over a session — a deallocated plugin manager leaves the
+slot empty, the next foreground hooks `main.mm`'s own fallback delegate, and a
+later plugin re-registration hooks a third — and a single saved pointer would
+have the earlier ones calling a later class's original with a mismatched
+`self`. Taking the selector over with `class_addMethod` rather than
+`method_setImplementation` matters for the same reason in the other direction:
+where the implementation is inherited, replacing it would rewrite the
+superclass's method for every subclass of it.
+
+Two things cross into it, and both go through the **app group**
+(`group.tel.quark.app`), because an extension cannot read the app's keychain —
+the `keyring` crate cannot set a keychain access group. `secrets.rs` writes the
+homeserver and access token, marked
+`NSFileProtectionCompleteUntilFirstUserAuthentication`: the default class would
+make the file unreadable while the device is locked, which is precisely when
+pushes arrive, so the bug would pass every hand test. It writes the
+`show_body` / `show_sender` flags separately and *unprotected*, because the
+failure mode of an unreadable flags file has to be showing less rather than
+more. Logout deletes the credentials — a token in a shared container outlives
+the session otherwise — and keeps the flags, which are a preference.
+
+What the extension cannot do is decline to show a notification. The only
+mechanism that can suppress a pushed notification is a server-side push rule
+that stops the homeserver sending it — which is what room mutes already use, and
+why anything meant to silence a room has to reach the ruleset rather than a
+local config the extension never reads.
+
+#### The pusher ledger
 
 `push.json` stores the transport address separately from the registered pusher.
 `last.pushkey` is what the homeserver was told; `endpoint` is what the platform
@@ -573,7 +713,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 | **Media** | Image auto-load, max dimensions, cache-size limit |
 | **GIF** | Provider (Tenor / Giphy / Klipy), API key, content rating |
 | **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
-| **Notifications** | Quiet-hours window, per-room mute list |
+| **Notifications** | Enable / preview / sender toggles, push and background-sync controls, test notification |
 | **Themes** | Theme picker and hot-reload path |
 | **About** | App version, Quark on GitHub link, Updates section (desktop only — see below) |
 

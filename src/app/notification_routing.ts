@@ -8,6 +8,7 @@
 // the app, or one that recreates the webview while the foreground sync
 // service kept the process alive.
 
+import { listen } from "@tauri-apps/api/event";
 import { onAction, registerActionTypes } from "@tauri-apps/plugin-notification";
 import { isTauri } from "../ipc/mock.js";
 import { getPlatform, sendMessage, markRoomRead } from "../ipc/index.js";
@@ -74,11 +75,28 @@ export async function initNotificationRouting(): Promise<void> {
     console.warn("notification onAction listener failed:", err);
   }
 
+  // iOS warm taps on *pushed* notifications never reach the plugin — its
+  // delegate ignores push-triggered responses by design — so the native hook
+  // writes the pending file and fires this event to say so. Consuming the file
+  // rather than carrying a payload keeps one source of truth with the
+  // cold-start replay below, and take-once semantics make the pair safe.
+  try {
+    await listen("quark://notification/tap", () => {
+      void replayPendingAction();
+    });
+  } catch (err) {
+    console.warn("notification tap listener failed:", err);
+  }
+
   // Cold-start replay: a tap delivered before this listener existed.
+  await replayPendingAction();
+}
+
+async function replayPendingAction(): Promise<void> {
   try {
     const pending = await takePendingNotificationAction();
     if (pending) {
-      void routeNotificationAction(pendingToEvent(pending));
+      await routeNotificationAction(pendingToEvent(pending));
     }
   } catch (err) {
     console.warn("pending notification action replay failed:", err);

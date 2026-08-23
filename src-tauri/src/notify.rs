@@ -103,8 +103,8 @@ pub struct NotificationSpec {
 ///
 /// Pure (no platform calls) so the decision matrix is unit-testable. Returns
 /// `None` for: own messages, focused window, initial-sync catch-up events,
-/// edits (a replacement is not a new message), rooms muted locally or by
-/// config (quiet hours, master switch), and events the push rules silenced.
+/// edits (a replacement is not a new message), rooms muted locally or by the
+/// master switch, and events the push rules silenced.
 pub fn evaluate(input: &NotificationInput, config: &NotificationConfig) -> Option<NotificationSpec> {
     if input.is_own || input.window_focused || input.pre_startup || input.is_edit {
         return None;
@@ -304,11 +304,19 @@ pub fn cancel_room(app: &tauri::AppHandle, room_id: &str) {
     }
     #[cfg(target_os = "ios")]
     {
-        if ids.is_empty() {
-            return;
-        }
-        if let Err(e) = app.notification().remove_active(ids) {
-            tracing::warn!("Failed to clear notifications for {room_id}: {e}");
+        // Pushed notifications first: the NSE stamps them with the room id as
+        // threadIdentifier, and that is the only handle this process has on
+        // them — their identifiers were assigned by the system, so the
+        // registry above never saw them and `remove_active` cannot name them.
+        crate::apns::cancel_room_notifications(room_id);
+
+        // Then whatever this process posted through the plugin, which carries
+        // no thread id and is invisible to the sweep above. The two sets are
+        // disjoint, so both calls are needed and neither can double-remove.
+        if !ids.is_empty() {
+            if let Err(e) = app.notification().remove_active(ids) {
+                tracing::warn!("Failed to clear notifications for {room_id}: {e}");
+            }
         }
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -317,12 +325,16 @@ pub fn cancel_room(app: &tauri::AppHandle, room_id: &str) {
 
 // ─── Cold-start action replay ─────────────────────────────────────────────────
 
-/// A notification tap/action captured by `MainActivity` while no JS listener
-/// was alive. The plugin's `actionPerformed` event is silently dropped when it
-/// fires before the frontend registers its listener (cold start, or a tap
-/// relaunching the webview while the foreground service kept the process
-/// alive) — MainActivity writes the intent's extras to a file instead, and the
-/// frontend replays it at boot via `take_pending_notification_action`.
+/// A notification tap/action captured natively while no JS listener was alive.
+///
+/// On Android, `MainActivity`: the plugin's `actionPerformed` event is
+/// silently dropped when it fires before the frontend registers its listener
+/// (cold start, or a tap relaunching the webview while the foreground service
+/// kept the process alive), so the intent's extras are written to a file
+/// instead. On iOS, `apns::quark_notification_tapped` writes the same file for
+/// every pushed-notification tap — the plugin's delegate ignores push-triggered
+/// responses entirely, so there is no warm path to be duplicated by. Either
+/// way the frontend replays it via `take_pending_notification_action`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingNotificationAction {
@@ -336,8 +348,9 @@ pub struct PendingNotificationAction {
     pub notification: Option<serde_json::Value>,
 }
 
-/// Filename within the Android app data dir (`Context.dataDir` — the same
-/// directory Tauri's `app_data_dir()` resolves to on Android).
+/// Filename within the app data dir — `Context.dataDir` on Android (the same
+/// directory Tauri's `app_data_dir()` resolves to there), and whatever
+/// `app_data_dir()` says on iOS, where the writer resolves it the same way.
 pub const PENDING_ACTION_FILENAME: &str = "pending_notification.json";
 
 /// Maximum age before a pending action is considered stale and discarded —

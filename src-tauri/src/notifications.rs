@@ -1,21 +1,11 @@
 //! Notification configuration and logic for OS-level notifications.
 //!
-//! This module handles deciding when to show notifications, formatting their
-//! content respecting privacy settings, and checking quiet-hours windows.
+//! This module handles deciding when to show notifications and formatting
+//! their content respecting privacy settings.
 
-use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 
 // ─── Config Structs ──────────────────────────────────────────────────────────
-
-/// Quiet-hours window: notifications are suppressed between start and end times.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct QuietHours {
-    pub start_hour: u8,
-    pub start_minute: u8,
-    pub end_hour: u8,
-    pub end_minute: u8,
-}
 
 /// User-configurable notification preferences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,8 +18,6 @@ pub struct NotificationConfig {
     pub show_sender: bool,
     /// Room IDs whose notifications are suppressed.
     pub mute_rooms: Vec<String>,
-    /// Optional quiet-hours window during which notifications are suppressed.
-    pub quiet_hours: Option<QuietHours>,
     /// Keep the sync loop alive while backgrounded via the Android foreground
     /// service (no effect on other platforms). Opt-in: costs battery and shows
     /// a persistent status notification. `serde(default)` so pre-0.14 configs
@@ -56,7 +44,6 @@ impl Default for NotificationConfig {
             show_body: true,
             show_sender: true,
             mute_rooms: Vec::new(),
-            quiet_hours: None,
             background_sync: false,
             push_enabled: false,
             push_gateway_override: None,
@@ -81,7 +68,6 @@ impl NotificationConfig {
             enabled: incoming.enabled,
             show_body: incoming.show_body,
             show_sender: incoming.show_sender,
-            quiet_hours: incoming.quiet_hours,
             mute_rooms: self.mute_rooms.clone(),
             background_sync: self.background_sync,
             push_enabled: self.push_enabled,
@@ -97,17 +83,19 @@ impl NotificationConfig {
 /// Checks:
 /// 1. Notifications are enabled globally.
 /// 2. The room is not muted.
-/// 3. We are not currently in quiet hours.
+///
+/// Time-of-day silencing is deliberately absent: every platform Quark runs on
+/// has a Do Not Disturb of its own that applies to notifications this app never
+/// sees, and a second window enforced here could only ever be the weaker of the
+/// two. Under push it was weaker still — the homeserver has no push rule for a
+/// time window, so it went on waking the device, and the iOS extension renders
+/// what arrives without consulting this config at all.
 pub fn should_notify(config: &NotificationConfig, room_id: &str) -> bool {
     if !config.enabled {
         return false;
     }
 
     if config.mute_rooms.iter().any(|r| r == room_id) {
-        return false;
-    }
-
-    if is_in_quiet_hours(config) {
         return false;
     }
 
@@ -179,28 +167,6 @@ pub fn format_notification(
     };
 
     (title, notification_body)
-}
-
-/// Returns `true` if the current local time falls within the quiet-hours window.
-///
-/// Handles overnight windows (e.g. 22:00 – 07:00) correctly.
-pub fn is_in_quiet_hours(config: &NotificationConfig) -> bool {
-    let Some(qh) = &config.quiet_hours else {
-        return false;
-    };
-
-    let now = chrono::Local::now();
-    let current_minutes = now.hour() as u16 * 60 + now.minute() as u16;
-    let start_minutes = qh.start_hour as u16 * 60 + qh.start_minute as u16;
-    let end_minutes = qh.end_hour as u16 * 60 + qh.end_minute as u16;
-
-    if start_minutes <= end_minutes {
-        // Same-day window, e.g. 08:00 – 09:00
-        current_minutes >= start_minutes && current_minutes < end_minutes
-    } else {
-        // Overnight window, e.g. 22:00 – 07:00
-        current_minutes >= start_minutes || current_minutes < end_minutes
-    }
 }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
@@ -322,6 +288,25 @@ mod tests {
         assert_eq!(config.push_gateway_override, None);
     }
 
+    /// Quiet hours were removed, but the installs that used them still have a
+    /// `[quiet_hours]` table in notifications.toml. A parse failure there would
+    /// discard the settings the user *does* still have, so the removed table
+    /// has to be ignored rather than rejected.
+    #[test]
+    fn a_config_carrying_the_removed_quiet_hours_table_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(NOTIFICATIONS_FILENAME),
+            "enabled = true\nshow_body = false\nshow_sender = true\nmute_rooms = []\n\n             [quiet_hours]\nstart_hour = 22\nstart_minute = 0\nend_hour = 7\nend_minute = 30\n",
+        )
+        .unwrap();
+
+        let config = load_notification_config_from(dir.path());
+
+        assert!(!config.show_body, "the rest of the config survives");
+        assert!(config.enabled);
+    }
+
     /// Push is opt-in: it registers this device with a third-party gateway, so
     /// it must never turn itself on.
     #[test]
@@ -354,12 +339,6 @@ mod tests {
             enabled: false,
             show_body: false,
             show_sender: false,
-            quiet_hours: Some(QuietHours {
-                start_hour: 22,
-                start_minute: 0,
-                end_hour: 7,
-                end_minute: 30,
-            }),
             ..NotificationConfig::default()
         }
     }
@@ -371,7 +350,6 @@ mod tests {
         assert!(!merged.enabled);
         assert!(!merged.show_body);
         assert!(!merged.show_sender);
-        assert_eq!(merged.quiet_hours.unwrap().start_hour, 22);
     }
 
     /// The Settings draft is built from a config cached when the dialog opened.
@@ -467,25 +445,6 @@ mod tests {
         assert!(should_notify(&config, "!other:example.com"));
     }
 
-    #[test]
-    fn test_should_notify_in_quiet_hours_suppressed() {
-        let mut config = default_config();
-        // Quiet hours cover all 24 hours — guaranteed to be in quiet hours.
-        config.quiet_hours = Some(QuietHours {
-            start_hour: 0,
-            start_minute: 0,
-            end_hour: 23,
-            end_minute: 59,
-        });
-        assert!(!should_notify(&config, "!room:example.com"));
-    }
-
-    #[test]
-    fn test_should_notify_no_quiet_hours() {
-        let config = default_config(); // quiet_hours = None
-        assert!(should_notify(&config, "!room:example.com"));
-    }
-
     // ── format_notification ───────────────────────────────────────────────────
 
     #[test]
@@ -538,58 +497,5 @@ mod tests {
             format_notification("@alice:example.com", "Hello world", "General", &config);
         assert_eq!(title, "New Message");
         assert_eq!(body, "You have a new message");
-    }
-
-    // ── is_in_quiet_hours ─────────────────────────────────────────────────────
-
-    #[test]
-    fn test_is_in_quiet_hours_none() {
-        let config = default_config(); // quiet_hours = None
-        assert!(!is_in_quiet_hours(&config));
-    }
-
-    #[test]
-    fn test_is_in_quiet_hours_full_day_window() {
-        // 00:00 – 23:59 covers the whole day
-        let mut config = default_config();
-        config.quiet_hours = Some(QuietHours {
-            start_hour: 0,
-            start_minute: 0,
-            end_hour: 23,
-            end_minute: 59,
-        });
-        assert!(is_in_quiet_hours(&config));
-    }
-
-    #[test]
-    fn test_is_in_quiet_hours_overnight_always_in() {
-        // 22:00 – 06:00 overnight — guaranteed active at some point.
-        // We cannot know the current time in a unit test, so we just verify
-        // the function runs without panicking. The logic is tested via the
-        // same-day window tests above (full-day coverage).
-        let mut config = default_config();
-        config.quiet_hours = Some(QuietHours {
-            start_hour: 22,
-            start_minute: 0,
-            end_hour: 6,
-            end_minute: 0,
-        });
-        // Just assert it returns a bool without panicking.
-        let _ = is_in_quiet_hours(&config);
-    }
-
-    #[test]
-    fn test_is_in_quiet_hours_zero_width_window() {
-        // start == end: empty window, never active
-        let mut config = default_config();
-        config.quiet_hours = Some(QuietHours {
-            start_hour: 10,
-            start_minute: 0,
-            end_hour: 10,
-            end_minute: 0,
-        });
-        // start_minutes == end_minutes → same-day branch → current must be
-        // in [10:00, 10:00) which is always false.
-        assert!(!is_in_quiet_hours(&config));
     }
 }

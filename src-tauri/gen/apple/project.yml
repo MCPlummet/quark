@@ -35,10 +35,22 @@ targets:
   quark_iOS:
     type: application
     platform: iOS
+    # Mirrors PRODUCT_NAME in the `app` setting group. xcodegen does not read
+    # setting groups when it names the buildable in the scheme, so without this
+    # a regen writes `quark_iOS.app` into a scheme whose target actually builds
+    # `Quark.app`.
+    productName: Quark
     sources:
       - path: Sources
       - path: Assets.xcassets
+      # In the navigator but in no build phase. Whether Externals has a
+      # libapp.a in it when xcodegen runs depends entirely on whether a build
+      # has happened since the last clean — and if one has, the default
+      # classification copies a half-gigabyte static archive into the app
+      # bundle as a resource. Linking is unaffected: the framework dependency
+      # and LIBRARY_SEARCH_PATHS below are what actually find it.
       - path: Externals
+        buildPhase: none
       - path: quark_iOS
       - path: assets
         buildPhase: resources
@@ -53,6 +65,11 @@ targets:
       # builds and signs cleanly and only fails in the user's hands.
       properties:
         LSRequiresIPhoneOS: true
+        # APNs delivers `content-available` pushes to a suspended app only if it
+        # declares this. Without it the push is dropped before the extension is
+        # ever consulted, which looks exactly like a gateway that never fired.
+        UIBackgroundModes:
+          - remote-notification
         NSCameraUsageDescription: Quark needs camera access so you can take a photo or video to send in a chat.
         NSMicrophoneUsageDescription: Quark needs microphone access so videos you record to send include sound.
         NSPhotoLibraryUsageDescription: Quark needs photo library access so you can attach existing photos and videos to a chat.
@@ -69,8 +86,33 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 0.18.0
         CFBundleVersion: "0.18.0"
+        # Declares the app a legitimate target for INSendMessageIntent, which is
+        # half of what lets the NSE render pushes as communication notifications
+        # (sender avatar, native "sender in group" header). The entitlement
+        # below is the other half; missing either silently downgrades to the
+        # plain-text rendering.
+        NSUserActivityTypes:
+          - INSendMessageIntent
     entitlements:
+      # xcodegen *writes* this file from these properties — a key added to the
+      # .entitlements by hand survives until the next `xcodegen generate` and
+      # then vanishes, taking push with it and leaving a build that signs fine.
+      # `aps-environment` is `development` for local Xcode builds; TestFlight
+      # and App Store export re-sign it to `production`. The matching app_id is
+      # no longer a second switch to keep in step: `apns::detect_sandbox` reads
+      # this very entitlement back out of the embedded provisioning profile at
+      # runtime, so registration follows whatever the build was signed as.
       path: quark_iOS/quark_iOS.entitlements
+      properties:
+        aps-environment: development
+        com.apple.security.application-groups:
+          - group.tel.quark.app
+        # Communication Notifications. On the app only — iOS validates the
+        # styled rendering against the host app's entitlements even though the
+        # extension is what donates the intent, and the extension's own profile
+        # refuses the key. If signing rejects it here too, the capability needs
+        # ticking on the tel.quark.app App ID in the portal.
+        com.apple.developer.usernotifications.communication: true
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
@@ -86,6 +128,11 @@ targets:
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
       groups: [app]
     dependencies:
+      # Embeds the extension into the app bundle's PlugIns directory. Without
+      # this the extension builds and signs and is simply never installed, so
+      # every push renders the loc-key placeholder.
+      - target: QuarkNSE
+        embed: true
       - framework: libapp.a
         embed: false
       - sdk: CoreGraphics.framework
@@ -94,6 +141,9 @@ targets:
       - sdk: QuartzCore.framework
       - sdk: Security.framework
       - sdk: UIKit.framework
+      # main.mm asks for notification permission before registering for remote
+      # notifications; without this the link fails rather than the push.
+      - sdk: UserNotifications.framework
       - sdk: WebKit.framework
     preBuildScripts:
       - script: pnpm tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
@@ -102,3 +152,54 @@ targets:
         outputFiles:
           - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
           - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a
+  # ── Notification service extension ────────────────────────────────────────
+  #
+  # A second process, launched by iOS for each push carrying
+  # `mutable-content: 1`, with ~30s and ~24 MB to turn a room id and an event id
+  # into a readable notification. Swift only: no Rust, no matrix-sdk, and so no
+  # decryption until Phase 4.
+  QuarkNSE:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: QuarkNSE
+    info:
+      path: QuarkNSE/Info.plist
+      properties:
+        CFBundleDisplayName: Quark Notifications
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          # PRODUCT_MODULE_NAME follows PRODUCT_NAME, so this resolves to
+          # QuarkNSE.NotificationService. A typo here fails at push time with no
+          # log, not at build time.
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+        # Must match the app's, or App Store validation rejects the pair. The
+        # version-bump script rewrites every CFBundle*Version in this file, so
+        # these stay in lockstep with the app target's above.
+        CFBundleShortVersionString: 0.18.0
+        CFBundleVersion: "0.18.0"
+    entitlements:
+      # The app group and nothing else. `aps-environment` belongs to the app,
+      # and so does the communication-notifications grant: iOS validates the
+      # styled rendering against the *host app's* entitlements, and a profile
+      # for the extension's App ID refuses the key outright ("Entitlement ...
+      # not found and could not be included in profile").
+      path: QuarkNSE/QuarkNSE.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.tel.quark.app
+    settings:
+      base:
+        # Must be a child of the app's bundle id, or iOS refuses to install it.
+        PRODUCT_BUNDLE_IDENTIFIER: tel.quark.app.nse
+        DEVELOPMENT_TEAM: STY28WCV84
+        SWIFT_VERSION: 5.0
+        # The extension links no third-party Swift and rides the app's copy of
+        # the standard libraries; embedding a second set would just add weight.
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: false
+        ARCHS: [arm64]
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+    dependencies:
+      - sdk: UserNotifications.framework
+      # INSendMessageIntent — the communication-notification rendering.
+      - sdk: Intents.framework
