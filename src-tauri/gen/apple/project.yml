@@ -20,6 +20,13 @@ settingGroups:
       # from this file. A team id is not secret — it ships inside every signed
       # app — and without it a regenerated project cannot sign at all.
       DEVELOPMENT_TEAM: STY28WCV84
+      # iPhone only. Left unset this defaults to "1,2", which puts the app in
+      # front of App Review on an iPad and makes App Store Connect withhold
+      # submission until iPad screenshots exist — for a layout that has never
+      # been designed for one. QuarkNSE declares the same value: an extension
+      # whose device family is wider than its host app's is a mismatch
+      # validation can object to.
+      TARGETED_DEVICE_FAMILY: "1"
 targetTemplates:
   app:
     type: application
@@ -51,6 +58,12 @@ targets:
       # and LIBRARY_SEARCH_PATHS below are what actually find it.
       - path: Externals
         buildPhase: none
+      # Carries PrivacyInfo.xcprivacy to the app bundle's root, alongside the
+      # generated Info.plist and entitlements — which xcodegen keeps out of the
+      # build phases because info.path/entitlements.path already name them.
+      # The manifest must end up in Copy Bundle Resources: verify after a regen,
+      # because a file xcodegen fails to classify lands in no phase at all and
+      # the only symptom is an ITMS-91053 email once the upload has processed.
       - path: quark_iOS
       - path: assets
         buildPhase: resources
@@ -85,7 +98,15 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         CFBundleShortVersionString: 0.18.0
-        CFBundleVersion: "0.18.0"
+        # The BUILD NUMBER, not the marketing version. App Store Connect
+        # requires this to strictly increase on every upload sharing one
+        # CFBundleShortVersionString, so it cannot track the version: a
+        # rejected build, a signing fix, or any second attempt at the same
+        # release needs a second value. `version-bump build` increments it
+        # across all four places it appears; a marketing version bump leaves it
+        # alone. It stays an integer — dotted forms compare component-wise and
+        # invite a mistake no error message explains.
+        CFBundleVersion: "1"
         # Declares the app a legitimate target for INSendMessageIntent, which is
         # half of what lets the NSE render pushes as communication notifications
         # (sender avatar, native "sender in group" header). The entitlement
@@ -174,10 +195,11 @@ targets:
           # log, not at build time.
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
         # Must match the app's, or App Store validation rejects the pair. The
-        # version-bump script rewrites every CFBundle*Version in this file, so
-        # these stay in lockstep with the app target's above.
+        # version-bump script rewrites both keys across every target in this
+        # file — the marketing version on a version bump, the build number on
+        # `version-bump build` — so these stay in lockstep with the app's above.
         CFBundleShortVersionString: 0.18.0
-        CFBundleVersion: "0.18.0"
+        CFBundleVersion: "1"
     entitlements:
       # The app group and nothing else. `aps-environment` belongs to the app,
       # and so does the communication-notifications grant: iOS validates the
@@ -193,6 +215,10 @@ targets:
         # Must be a child of the app's bundle id, or iOS refuses to install it.
         PRODUCT_BUNDLE_IDENTIFIER: tel.quark.app.nse
         DEVELOPMENT_TEAM: STY28WCV84
+        # Equal to the app's, deliberately. The NSE does not inherit the `app`
+        # setting group, so leaving this unset would widen the extension to
+        # iPad while the host app is iPhone-only.
+        TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: 5.0
         # The extension links no third-party Swift and rides the app's copy of
         # the standard libraries; embedding a second set would just add weight.

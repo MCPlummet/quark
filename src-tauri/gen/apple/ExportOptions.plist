@@ -1,8 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Read by `xcodebuild -exportArchive`, and so by `pnpm tauri ios build`. NOT
+  read by Xcode's Organizer, which asks for the same choices in its own
+  dialogs — the documented TestFlight path archives in Xcode and uploads from
+  Organizer, so this file governs the scripted route only.
+
+  `app-store-connect` is the App Store / TestFlight destination. It was
+  `debugging` (a local development export) until TestFlight prep; exporting a
+  debugging archive produces an IPA App Store Connect refuses, after the
+  archive has already been built.
+-->
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>debugging</string>
+    <string>app-store-connect</string>
 </dict>
 </plist>
