@@ -54,15 +54,36 @@ async fn open_search_index(app_handle: &AppHandle, data_dir: std::path::PathBuf,
 /// Remove all matrix-sdk SQLite store files from the data directory.
 /// Called on logout and before a fresh login to prevent crypto store conflicts
 /// when switching accounts.
+/// Does this path name one of the SQLite files that together make up "the store"?
+///
+/// A single definition, shared by `clear_store` and `store_exists` because those
+/// two are exact opposites and a drift between them would be silent: a file type
+/// one deletes but the other ignores makes a wiped store look present, and
+/// `restore_session` trusts `store_exists` to tell it otherwise.
+fn is_store_file(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "sqlite3" || e == "db")
+}
+
 fn clear_store(data_dir: &Path) {
     if let Ok(entries) = std::fs::read_dir(data_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "sqlite3" || e == "db") {
+            if is_store_file(&path) {
                 let _ = std::fs::remove_file(&path);
             }
         }
     }
+}
+
+/// Is there a store on disk for a restored session to open?
+///
+/// False means the data directory holds nothing `clear_store` would remove:
+/// either no login has happened here yet, or the directory was wiped underneath
+/// a keyring that outlived it.
+fn store_exists(data_dir: &Path) -> bool {
+    std::fs::read_dir(data_dir)
+        .map(|entries| entries.flatten().any(|e| is_store_file(&e.path())))
+        .unwrap_or(false)
 }
 
 /// Remove all local session state: the SQLite store files plus the keyring's
@@ -298,6 +319,27 @@ pub async fn restore_session(
             Ok(None) => return Ok(RestoreOutcome::Invalid),
         }
     };
+
+    // Session and key both survived, but the store they describe did not.
+    //
+    // On iOS this is the reinstall case: the Keychain outlives an app delete
+    // while the container does not, and `dir_tag` is deliberately constant
+    // there, so the session is found again under a data directory that no
+    // longer holds anything. Falling through would hand `sqlite_store` a key
+    // for a store that isn't there, and it would create a fresh empty one and
+    // report a perfectly successful restore — logged in, with no Megolm keys,
+    // no cross-signing, and every encrypted room undecryptable, against an
+    // access token the homeserver still honours. That state cannot heal; only
+    // a fresh login can.
+    //
+    // `Invalid` is exactly the outcome for it: the frontend already responds by
+    // clearing and showing login. Deliberately not gated to iOS — desktop
+    // reaches the same state whenever a data directory is removed without the
+    // keyring being cleared, and PR CI type-checks Linux alone, so a
+    // platform-gated version of this would first be exercised at release.
+    if !store_exists(&data_path) {
+        return Ok(RestoreOutcome::Invalid);
+    }
 
     let client = match crate::matrix::client::build_client(
         &session.homeserver_url,
@@ -2055,7 +2097,69 @@ pub async fn send_gif(
 
 #[cfg(test)]
 mod tests {
-    use super::gif_dimensions;
+    use super::{clear_store, gif_dimensions, store_exists};
+
+    /// `store_exists` and `clear_store` must agree on what "the store" is.
+    /// These exercise the pair together, since the failure that matters is them
+    /// disagreeing rather than either being wrong alone.
+    mod store_presence {
+        use super::{clear_store, store_exists};
+
+        fn touch(dir: &std::path::Path, name: &str) {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+
+        #[test]
+        fn absent_when_the_directory_is_empty() {
+            let dir = tempfile::tempdir().unwrap();
+            assert!(!store_exists(dir.path()));
+        }
+
+        #[test]
+        fn absent_when_the_directory_does_not_exist() {
+            // The reinstall case as the filesystem actually presents it: the
+            // container is gone entirely, not merely emptied.
+            let dir = tempfile::tempdir().unwrap();
+            let gone = dir.path().join("never-created");
+            assert!(!store_exists(&gone));
+        }
+
+        #[test]
+        fn present_for_each_extension_clear_store_removes() {
+            for name in ["matrix-sdk-state.sqlite3", "legacy.db"] {
+                let dir = tempfile::tempdir().unwrap();
+                touch(dir.path(), name);
+                assert!(store_exists(dir.path()), "{name} should count as a store");
+            }
+        }
+
+        #[test]
+        fn absent_when_only_unrelated_files_are_present() {
+            let dir = tempfile::tempdir().unwrap();
+            touch(dir.path(), "config.toml");
+            touch(dir.path(), "last_activity.json");
+            assert!(!store_exists(dir.path()));
+        }
+
+        #[test]
+        fn clearing_a_store_makes_it_absent() {
+            // The invariant restore_session depends on: whatever clear_store
+            // removes, store_exists must stop reporting. If these two ever drift
+            // apart, a wiped store reads as present and a stale session is
+            // restored against an empty one.
+            let dir = tempfile::tempdir().unwrap();
+            touch(dir.path(), "matrix-sdk-state.sqlite3");
+            touch(dir.path(), "matrix-sdk-crypto.sqlite3");
+            touch(dir.path(), "config.toml");
+            assert!(store_exists(dir.path()));
+
+            clear_store(dir.path());
+
+            assert!(!store_exists(dir.path()));
+            // and it left everything else alone
+            assert!(dir.path().join("config.toml").exists());
+        }
+    }
 
     /// Minimal GIF header: "GIF89a" + logical screen width/height as LE u16.
     fn gif_header(w: u16, h: u16) -> Vec<u8> {
