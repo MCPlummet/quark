@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Privacy manifest. Apple's check for this runs at UPLOAD, not at submission,
+  so it gates TestFlight too: an undeclared required-reason API comes back as
+  an ITMS-91053 email minutes after the build finishes processing, and the
+  build is unusable until a new one replaces it.
+
+  Only the app carries a manifest. QuarkNSE was assessed and needs none — it
+  reaches the app group with containerURL, reads with Data(contentsOf:), and
+  talks to the homeserver over URLSession, none of which is a required-reason
+  API. If that changes, the extension needs its own file at its bundle root;
+  it does not inherit this one.
+-->
+<plist version="1.0">
+<dict>
+	<!--
+	  Quark runs no analytics, no ads and no attribution, and links no SDK that
+	  does. Nothing here reaches the developer: messages and media go to the
+	  user's own homeserver over their own authenticated connection. GIF search
+	  is the only third-party call in the app, and it is inert unless the user
+	  supplies their own provider API key — the shipped default is empty.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!--
+		  C617.1 — timestamps of files inside the app container, app group
+		  container or CloudKit container. SQLite (the matrix-sdk state store
+		  and the encrypted search index) stats its own database files, and the
+		  media cache stats its own entries to run the LRU. Everything touched
+		  is a file this app wrote.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+
+		<!--
+		  CA92.1 — user defaults holding information accessible only to this
+		  app. Declared for the webview and Tauri runtime layers rather than
+		  for Quark's own code, which stores its settings in TOML files. The
+		  app-group variant (1C8F.1) is deliberately NOT claimed: the NSE
+		  credential channel is a file in the shared container, not a shared
+		  UserDefaults suite.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+
+		<!--
+		  35F9.1 — measuring elapsed time between events within the app. Rust's
+		  std::time::Instant is backed by the system uptime clock on Apple
+		  platforms, and it is used throughout the sync and push-wake paths to
+		  time and bound work.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
