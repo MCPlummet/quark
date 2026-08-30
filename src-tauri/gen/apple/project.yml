@@ -78,6 +78,18 @@ targets:
       # builds and signs cleanly and only fails in the user's hands.
       properties:
         LSRequiresIPhoneOS: true
+        # Export compliance, answered once in the binary rather than on every
+        # upload. Quark's cryptography is Olm/Megolm over Curve25519, Ed25519,
+        # AES-256, HMAC-SHA-256 and HKDF — all published, none proprietary — and
+        # the source is public, so under 15 CFR 742.15(b)(1) it is not subject to
+        # the EAR at all. The notification in 742.15(b)(2) has, since the March
+        # 2021 rule, reached only "non-standard cryptography" (772.1: unpublished
+        # or proprietary), which this is not.
+        #
+        # So `false` asserts "no NON-EXEMPT encryption" — it does not claim the
+        # app has no encryption. Without the key, App Store Connect parks every
+        # build in Missing Compliance until the question is answered by hand.
+        ITSAppUsesNonExemptEncryption: false
         # APNs delivers `content-available` pushes to a suspended app only if it
         # declares this. Without it the push is dropped before the extension is
         # ever consulted, which looks exactly like a gateway that never fired.
