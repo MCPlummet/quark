@@ -1052,6 +1052,44 @@ The repo is assembled on every Pages deploy (`pages.yml`): CI downloads the newe
 
 ---
 
+## App Icons
+
+Every icon ships from one hand-edited file: `src-tauri/icons/quarklogo32.png`, the
+logo at its native **32×32** grid. The logo is pixel art, so all scaling is done by
+**integer** nearest-neighbour steps — a fractional resize smears every block edge.
+
+```bash
+./scripts/gen-icons.sh          # regenerate everything, in the required order
+```
+
+| Output | Content | Why |
+| --- | --- | --- |
+| `icons/icon.png` (master, 512px) | 81.25% (13× art) | Padding for desktop, Windows tiles, iOS |
+| `icons/android-foreground.png` | 62.5% (10× art) | Fits Android's 66.67% adaptive safe zone |
+
+Padding is set by the two scale factors at the top of `scripts/gen-icons.sh`; the
+content fraction is `scale × 32 / 512`. Only integer scales are accepted.
+
+The pipeline exists because `pnpm tauri icon` alone gets three things wrong here:
+
+- It **rewrites `icons/icon.png`** with a bilinear resample of its own input, so the
+  master is regenerated afterwards — otherwise every run softens it a little more.
+- Because `src-tauri/gen/{android,apple}` exist, it writes the mobile icons
+  **straight into the gen trees** and never touches `icons/android/` or `icons/ios/`.
+  The gen tree is therefore the source, and `icons/android/` is refreshed *from* it;
+  copying the other way overwrites the freshly generated icons with stale ones.
+- Its iOS set is white-backed and bilinear, so `scripts/gen-ios-icons.py` replaces it
+  last — compositing on black at full resolution before a nearest-neighbour resize,
+  and writing RGB with no alpha (the App Store rejects icons with an alpha channel).
+
+`src-tauri/icons/app-icon.json` is the Tauri icon manifest (`default`, `bg_color`,
+`android_fg`). Note that its documented `android_fg_scale` key is a **no-op** in the
+current CLI — padding the `android_fg` image is what actually works.
+
+`tauri icon` also emits the `.icns` chunks in a nondeterministic order, so the
+pipeline canonicalizes them; without that, an unchanged icon shows up as a ~190KB
+binary diff on every run. Regenerating with no source change is a no-op.
+
 ## Project Structure
 
 ```
@@ -1111,6 +1149,13 @@ quark/
 │   │   └── vars.css          # CSS custom properties
 │   └── style/
 │       └── base.css          # Monospace terminal base styles
+├── scripts/                  # Build-time asset generation
+│   ├── gen-icons.sh          # Full icon pipeline (run this)
+│   ├── gen-master-icon.py    # 32px art -> padded master
+│   ├── gen-ios-icons.py      # iOS set (black-composited, no alpha)
+│   ├── canonicalize-icns.py  # Stable .icns chunk order (idempotent regen)
+│   ├── pnglib.py             # Dependency-free PNG read/write
+│   └── gen-emoji.mjs         # Emoji shortcode data
 ├── themes/                   # Built-in theme files
 │   ├── phosphor.toml
 │   ├── amber.toml

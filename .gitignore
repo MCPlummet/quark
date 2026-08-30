@@ -50,3 +50,6 @@ result-*
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Python bytecode from scripts/
+__pycache__/
