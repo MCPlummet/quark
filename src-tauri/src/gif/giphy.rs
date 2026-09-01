@@ -52,20 +52,7 @@ impl GifProvider for GiphyClient {
         limit: u32,
         rating: &str,
     ) -> Result<Vec<GifResult>, String> {
-        // Giphy uses g, pg, pg-13, r ratings directly
-        let giphy_rating = match rating {
-            "pg-13" => "pg-13",
-            r @ ("g" | "pg" | "r") => r,
-            _ => "pg",
-        };
-
-        let url = format!(
-            "https://api.giphy.com/v1/gifs/search?q={}&api_key={}&limit={}&rating={}",
-            gif::encode_query(query),
-            self.api_key,
-            limit,
-            giphy_rating,
-        );
+        let url = build_search_url(query, &self.api_key, limit, rating);
 
         let response = gif::fetch_response(&self.http, "Giphy", &url).await?;
 
