@@ -1,7 +1,15 @@
 // src/ui/settings/tabs/notifications.test.ts
-import { describe, it, expect } from "vitest";
-import { pushStatusLine, pushHint } from "./notifications.js";
+import { describe, it, expect, vi } from "vitest";
+import {
+  pushStatusLine,
+  pushHint,
+  accountMuteNotice,
+  ACCOUNT_MUTE_MESSAGE,
+} from "./notifications.js";
 import type { PushStatus } from "../../../ipc/notifications.js";
+
+const toasts = vi.hoisted(() => ({ showError: vi.fn(), showSuccess: vi.fn() }));
+vi.mock("../../NotificationToast.js", () => toasts);
 
 const status = (over: Partial<PushStatus> = {}): PushStatus => ({
   supported: true,
@@ -13,6 +21,7 @@ const status = (over: Partial<PushStatus> = {}): PushStatus => ({
   readiness: "waiting",
   distributor: "org.ntfy",
   distributors: ["org.ntfy"],
+  account_muted: false,
   ...over,
 });
 
@@ -119,5 +128,81 @@ describe("pushHint", () => {
     for (const transport of ["unified_push", "apns"] as const) {
       expect(pushHint(status({ transport }))).toContain("never message content");
     }
+  });
+});
+
+// ─── The account-wide mute (issue #60) ───────────────────────────────────────
+//
+// The failure this whole state exists for: another client wrote
+// `.m.rule.master`, the homeserver stopped notifying for the entire account,
+// and Quark reported push as ready with every rung of the ladder green.
+
+describe("account-wide mute", () => {
+  const muted = status({ readiness: "muted_account", registered: true, account_muted: true });
+
+  it("never reports a muted account as working push", () => {
+    const line = pushStatusLine(muted);
+    expect(line).not.toContain("registered ·");
+    expect(line).toContain("account-wide mute");
+  });
+
+  // Naming the rule is what makes the state searchable, and what turns hours
+  // down the gateway chain into one lookup.
+  it("names the rule that caused it", () => {
+    expect(pushStatusLine(muted)).toContain(".m.rule.master");
+  });
+
+  // A registered pusher over a working distributor is still delivering
+  // nothing, so the transport advice would send the user to fix a chain that
+  // is already fine.
+  it("explains the account mute instead of the transport, on every platform", () => {
+    for (const transport of ["unified_push", "apns"] as const) {
+      const hint = pushHint(status({ ...muted, transport }));
+      expect(hint).toContain("whole account");
+      expect(hint).not.toContain("unifiedpush.org");
+      // The privacy guarantee is not dropped by taking this branch.
+      expect(hint).toContain("never message content");
+    }
+  });
+
+  it("says the same thing in the notice and the hint", () => {
+    expect(pushHint(muted)).toContain(ACCOUNT_MUTE_MESSAGE);
+    expect(ACCOUNT_MUTE_MESSAGE).toContain("set by another client");
+  });
+});
+
+describe("accountMuteNotice", () => {
+  it("explains the state and offers a way out of it", () => {
+    const notice = accountMuteNotice(async () => {});
+    expect(notice.textContent).toContain(ACCOUNT_MUTE_MESSAGE);
+    expect(notice.querySelector("button")).not.toBeNull();
+  });
+
+  // The mouse/touch path the project requires for every action: no vim command
+  // or keyboard-only affordance is involved in clearing this.
+  it("clears the mute on click and takes the notice away", async () => {
+    const onFix = vi.fn(async () => {});
+    const notice = accountMuteNotice(onFix);
+    document.body.appendChild(notice);
+
+    notice.querySelector("button")!.click();
+    await vi.waitFor(() => expect(notice.isConnected).toBe(false));
+    expect(onFix).toHaveBeenCalledTimes(1);
+  });
+
+  // A failed write leaves the account silent, so the notice is still true —
+  // removing it would put the UI back to claiming everything is fine, which is
+  // the failure this state was added to stop.
+  it("keeps the notice standing when the rule write fails", async () => {
+    const notice = accountMuteNotice(async () => {
+      throw new Error("homeserver said no");
+    });
+    document.body.appendChild(notice);
+    const btn = notice.querySelector("button") as HTMLButtonElement;
+
+    btn.click();
+    await vi.waitFor(() => expect(btn.disabled).toBe(false));
+    expect(notice.isConnected).toBe(true);
+    expect(toasts.showError).toHaveBeenCalled();
   });
 });

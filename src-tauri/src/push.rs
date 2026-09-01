@@ -545,7 +545,7 @@ pub struct TransportStatus {
 
 /// How far along push actually is.
 ///
-/// Four states, because collapsing any two of them produces the one failure
+/// Five states, because collapsing any two of them produces the one failure
 /// push cannot afford: telling a user it works while nothing delivers it.
 /// "Enabled" and "working" are genuinely different things here — every step
 /// between them involves software we do not control.
@@ -554,6 +554,13 @@ pub struct TransportStatus {
 pub enum PushReadiness {
     /// The user has not switched it on.
     Off,
+    /// The account-wide `.m.rule.master` kill switch is on, so the homeserver
+    /// notifies for nothing at all — on any client, through any transport.
+    /// Every rung below this one can be green while not a single push is ever
+    /// sent, which is exactly the state this ladder exists to refuse to call
+    /// `Ready`. It is not a state Quark can reach on its own: another client
+    /// wrote the rule, so nothing local hints that it is there.
+    MutedAccount,
     /// Switched on, but nothing on this device can receive a push. On Android
     /// that means no distributor is installed — the most common reason push
     /// does nothing, and the only one the user can fix themselves.
@@ -591,6 +598,12 @@ pub struct PushStatus {
     /// Every transport installed on this device, so Settings can offer a choice
     /// rather than reporting a stall the user cannot act on.
     pub distributors: Vec<String>,
+    /// The account-wide `.m.rule.master` mute is on. Carried alongside
+    /// `readiness` rather than only folded into it, because the two answer
+    /// different questions: readiness says what push is doing *now* (and a
+    /// user who has push switched off still reads `Off`), while this says
+    /// whether a fix outside push is owed first.
+    pub account_muted: bool,
 }
 
 /// Derive the Settings snapshot from the user's preference and what we last
@@ -600,10 +613,14 @@ pub struct PushStatus {
 /// must not be what creates the file, or every desktop install grows a
 /// `push.json` from opening the Settings dialog on a platform that can never
 /// support push.
+/// `account_muted` is `.m.rule.master`'s `enabled` flag, read from the SDK's
+/// cached ruleset by `notifications::account_muted` — a rung the ladder has no
+/// local evidence for, since the rule is usually written by another client.
 pub fn status(
     config: &crate::notifications::NotificationConfig,
     state: Option<&PushState>,
     transport_status: &TransportStatus,
+    account_muted: bool,
 ) -> PushStatus {
     // A registration left over from before push was switched off is stale, not
     // live — reporting it as registered would tell the user they are receiving
@@ -621,8 +638,20 @@ pub fn status(
     // receiving pushes as having no distributor installed, and send the user
     // off to install one they already have. A live pusher is positive evidence
     // the whole chain worked; nothing a probe says afterwards is better news.
+    //
+    // The account-wide mute is asked about next, ahead of every rung that
+    // describes this device: `.m.rule.master` silences push evaluation for the
+    // whole account, so a registered pusher over a working transport still
+    // delivers nothing. Reporting the device rungs first would report a chain
+    // that is genuinely fine and leave the user debugging it — the failure
+    // that cost hours down a Synapse → Sygnal → APNs chain when the answer was
+    // one rule. It does not outrank `Off`, though: a user who has not opted
+    // into push is not owed an account-wide diagnosis in the push section, and
+    // Settings surfaces the mute separately for exactly that reason.
     let readiness = if !config.push_enabled {
         PushReadiness::Off
+    } else if account_muted {
+        PushReadiness::MutedAccount
     } else if live.is_some() {
         PushReadiness::Ready
     } else if !transport_status.available {
@@ -641,6 +670,7 @@ pub fn status(
         readiness,
         distributor: transport_status.distributor.clone(),
         distributors: transport_status.distributors.clone(),
+        account_muted,
     }
 }
 
@@ -883,15 +913,15 @@ mod status_tests {
 
     #[test]
     fn reports_the_persisted_preference() {
-        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default()).enabled);
-        assert!(!status(&config(false), Some(&empty_state()), &TransportStatus::default()).enabled);
+        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default(), false).enabled);
+        assert!(!status(&config(false), Some(&empty_state()), &TransportStatus::default(), false).enabled);
     }
 
     /// Push can be switched on before the transport hands over an address —
     /// Settings has to distinguish "on" from "actually receiving pushes".
     #[test]
     fn is_not_registered_until_a_pusher_exists() {
-        let snapshot = status(&config(true), Some(&empty_state()), &TransportStatus::default());
+        let snapshot = status(&config(true), Some(&empty_state()), &TransportStatus::default(), false);
         assert!(!snapshot.registered);
         assert_eq!(snapshot.gateway_url, None);
         assert_eq!(snapshot.app_id, None);
@@ -901,7 +931,7 @@ mod status_tests {
     /// answer without any state at all.
     #[test]
     fn reports_a_sane_status_with_nothing_persisted() {
-        let snapshot = status(&config(true), None, &TransportStatus::default());
+        let snapshot = status(&config(true), None, &TransportStatus::default(), false);
         assert!(snapshot.enabled);
         assert!(!snapshot.registered);
         assert_eq!(snapshot.app_id, None);
@@ -911,7 +941,7 @@ mod status_tests {
     /// discovered rather than the public fallback.
     #[test]
     fn surfaces_the_gateway_and_app_id_actually_registered() {
-        let snapshot = status(&config(true), Some(&registered_state()), &TransportStatus::default());
+        let snapshot = status(&config(true), Some(&registered_state()), &TransportStatus::default(), false);
         assert!(snapshot.registered);
         assert_eq!(
             snapshot.gateway_url.as_deref(),
@@ -924,7 +954,7 @@ mod status_tests {
     /// as "receiving pushes".
     #[test]
     fn a_disabled_pusher_does_not_read_as_registered() {
-        assert!(!status(&config(false), Some(&registered_state()), &TransportStatus::default()).registered);
+        assert!(!status(&config(false), Some(&registered_state()), &TransportStatus::default(), false).registered);
     }
 
     /// A pusher whose delete is still owed is gone as far as the user is
@@ -934,7 +964,7 @@ mod status_tests {
         let mut state = registered_state();
         mark_for_deletion(&mut state);
 
-        assert!(!status(&config(true), Some(&state), &TransportStatus::default()).registered);
+        assert!(!status(&config(true), Some(&state), &TransportStatus::default(), false).registered);
         assert_eq!(state.pending_delete.len(), 1);
     }
 
@@ -954,7 +984,7 @@ mod status_tests {
     #[test]
     fn android_has_a_transport_and_offers_push() {
         assert!(TRANSPORT_AVAILABLE);
-        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
+        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default(), false).supported);
     }
 
     /// iOS now has one too. `TransportStatus::default()` is what iOS always
@@ -965,7 +995,7 @@ mod status_tests {
     #[test]
     fn ios_has_a_transport_and_offers_push() {
         assert!(TRANSPORT_AVAILABLE);
-        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
+        assert!(status(&config(true), Some(&empty_state()), &TransportStatus::default(), false).supported);
     }
 
     #[test]
@@ -985,7 +1015,7 @@ mod status_tests {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[test]
     fn desktop_builds_do_not_offer_push() {
-        assert!(!status(&config(true), Some(&empty_state()), &TransportStatus::default()).supported);
+        assert!(!status(&config(true), Some(&empty_state()), &TransportStatus::default(), false).supported);
     }
 
     /// The UI has to explain what push is waiting on *before* a pusher exists,
@@ -993,7 +1023,7 @@ mod status_tests {
     /// an Android distributor sends them after a fix that doesn't exist.
     #[test]
     fn names_the_transport_even_with_nothing_registered() {
-        let snapshot = status(&config(true), Some(&empty_state()), &TransportStatus::default());
+        let snapshot = status(&config(true), Some(&empty_state()), &TransportStatus::default(), false);
         assert!(!snapshot.registered);
         assert_eq!(snapshot.transport, platform_transport());
     }
@@ -1285,6 +1315,7 @@ mod readiness_tests {
             &config(true),
             Some(&state(Some("https://ntfy.example.org/up1"), true)),
             &transport(None, false),
+            false,
         );
         assert_eq!(status.readiness, PushReadiness::Ready);
         assert!(status.registered);
@@ -1295,7 +1326,7 @@ mod readiness_tests {
     /// working while nothing is delivering it.
     #[test]
     fn push_is_off_when_the_user_has_not_enabled_it() {
-        let status = status(&config(false), Some(&state(None, false)), &transport(None, true));
+        let status = status(&config(false), Some(&state(None, false)), &transport(None, true), false);
         assert_eq!(status.readiness, PushReadiness::Off);
     }
 
@@ -1303,13 +1334,13 @@ mod readiness_tests {
     fn without_a_distributor_installed_there_is_nothing_to_push_through() {
         // The single most likely reason push does nothing on Android, and the
         // only one the user can actually fix — so it must be its own state.
-        let status = status(&config(true), Some(&state(None, false)), &transport(None, false));
+        let status = status(&config(true), Some(&state(None, false)), &transport(None, false), false);
         assert_eq!(status.readiness, PushReadiness::NoTransport);
     }
 
     #[test]
     fn a_chosen_distributor_with_no_endpoint_yet_is_still_waiting() {
-        let status = status(&config(true), Some(&state(None, false)), &transport(Some("ntfy"), true));
+        let status = status(&config(true), Some(&state(None, false)), &transport(Some("ntfy"), true), false);
         assert_eq!(status.readiness, PushReadiness::Waiting);
         assert_eq!(status.distributor.as_deref(), Some("ntfy"));
     }
@@ -1322,6 +1353,7 @@ mod readiness_tests {
             &config(true),
             Some(&state(Some("https://ntfy.example.org/up1"), false)),
             &transport(Some("ntfy"), true),
+            false,
         );
         assert_eq!(status.readiness, PushReadiness::Waiting);
     }
@@ -1332,6 +1364,7 @@ mod readiness_tests {
             &config(true),
             Some(&state(Some("https://ntfy.example.org/up1"), true)),
             &transport(Some("ntfy"), true),
+            false,
         );
         assert_eq!(status.readiness, PushReadiness::Ready);
         assert!(status.registered);
@@ -1349,6 +1382,7 @@ mod readiness_tests {
             &config(false),
             Some(&state(Some("https://ntfy.example.org/up1"), true)),
             &transport(Some("ntfy"), true),
+            false,
         );
         assert_eq!(status.readiness, PushReadiness::Off);
         assert!(!status.registered);
@@ -1356,8 +1390,64 @@ mod readiness_tests {
 
     #[test]
     fn a_fresh_install_with_push_on_is_waiting_not_ready() {
-        let status = status(&config(true), None, &transport(Some("ntfy"), true));
+        let status = status(&config(true), None, &transport(Some("ntfy"), true), false);
         assert_eq!(status.readiness, PushReadiness::Waiting);
+    }
+
+    /// The bug this state was added for: every rung green — pusher registered,
+    /// distributor chosen, gateway answering — while `.m.rule.master` silenced
+    /// push evaluation account-wide and the homeserver sent nothing at all.
+    /// Ready here is the exact lie the ladder exists to prevent.
+    #[test]
+    fn an_account_wide_mute_is_not_ready_however_complete_the_chain_is() {
+        let status = status(
+            &config(true),
+            Some(&state(Some("https://ntfy.example.org/up1"), true)),
+            &transport(Some("ntfy"), true),
+            true,
+        );
+        assert_eq!(status.readiness, PushReadiness::MutedAccount);
+        // Still literally true, and still worth reporting: the pusher exists
+        // and will start delivering the moment the rule comes off.
+        assert!(status.registered);
+        assert!(status.account_muted);
+    }
+
+    /// The mute is account-wide, so it outranks the rungs that describe this
+    /// device. Sending someone to install a distributor is sending them to fix
+    /// a chain that will still deliver nothing when they are done.
+    #[test]
+    fn an_account_wide_mute_outranks_the_device_level_stalls() {
+        for transport_status in [transport(None, false), transport(Some("ntfy"), true)] {
+            let status =
+                status(&config(true), Some(&state(None, false)), &transport_status, true);
+            assert_eq!(status.readiness, PushReadiness::MutedAccount);
+        }
+    }
+
+    /// But it does not outrank the user's own opt-out. Someone who never
+    /// switched push on is not owed a diagnosis of their account's push rules
+    /// in the push section — Settings surfaces the mute separately, because it
+    /// silences the warm desktop path just as thoroughly.
+    #[test]
+    fn the_users_own_opt_out_still_reads_as_off_under_an_account_mute() {
+        let status = status(&config(false), Some(&state(None, false)), &transport(None, true), true);
+        assert_eq!(status.readiness, PushReadiness::Off);
+        // The flag survives regardless, so the UI can still say so.
+        assert!(status.account_muted);
+    }
+
+    /// An unmuted account must not colour any of the existing rungs.
+    #[test]
+    fn an_unmuted_account_leaves_the_ladder_alone() {
+        let status = status(
+            &config(true),
+            Some(&state(Some("https://ntfy.example.org/up1"), true)),
+            &transport(Some("ntfy"), true),
+            false,
+        );
+        assert_eq!(status.readiness, PushReadiness::Ready);
+        assert!(!status.account_muted);
     }
 }
 

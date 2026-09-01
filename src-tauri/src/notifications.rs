@@ -143,6 +143,84 @@ pub fn mute_outcome(rule_result: Result<(), String>, muting: bool) -> MuteOutcom
     MuteOutcome { synced: false, warning: Some(warning) }
 }
 
+// ─── The account-wide mute (`.m.rule.master`) ────────────────────────────────
+//
+// One override rule matches every event and notifies on nothing, so the whole
+// account goes silent — every client, every transport, warm sync and push
+// alike. Quark never writes it; other clients expose it as "disable all
+// notifications" (FluffyChat) or a global toggle, and once set nothing local
+// hints it is there. That combination is what makes it worth a state of its
+// own: `PushReadiness` can otherwise report a fully green chain that delivers
+// nothing, and on desktop `notify::evaluate` silently drops every event because
+// the homeserver's own rule evaluation emptied `push_actions`.
+
+/// Is the account-wide kill switch on?
+///
+/// Note the inversion, which is the one thing easy to get backwards here:
+/// `.m.rule.master` **enabled** means notifications are **off**. A ruleset
+/// missing the rule entirely is not muted — servers that predate it, and
+/// `Ruleset::new()`, both lack it, and reading absence as silence would have
+/// Settings accuse an innocent account.
+pub fn master_rule_enabled(ruleset: &matrix_sdk::ruma::push::Ruleset) -> bool {
+    use matrix_sdk::ruma::push::{PredefinedOverrideRuleId, RuleKind};
+
+    ruleset
+        .get(RuleKind::Override, PredefinedOverrideRuleId::Master.as_str())
+        .is_some_and(|rule| rule.enabled())
+}
+
+/// Read the account-wide mute from the ruleset the SDK already holds.
+///
+/// Deliberately **not** a `GET /_matrix/client/v3/pushrules/`. `Account::push_rules`
+/// reads the `m.push_rules` global account-data event out of the local state
+/// store, which sync keeps current — so this costs nothing, works offline, and
+/// stays correct when another client flips the rule mid-session (the sync that
+/// carries the change also updates the store). Status is read every time the
+/// Settings dialog opens; a round-trip there would be a request per open for an
+/// answer we already have.
+///
+/// Never fails loudly: a status read must not be what breaks the Settings
+/// dialog, and "we could not tell" is reported as "not muted" so an unreadable
+/// ruleset cannot manufacture a warning about a rule that may not exist.
+pub async fn account_muted(client: &matrix_sdk::Client) -> bool {
+    // `push_rules()` falls back to `Ruleset::server_default(user_id)`, which
+    // *panics* without a logged-in user. Nothing calls this logged out today,
+    // but a status read is exactly the sort of call that grows a cold-start
+    // caller later.
+    if client.user_id().is_none() {
+        return false;
+    }
+    match client.account().push_rules().await {
+        Ok(ruleset) => master_rule_enabled(&ruleset),
+        Err(e) => {
+            tracing::warn!("Could not read the account push rules: {e}");
+            false
+        }
+    }
+}
+
+/// Turn the account-wide mute on or off.
+///
+/// This one *is* a homeserver round-trip (`PUT .../pushrules/global/override/
+/// .m.rule.master/enabled`), because it is a write: the point is to change the
+/// rule everywhere, not just here. Unlike `set_room_mute` there is no local
+/// cache to fall back on, so a failure is a real `Err` — nothing took effect,
+/// and reporting success would leave the account silent with the UI claiming it
+/// had been fixed.
+pub async fn set_account_muted(client: &matrix_sdk::Client, muted: bool) -> Result<(), String> {
+    use matrix_sdk::ruma::push::{PredefinedOverrideRuleId, RuleKind};
+
+    client
+        .notification_settings()
+        .await
+        .set_push_rule_enabled(RuleKind::Override, PredefinedOverrideRuleId::Master, muted)
+        .await
+        .map_err(|e| {
+            tracing::warn!("Failed to set the account-wide mute: {e}");
+            e.to_string()
+        })
+}
+
 /// Build the (title, body) strings for an OS notification.
 ///
 /// Respects `show_sender` and `show_body` privacy flags:
@@ -266,6 +344,58 @@ mod tests {
 
     fn default_config() -> NotificationConfig {
         NotificationConfig::default()
+    }
+
+    // ── the account-wide mute ─────────────────────────────────────────────────
+
+    fn server_ruleset() -> matrix_sdk::ruma::push::Ruleset {
+        matrix_sdk::ruma::push::Ruleset::server_default(matrix_sdk::ruma::user_id!(
+            "@alice:example.com"
+        ))
+    }
+
+    /// The default every account starts from. Reading this as muted would put
+    /// a warning in front of every user who has nothing wrong with them.
+    #[test]
+    fn a_default_ruleset_is_not_muted() {
+        assert!(!master_rule_enabled(&server_ruleset()));
+    }
+
+    /// The state issue #60 was opened for: another client wrote the master
+    /// rule as enabled, and nothing on this device could tell.
+    #[test]
+    fn an_enabled_master_rule_reads_as_muted() {
+        use matrix_sdk::ruma::push::{PredefinedOverrideRuleId, RuleKind};
+
+        let mut ruleset = server_ruleset();
+        ruleset
+            .set_enabled(RuleKind::Override, PredefinedOverrideRuleId::Master, true)
+            .unwrap();
+
+        assert!(master_rule_enabled(&ruleset));
+    }
+
+    /// The inversion is the easy thing to get backwards, so assert the round
+    /// trip rather than just the one direction: turning it back off has to
+    /// clear the warning, or the button offered in Settings would appear to do
+    /// nothing.
+    #[test]
+    fn disabling_the_master_rule_clears_the_mute() {
+        use matrix_sdk::ruma::push::{PredefinedOverrideRuleId, RuleKind};
+
+        let mut ruleset = server_ruleset();
+        ruleset.set_enabled(RuleKind::Override, PredefinedOverrideRuleId::Master, true).unwrap();
+        ruleset.set_enabled(RuleKind::Override, PredefinedOverrideRuleId::Master, false).unwrap();
+
+        assert!(!master_rule_enabled(&ruleset));
+    }
+
+    /// A ruleset with no master rule at all — an empty one, or a homeserver
+    /// that predates the rule. Absence is not silence: treating it as muted
+    /// would accuse an account that has never been touched.
+    #[test]
+    fn a_ruleset_without_the_master_rule_is_not_muted() {
+        assert!(!master_rule_enabled(&matrix_sdk::ruma::push::Ruleset::new()));
     }
 
     // ── push settings ─────────────────────────────────────────────────────────
