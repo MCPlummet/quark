@@ -118,7 +118,7 @@ targets:
         # across all four places it appears; a marketing version bump leaves it
         # alone. It stays an integer — dotted forms compare component-wise and
         # invite a mistake no error message explains.
-        CFBundleVersion: "1"
+        CFBundleVersion: "3"
         # Declares the app a legitimate target for INSendMessageIntent, which is
         # half of what lets the NSE render pushes as communication notifications
         # (sender avatar, native "sender in group" header). The entitlement
@@ -211,7 +211,7 @@ targets:
         # file — the marketing version on a version bump, the build number on
         # `version-bump build` — so these stay in lockstep with the app's above.
         CFBundleShortVersionString: 0.19.0
-        CFBundleVersion: "1"
+        CFBundleVersion: "3"
     entitlements:
       # The app group and nothing else. `aps-environment` belongs to the app,
       # and so does the communication-notifications grant: iOS validates the
