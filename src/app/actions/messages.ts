@@ -18,7 +18,6 @@ import {
   _ownSentEventIds,
   _memberAvatarMxc,
   _avatarDataUrl,
-  replaceUnicodeEmojiShortcodes,
   prepareOutgoingBody,
   _downloadInlineEmoji,
 } from "./context.js";
@@ -349,19 +348,23 @@ export async function editMessage(eventId: string, newBody: string): Promise<voi
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
-  // Convert Unicode emoji shortcodes (:smile: → 😄) in the edited text. Custom
-  // (MSC2545) emoji are left as :shortcodes: here: the optimistic update writes
-  // the body as plain text and the sync echo is suppressed, so a custom-emoji
-  // <img> would have no chance to resolve and would render broken.
-  const body = replaceUnicodeEmojiShortcodes(newBody);
+  // Same preparation the send path uses: Unicode shortcodes (:smile: → 😄) become
+  // glyphs in the plain body, custom (MSC2545) shortcodes and inline markdown
+  // become an HTML formatted body. Without the formatted body the edit would
+  // ship `m.new_content` as plain text and every viewer — including this one
+  // once the room is reloaded — would see a literal :shortcode:.
+  const { body, formattedBody } = prepareOutgoingBody(newBody);
 
   try {
-    const editEventId = await ipcEditMessage(roomId, eventId, body);
+    const editEventId = await ipcEditMessage(roomId, eventId, body, formattedBody);
     // Suppress the sync echo so it doesn't double-apply the update.
     _ownSentEventIds.add(editEventId);
     // Optimistically update the DOM immediately without waiting for sync.
     const { timeline } = getComponents();
-    timeline.updateMessageBody(eventId, body);
+    timeline.updateMessageBody(eventId, body, formattedBody);
+    // The re-rendered body may contain custom-emoji <img>s whose mxc:// src was
+    // stashed in data-mxc; download and swap them in, as the send path does.
+    if (formattedBody) _downloadInlineEmoji(timeline);
     showSuccess("Message edited");
   } catch (err) {
     showError(`Failed to edit: ${err instanceof Error ? err.message : String(err)}`);
