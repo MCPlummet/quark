@@ -43,6 +43,8 @@
 
 let
   manifest = lib.importJSON ../package.json;
+  # productName decides the .app bundle and its main binary name on darwin.
+  tauriConf = lib.importJSON ../src-tauri/tauri.conf.json;
 
   # Same workaround as flatpak/quark-launch.sh: WebKitGTK's DMABuf/GBM
   # renderer fails on the NVIDIA proprietary driver under Wayland, but
@@ -163,8 +165,20 @@ rustPlatform.buildRustPackage (finalAttrs: {
     ''
     + lib.optionalString stdenv.hostPlatform.isDarwin ''
       mkdir -p $out/bin
-      mainBinaries=("$out"/Applications/*.app/Contents/MacOS/*)
+      mainBinaries=("$out"/Applications/*.app/Contents/MacOS/${tauriConf.productName})
+      if [ ''${#mainBinaries[@]} -ne 1 ]; then
+        echo "expected exactly one .app main binary, found ''${#mainBinaries[@]}" >&2
+        exit 1
+      fi
       ln -s "''${mainBinaries[0]}" "$out/bin/quark"
+
+      # The Linux build declares the install read-only via the wrapper's
+      # QUARK_IMMUTABLE_INSTALL; there is no wrapper here, and a Finder or Dock
+      # launch would not see an env var anyway. nix-darwin also rsyncs the
+      # bundle out of the store into /Applications/Nix Apps, so updater.rs's
+      # /nix/store path check does not survive either. Mark the bundle instead
+      # — see IMMUTABLE_MARKER in src-tauri/src/updater.rs.
+      touch "$(dirname "''${mainBinaries[0]}")/.quark-immutable"
     '';
 
   # wrapGAppsHook3 wraps with makeBinaryWrapper, which can't run the

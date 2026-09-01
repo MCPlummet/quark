@@ -7,7 +7,8 @@
 # Jobs:
 #   • test   — HARD GATE. Installs the Linux/Tauri system deps, Rust, and pnpm,
 #              runs `pnpm build` (which also type-checks via tsc), then
-#              `pnpm test` (vitest) and `cargo test`. A failure blocks the merge.
+#              `pnpm test` (vitest) and `cargo test` (with rustc warnings denied).
+#              A failure blocks the merge.
 #   • clippy — ADVISORY. Runs `cargo clippy` but is marked continue-on-error so
 #              it never blocks a merge — the backend carries known clippy
 #              warnings and a deliberate hand-formatting style, so clippy can't
@@ -103,8 +104,25 @@ jobs:
       - name: Run frontend tests (vitest)
         run: pnpm test
 
-      - name: Run backend tests (cargo test)
+      # -D warnings promotes every rustc warning to a hard error, so the gate
+      # also asserts the backend compiles warning-free. #71 cleared the tree to
+      # zero after an `unused variable: new_content` had been masking a real
+      # edit-fallback defect for several releases; without a gate the next one
+      # goes unnoticed the same way. Cargo builds registry and git dependencies
+      # with --cap-lints allow, so this only ever fails on our own crates.
+      #
+      # It rides on `cargo test` rather than a separate `cargo check` step
+      # because RUSTFLAGS is part of the build fingerprint — a second step with
+      # different flags would recompile the whole dependency tree.
+      #
+      # Note this is stricter than the advisory clippy job, which stays
+      # non-blocking: clippy's suggestion set is far broader (28 open on this
+      # tree) and is style-heavy, whereas rustc's own warnings are few and
+      # nearly always signal.
+      - name: Run backend tests (cargo test, warnings denied)
         run: cargo test --manifest-path src-tauri/Cargo.toml
+        env:
+          RUSTFLAGS: "-Dwarnings"
 
   # ─── clippy (advisory — never blocks) ──────────────────────────────────────
   clippy:

@@ -37,18 +37,29 @@ pub struct UpdateProgress {
     pub content_length: Option<u64>,
 }
 
+/// Filename a packaging drops beside the binary to declare the install
+/// read-only. Needed wherever no environment variable reaches every launch
+/// path: a macOS `.app` opened from Finder or the Dock never goes through a
+/// shell wrapper, so the Nix darwin build marks the bundle itself.
+const IMMUTABLE_MARKER: &str = ".quark-immutable";
+
 /// True when the running binary lives in a read-only, store-managed install
 /// that the updater cannot write to — Flatpak, Snap, or the Nix store (#28).
 /// AppImage stays updatable: it is the one Linux packaging the Tauri updater
 /// supports. `QUARK_IMMUTABLE_INSTALL` force-enables this for packagings
-/// without an auto-detectable marker (the Nix wrapper sets it).
+/// without an auto-detectable marker (the Nix Linux wrapper sets it); the
+/// [`IMMUTABLE_MARKER`] file covers the ones a wrapper cannot reach.
 pub fn immutable_install() -> bool {
+    let exe = std::env::current_exe().ok();
     immutable_install_from(
         std::env::var_os("QUARK_IMMUTABLE_INSTALL").is_some(),
         std::env::var_os("FLATPAK_ID").is_some()
             || std::path::Path::new("/.flatpak-info").exists(),
         std::env::var_os("SNAP").is_some(),
-        std::env::current_exe().ok().as_deref(),
+        exe.as_deref(),
+        exe.as_deref()
+            .and_then(|p| p.parent())
+            .is_some_and(|dir| dir.join(IMMUTABLE_MARKER).exists()),
     )
 }
 
@@ -58,8 +69,9 @@ fn immutable_install_from(
     flatpak: bool,
     snap: bool,
     exe: Option<&std::path::Path>,
+    marker: bool,
 ) -> bool {
-    forced || flatpak || snap || exe.is_some_and(|p| p.starts_with("/nix/store"))
+    forced || flatpak || snap || marker || exe.is_some_and(|p| p.starts_with("/nix/store"))
 }
 
 #[cfg(test)]
@@ -75,20 +87,37 @@ mod tests {
     #[test]
     fn immutable_install_detects_store_managed_packagings() {
         use std::path::Path;
-        assert!(immutable_install_from(true, false, false, None), "env override");
-        assert!(immutable_install_from(false, true, false, None), "flatpak");
-        assert!(immutable_install_from(false, false, true, None), "snap");
+        assert!(immutable_install_from(true, false, false, None, false), "env override");
+        assert!(immutable_install_from(false, true, false, None, false), "flatpak");
+        assert!(immutable_install_from(false, false, true, None, false), "snap");
         assert!(
-            immutable_install_from(false, false, false, Some(Path::new("/nix/store/abc-quark-0.17.1/bin/quark"))),
+            immutable_install_from(false, false, false, Some(Path::new("/nix/store/abc-quark-0.17.1/bin/quark")), false),
             "nix store exe"
+        );
+    }
+
+    /// nix-darwin rsyncs the .app out of the store into /Applications/Nix Apps,
+    /// so neither the wrapper env var nor the /nix/store path check survives —
+    /// the marker file inside the bundle is the only signal left.
+    #[test]
+    fn immutable_install_detects_a_marked_bundle_outside_the_store() {
+        use std::path::Path;
+        let relocated = Path::new("/Applications/Nix Apps/Quark.app/Contents/MacOS/Quark");
+        assert!(
+            !immutable_install_from(false, false, false, Some(relocated), false),
+            "unmarked copy is updatable"
+        );
+        assert!(
+            immutable_install_from(false, false, false, Some(relocated), true),
+            "marked bundle is immutable"
         );
     }
 
     #[test]
     fn immutable_install_stays_off_for_normal_installs() {
         use std::path::Path;
-        assert!(!immutable_install_from(false, false, false, Some(Path::new("/usr/bin/quark"))));
-        assert!(!immutable_install_from(false, false, false, None));
+        assert!(!immutable_install_from(false, false, false, Some(Path::new("/usr/bin/quark")), false));
+        assert!(!immutable_install_from(false, false, false, None, false));
     }
 }
 

@@ -58,7 +58,7 @@ The default shell carries `adb` alone, which is enough to drive an already
 installed build (`adb logcat -s quark`). Don't enter both shells at once — two
 `adb` clients on PATH keep restarting each other's server.
 
-**CI** (GitHub Actions): `.github/workflows/ci.yml` gates PRs and `main` with `pnpm test` + `cargo test` (hard) and `clippy` (advisory); `release.yml` builds platform installers on `v*` tags.
+**CI** (GitHub Actions): `.github/workflows/ci.yml` gates PRs and `main` with `pnpm test` + `cargo test` (hard) and `clippy` (advisory); `release.yml` builds platform installers on `v*` tags. The `cargo test` step runs under `RUSTFLAGS=-Dwarnings`, so **a new rustc warning fails the build** — keep the backend warning-free rather than leaving warnings to accumulate (one was masking a real bug until #71). Clippy stays advisory; its set is broader and style-heavy.
 
 ## Architecture
 

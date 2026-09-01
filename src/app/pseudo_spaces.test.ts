@@ -29,7 +29,7 @@ describe("pseudo_spaces", () => {
     });
   });
 
-  describe("__dms__ filter — single-user DMs only", () => {
+  describe("__dms__ filter — whatever the user marked m.direct", () => {
     const filter = getPseudoSpace("__dms__")!.filter;
     const empty = new Set<string>();
 
@@ -41,8 +41,12 @@ describe("pseudo_spaces", () => {
       expect(filter(room({ is_direct: true, member_count: 1 }), empty)).toBe(true);
     });
 
-    it("excludes group DMs (is_direct but >2 members)", () => {
-      expect(filter(room({ is_direct: true, member_count: 5 }), empty)).toBe(false);
+    // Bridged DMs carry a relay bot beside the two humans, and :converttodm
+    // lets the user declare a room a DM outright. m.direct is the user's own
+    // statement, so member count does not get a veto.
+    it("includes direct rooms with more than two members", () => {
+      expect(filter(room({ is_direct: true, member_count: 5 }), empty)).toBe(true);
+      expect(filter(room({ is_direct: true, member_count: 42 }), empty)).toBe(true);
     });
 
     it("excludes regular rooms", () => {
@@ -50,18 +54,18 @@ describe("pseudo_spaces", () => {
     });
   });
 
-  describe("__groups__ filter — unspaced multi-user rooms", () => {
+  describe("__groups__ filter — unspaced rooms not marked m.direct", () => {
     const filter = getPseudoSpace("__groups__")!.filter;
 
     it("includes regular rooms not in any space", () => {
       expect(filter(room({ is_direct: false, member_count: 10 }), new Set())).toBe(true);
     });
 
-    it("includes group DMs not in any space", () => {
-      expect(filter(room({ is_direct: true, member_count: 5 }), new Set())).toBe(true);
+    it("excludes direct rooms regardless of size — they belong in the mailbox", () => {
+      expect(filter(room({ is_direct: true, member_count: 5 }), new Set())).toBe(false);
     });
 
-    it("excludes 1:1 DMs (they belong in the mailbox)", () => {
+    it("excludes 1:1 DMs", () => {
       expect(filter(room({ is_direct: true, member_count: 2 }), new Set())).toBe(false);
     });
 

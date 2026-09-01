@@ -20,7 +20,12 @@ export interface PseudoSpace {
   filter: (room: RoomInfo, spaceRoomIds: Set<string>) => boolean;
 }
 
-const isOneOnOneDm = (r: RoomInfo): boolean => r.is_direct && r.member_count <= 2;
+// `m.direct` is the user's own declaration of what a DM is, so it is the whole
+// test — no member-count corroboration. A bridged DM routinely carries a relay
+// or bot alongside the two humans, and `:converttodm` exists precisely to let
+// the user override the heuristic; gating on `member_count <= 2` silently threw
+// both cases back into Group Rooms.
+const isDm = (r: RoomInfo): boolean => r.is_direct;
 
 export const PSEUDO_SPACES: PseudoSpace[] = [
   {
@@ -35,14 +40,14 @@ export const PSEUDO_SPACES: PseudoSpace[] = [
     label: "Direct Messages",
     icon: "✉",
     position: "bottom",
-    filter: (r) => isOneOnOneDm(r),
+    filter: (r) => isDm(r),
   },
   {
     id: "__groups__",
     label: "Group Rooms",
     icon: "#",
     position: "bottom",
-    filter: (r, spaceRoomIds) => !spaceRoomIds.has(r.room_id) && !isOneOnOneDm(r),
+    filter: (r, spaceRoomIds) => !spaceRoomIds.has(r.room_id) && !isDm(r),
   },
 ];
 
