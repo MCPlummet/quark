@@ -101,8 +101,10 @@
           ];
         };
 
-        # Tauri v2 Linux system dependencies
-        tauriDeps = with pkgs; [
+        # Tauri v2 Linux system dependencies. On darwin the webview is the
+        # system WKWebView and the frameworks come from the stdenv Apple SDK,
+        # so none of this applies.
+        tauriDeps = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (with pkgs; [
           webkitgtk_4_1
           gtk3
           glib
@@ -130,7 +132,7 @@
 
           # xdg-utils — lets the app open files in the system default player
           xdg-utils
-        ];
+        ]);
 
         # Minimal appimagetool replacement using nixpkgs mksquashfs.
         # The bundled appimagetool inside linuxdeploy-plugin-appimage.AppImage uses
@@ -163,6 +165,7 @@
           nodePackages.pnpm
           cargo-tauri
           pkg-config
+        ] ++ lib.optionals stdenv.hostPlatform.isLinux [
           squashfsTools  # provides mksquashfs for fakeAppimagetool
 
           # Flatpak packaging
@@ -261,8 +264,9 @@
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs buildInputs;
 
-          # Required so pkg-config and dynamic linker can find system libs
-          shellHook = ''
+          # Required so pkg-config and dynamic linker can find system libs.
+          # All of it is WebKitGTK/AppImage plumbing, so Linux-only.
+          shellHook = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
             export PKG_CONFIG_PATH="${pkgs.lib.makeSearchPathOutput "dev" "lib/pkgconfig" buildInputs}:$PKG_CONFIG_PATH"
             export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath buildInputs}:$LD_LIBRARY_PATH"
             export GIO_MODULE_DIR="${pkgs.glib-networking}/lib/gio/modules"

@@ -3,13 +3,21 @@
 # `nix build .#quark`.
 #
 # Build shape: rustPlatform.buildRustPackage + nixpkgs' cargo-tauri.hook. The
-# hook runs `cargo tauri build --bundles deb` (deb is the default bundle type
-# on Linux) and its install phase copies the deb staging tree —
-# usr/bin/quark, the generated .desktop file and hicolor icons — into $out.
-# The frontend is built by tauri's beforeBuildCommand (`pnpm build`) against
-# an offline pnpm store prepared by pnpmConfigHook.
+# frontend is built by tauri's beforeBuildCommand (`pnpm build`) against an
+# offline pnpm store prepared by pnpmConfigHook. Per platform:
+#
+# - Linux: the hook runs `cargo tauri build --bundles deb` and its install
+#   phase copies the deb staging tree — usr/bin/quark, the generated .desktop
+#   file and hicolor icons — into $out. The webview is WebKitGTK, so the GTK/
+#   GStreamer dependency set below and the wrapper env plumbing are Linux-only.
+# - Darwin: the hook runs `cargo tauri build --bundles app` and installs the
+#   .app into $out/Applications (nix-darwin links that into /Applications/Nix
+#   Apps for systemPackages). The webview is the system WKWebView and the
+#   keyring backend is Security.framework — both come from the stdenv Apple
+#   SDK, so no GTK-side inputs and no wrapper are needed.
 {
   lib,
+  stdenv,
   rustPlatform,
   cargo-tauri,
   fetchPnpmDeps,
@@ -95,19 +103,23 @@ rustPlatform.buildRustPackage (finalAttrs: {
     pnpm_10
     pnpmConfigHook
     pkg-config
+    jq
+    moreutils
+  ]
+  ++ lib.optionals stdenv.hostPlatform.isLinux [
     wrapGAppsHook3
     makeWrapper # shell wrapper (wrapProgramShell) — supports --run, see postFixup
     desktop-file-utils
-    jq
-    moreutils
   ];
 
   buildInputs = [
+    openssl # native-tls for matrix-sdk/reqwest
+  ]
+  ++ lib.optionals stdenv.hostPlatform.isLinux ([
     gtk3
     webkitgtk_4_1
     glib-networking # TLS GIO module for the webview
     gsettings-desktop-schemas # GTK file chooser aborts without schemas
-    openssl # native-tls for matrix-sdk/reqwest
     dbus # keyring's Secret Service backend
     librsvg
   ]
@@ -120,7 +132,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     gst-plugins-good
     gst-plugins-bad
     gst-libav
-  ]);
+  ]));
 
   # A Nix-installed app can't self-update (read-only store), and updater
   # artifacts would want the signing key at bundle time.
@@ -135,17 +147,25 @@ rustPlatform.buildRustPackage (finalAttrs: {
   # session some backend tests expect.
   doCheck = false;
 
-  # Tauri's generated .desktop entry is bare — align it with the curated one
-  # shipped for flatpak (flatpak/tel.quark.app.desktop).
-  postInstall = ''
-    desktop-file-edit \
-      --set-comment="A terminal-aesthetic Matrix client" \
-      --set-key=Categories --set-value="Network;InstantMessaging;Chat;" \
-      --set-key=Keywords --set-value="matrix;chat;messaging;im;" \
-      --set-key=StartupWMClass --set-value=quark \
-      --set-key=SingleMainWindow --set-value=true \
-      $out/share/applications/*.desktop
-  '';
+  # Linux: Tauri's generated .desktop entry is bare — align it with the curated
+  # one shipped for flatpak (flatpak/tel.quark.app.desktop).
+  # Darwin: the hook installed the .app; add a bin/ symlink so `quark` works
+  # from a shell and meta.mainProgram resolves.
+  postInstall =
+    lib.optionalString stdenv.hostPlatform.isLinux ''
+      desktop-file-edit \
+        --set-comment="A terminal-aesthetic Matrix client" \
+        --set-key=Categories --set-value="Network;InstantMessaging;Chat;" \
+        --set-key=Keywords --set-value="matrix;chat;messaging;im;" \
+        --set-key=StartupWMClass --set-value=quark \
+        --set-key=SingleMainWindow --set-value=true \
+        $out/share/applications/*.desktop
+    ''
+    + lib.optionalString stdenv.hostPlatform.isDarwin ''
+      mkdir -p $out/bin
+      mainBinaries=("$out"/Applications/*.app/Contents/MacOS/*)
+      ln -s "''${mainBinaries[0]}" "$out/bin/quark"
+    '';
 
   # wrapGAppsHook3 wraps with makeBinaryWrapper, which can't run the
   # conditional NVIDIA snippet (`--run` is shell-wrapper-only). So let the
@@ -154,7 +174,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
   # ourselves with the shell wrapper.
   dontWrapGApps = true;
 
-  postFixup = ''
+  postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
     wrapProgramShell $out/bin/quark \
       "''${gappsWrapperArgs[@]}" \
       --prefix PATH : ${lib.makeBinPath [ xdg-utils ]} \
@@ -167,6 +187,6 @@ rustPlatform.buildRustPackage (finalAttrs: {
     homepage = manifest.homepage;
     license = lib.licenses.agpl3Plus;
     mainProgram = "quark";
-    platforms = lib.platforms.linux;
+    platforms = lib.platforms.linux ++ lib.platforms.darwin;
   };
 })
