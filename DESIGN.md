@@ -806,10 +806,12 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
 ### Core Protocol
 - [x] Login: OIDC (MAS) + legacy password + SSO
 - [x] Sync: classic v3 `/sync` — long-poll against a server-side filter, resumed from a persisted `since` cursor
-- [ ] Sliding Sync (MSC4186) — **not implemented.** matrix-sdk 0.9 does not compile in its sliding-sync support, and
-      nothing in the backend uses it. Adopting it is gated on the matrix-sdk 0.9 → 0.18 upgrade tracked in #57, which
-      drops the `experimental-sliding-sync` feature gate and defaults `ClientBuilder` to the native (proxy-less)
-      version.
+- [ ] Sliding Sync (MSC4186) — **not implemented.** matrix-sdk 0.9 does not compile in its sliding-sync support
+      (`experimental-sliding-sync` is not in its default features) and nothing in the backend uses it. Adopting it
+      needs the matrix-sdk 0.9 → 0.18 upgrade first, where sliding sync is no longer feature-gated at all. No issue
+      tracks that upgrade yet; #57 (iOS push Phase 4) only records that it should be *decided* before the NSE work
+      builds on the current API. The upgrade does not itself require sliding sync — 0.18 still exposes `sync`,
+      `sync_once` and `sync_with_callback`, so the v3 loop survives it and the two are separable pieces of work.
 - [x] E2EE: Megolm via Vodozemac, cross-signing, key backup (SSSS)
 - [x] Device verification: SAS emoji, QR code
 - [x] Room creation, join, leave, invite, kick, ban
