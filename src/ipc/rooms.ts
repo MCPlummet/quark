@@ -47,6 +47,18 @@ export async function createRoom(options: CreateRoomOptions): Promise<string> {
 }
 
 /**
+ * Resolve the existing DM room shared with `userId`, or null if there is none.
+ *
+ * Reads the account's `m.direct` mapping in the Rust store (no HTTP), which is
+ * authoritative — unlike scanning the cached room list, it still finds a DM
+ * whose other party has left, one that is only an invite so far, and one that
+ * hasn't reached the frontend cache yet. Matches the Rust `find_dm_room`.
+ */
+export async function findDmRoom(userId: string): Promise<string | null> {
+  return invoke<string | null>("find_dm_room", { userId });
+}
+
+/**
  * Get the member list for a room.
  * Matches the Rust `get_room_members` command.
  */

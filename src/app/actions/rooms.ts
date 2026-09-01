@@ -6,6 +6,7 @@ import { isMobile, closeDrawer } from "../mobile.js";
 
 import {
   getRoomMembers,
+  findDmRoom,
   getRoomReceipts,
   getTimeline,
   getSpaceChildren,
@@ -992,13 +993,15 @@ function clearActiveRoom(): void {
 
 /**
  * Navigate to an existing DM room with `userId`, or create one if none exists.
+ *
+ * The "does a DM already exist" question is answered by the backend from the
+ * account's `m.direct` mapping, not by scanning the cached room list. The old
+ * scan (#68) walked `roomListCache` for `is_direct` rooms under a member-count
+ * bound and fetched each one's members over IPC to confirm, which missed a DM
+ * whose other party had left, one that was still an unaccepted invite, and one
+ * that simply hadn't reached the cache yet — and every miss silently created a
+ * *second* DM room with the same person.
  */
-/** Upper bound on how large an `is_direct` room may be before the DM scan
- *  below stops fetching its member list. Not a DM test — a bridged DM carries
- *  a relay bot or two beyond the humans, so the bound has to clear that while
- *  still refusing to page in a 500-member room the user marked direct. */
-const DM_SCAN_MEMBER_LIMIT = 8;
-
 export async function openOrCreateDm(userId: string): Promise<void> {
   // Fast path: use cached room ID from a previously visited DM
   const cachedRoomId = _dmRoomByUser.get(userId);
@@ -1007,23 +1010,29 @@ export async function openOrCreateDm(userId: string): Promise<void> {
     return;
   }
 
-  // Scan the cached room list for a known DM with this user
-  const rooms = AppState.get("roomListCache");
-  const ownUserId = AppState.get("ownUserId");
-  for (const room of rooms) {
-    if (!room.is_direct || room.member_count > DM_SCAN_MEMBER_LIMIT) continue;
-    // Fetch members to verify — the count above is only a cost bound on this
-    // fetch, not a definition of DM-ness (see isDm in pseudo_spaces.ts).
-    try {
-      const members = await getRoomMembers(room.room_id);
-      if (members.some((m) => m.user_id === userId) &&
-          members.some((m) => m.user_id === ownUserId)) {
-        _dmRoomByUser.set(userId, room.room_id);
-        _dmUserByRoom.set(room.room_id, userId);
-        await selectRoom(room.room_id);
-        return;
-      }
-    } catch { /* skip on error */ }
+  // Authoritative lookup against m.direct (a local store read in Rust). Scoped
+  // tightly to the lookup itself: a failure here must not fall through to
+  // createRoom (that is the duplicate-room bug), but nor should a later
+  // navigation error be reported as if the lookup had failed.
+  let existing: string | null;
+  try {
+    existing = await findDmRoom(userId);
+  } catch (err) {
+    showError(`Failed to look up DM: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  if (existing) {
+    _dmRoomByUser.set(userId, existing);
+    _dmUserByRoom.set(existing, userId);
+    // A DM that m.direct knows about but the room list doesn't (an unaccepted
+    // invite, or one sync hasn't surfaced yet) needs a refresh first, or
+    // selectRoom opens a room with no cache entry behind it.
+    if (!AppState.get("roomListCache").some((r) => r.room_id === existing)) {
+      await refreshRooms();
+    }
+    await selectRoom(existing);
+    return;
   }
 
   // No existing DM found — create one
