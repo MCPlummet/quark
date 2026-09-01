@@ -17,7 +17,7 @@ import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js
 import packageJson from "../../../package.json";
 
 import { getComponents } from "./context.js";
-import { joinRoom, leaveRoomWithFeedback, openOrCreateDm } from "./rooms.js";
+import { joinRoom, leaveRoomWithFeedback, openOrCreateDm, convertRoomDirectness } from "./rooms.js";
 import { logout } from "./session.js";
 import { loadTheme } from "./theme.js";
 import { openProfileDialog } from "./profile.js";
@@ -140,6 +140,19 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
     case "spacesettings":
     case "space-settings": {
       void openSpaceSettings();
+      break;
+    }
+
+    case "converttodm":
+    case "converttoroom":
+    case "convert-to-dm":
+    case "convert-to-room": {
+      const roomId = parsed.args[0] ?? AppState.get("currentRoomId");
+      if (!roomId) {
+        showError("No room selected");
+        return;
+      }
+      await convertRoomDirectness(roomId, parsed.name.replace(/-/g, "").endsWith("dm"));
       break;
     }
 

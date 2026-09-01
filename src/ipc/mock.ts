@@ -631,6 +631,12 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "set_room_join_rule":
     case "set_room_history_visibility":
       return null;
+    case "set_room_direct": {
+      // Mutate the fixture so a later get_rooms reflects the conversion.
+      const room = MOCK_ROOMS.find((r) => r.room_id === args?.roomId);
+      if (room) room.is_direct = Boolean(args?.isDirect);
+      return null;
+    }
 
     // ─── Debug Viewer ─────────────────────────────────────────────────────
     case "get_room_state_events": {

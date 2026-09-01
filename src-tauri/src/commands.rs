@@ -633,6 +633,16 @@ pub async fn set_room_join_rule(
 }
 
 #[tauri::command]
+pub async fn set_room_direct(
+    state: State<'_, MatrixState>,
+    room_id: String,
+    is_direct: bool,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::rooms::set_room_direct(&client, &room_id, is_direct).await
+}
+
+#[tauri::command]
 pub async fn set_room_history_visibility(
     state: State<'_, MatrixState>,
     room_id: String,

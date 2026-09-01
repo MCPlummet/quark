@@ -20,6 +20,7 @@ import {
   openRoomTimeline,
   loadOlderTimeline,
   downloadMedia,
+  setRoomDirect as ipcSetRoomDirect,
 } from "../../ipc/index.js";
 
 import { getPseudoSpace, sortByRecency } from "../pseudo_spaces.js";
@@ -1115,6 +1116,45 @@ export function applyLocalRoomMeta(
       // args are omitted.
       getComponents().roomHeader.setRoom(entry.name ?? roomId, entry.topic ?? undefined);
     }
+  }
+}
+
+/**
+ * Convert a room to a DM (or back to a regular room) by flipping its `m.direct`
+ * account-data entry.
+ *
+ * The homeserver echoes the new account data back through sync, but the local
+ * store keeps the old value until then — so the cached flag is flipped here and
+ * the sidebar re-sorted, which is what moves the room between the DMs and Group
+ * Rooms pseudo-spaces right away. `refreshRooms()` reconciles on the next sync.
+ *
+ * Returns the flag that was applied so callers can update their own UI.
+ */
+export async function setRoomDirectness(roomId: string, isDirect: boolean): Promise<boolean> {
+  await ipcSetRoomDirect(roomId, isDirect);
+
+  AppState.set(
+    "roomListCache",
+    AppState.get("roomListCache").map((r) =>
+      r.room_id === roomId ? { ...r, is_direct: isDirect } : r,
+    ),
+  );
+  resortPseudoSpaceView();
+
+  return isDirect;
+}
+
+/**
+ * `:converttodm` / `:converttoroom` — convert the current (or named) room and
+ * report the outcome as a toast.
+ */
+export async function convertRoomDirectness(roomId: string, isDirect: boolean): Promise<void> {
+  const verb = isDirect ? "DM" : "room";
+  try {
+    await setRoomDirectness(roomId, isDirect);
+    showSuccess(`Converted to ${verb}`);
+  } catch (err) {
+    showError(`Failed to convert to ${verb}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
