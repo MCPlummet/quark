@@ -11,6 +11,8 @@ import {
   consumeOwnSentEvent,
   resolveDisplayName,
   timelineEventToMessage,
+  timelineEventToThreadMessage,
+  _messageMediaCache,
   _emojiImageCache,
   _shortcodeToMxc,
   _memberDisplayName,
@@ -56,6 +58,7 @@ function makeRoom(over: Partial<RoomInfo> = {}): RoomInfo {
     is_direct: false,
     is_encrypted: false,
     member_count: 2,
+    muted: false,
     ...over,
   };
 }
@@ -176,6 +179,20 @@ describe("roomInfoToEntry", () => {
     _dmUserByRoom.set("!dm2:x", "@dave:x"); // no cached presence
     const offline = roomInfoToEntry(makeRoom({ room_id: "!dm2:x", is_direct: true }));
     expect(offline.presence).toBe("offline");
+  });
+
+  // The mute flag drives the room-list indicator and the unread-highlight
+  // suppression, and it comes from the backend's push-rule lookup — it used to
+  // be hardcoded false, so nothing muted ever showed as muted.
+  it("carries the room's muted flag through to the entry", () => {
+    expect(roomInfoToEntry(makeRoom({ muted: true })).muted).toBe(true);
+    expect(roomInfoToEntry(makeRoom({ muted: false })).muted).toBe(false);
+  });
+
+  it("treats a payload without the muted field as unmuted", () => {
+    const room = makeRoom();
+    delete (room as Partial<RoomInfo>).muted;
+    expect(roomInfoToEntry(room).muted).toBe(false);
   });
 });
 
@@ -353,5 +370,60 @@ describe("timelineEventToMessage", () => {
     expect(timelineEventToMessage(e).reactions).toEqual([
       { key: "👍", count: 2, own: true, imageUrl: undefined },
     ]);
+  });
+});
+
+// ── Thread message mapper (#42) ────────────────────────────────────────────
+//
+// Thread replies used to lose everything but their plain body: the Rust
+// `get_thread_timeline` hand-rolled a converter that hardcoded `m.text` and
+// dropped media, and the frontend mapper had no `caption` field. #41 fixed the
+// main-timeline live-tail path; this covers the thread path.
+describe("timelineEventToThreadMessage", () => {
+  beforeEach(() => {
+    AppState.set("ownUserId", "@me:x");
+  });
+
+  it("carries the MSC2530 caption through", () => {
+    const msg = timelineEventToThreadMessage(
+      makeEvent({
+        msg_type: "m.image",
+        body: "look at this cat",
+        caption: "look at this cat",
+        media_url: "mxc://x/cat",
+      }),
+    );
+    expect(msg.type).toBe("image");
+    expect(msg.caption).toBe("look at this cat");
+  });
+
+  it("leaves caption undefined for an uncaptioned image", () => {
+    const msg = timelineEventToThreadMessage(
+      makeEvent({ msg_type: "m.image", body: "cat.png", media_url: "mxc://x/cat" }),
+    );
+    expect(msg.type).toBe("image");
+    expect(msg.caption).toBeUndefined();
+  });
+
+  it("prefers a cached blob URL over the raw mxc:// so a revisit paints instantly", () => {
+    _messageMediaCache.set("mxc://x/cached-cat", "blob:cached", 10);
+    const msg = timelineEventToThreadMessage(
+      makeEvent({ msg_type: "m.image", body: "cat.png", media_url: "mxc://x/cached-cat" }),
+    );
+    expect(msg.mediaUrl).toBe("blob:cached");
+  });
+
+  it("passes the raw mxc:// through when nothing is cached yet", () => {
+    const msg = timelineEventToThreadMessage(
+      makeEvent({ msg_type: "m.image", body: "cat.png", media_url: "mxc://x/uncached-cat" }),
+    );
+    expect(msg.mediaUrl).toBe("mxc://x/uncached-cat");
+  });
+
+  it("marks own messages and keeps plain text captionless", () => {
+    const msg = timelineEventToThreadMessage(makeEvent({ sender: "@me:x", body: "hi" }));
+    expect(msg.isOwn).toBe(true);
+    expect(msg.type).toBe("text");
+    expect(msg.caption).toBeUndefined();
   });
 });

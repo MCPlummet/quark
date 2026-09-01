@@ -4373,14 +4373,27 @@ body.quark-mobile .profile-edit-dialog__panel {
 
 /* ── Message links ───────────────────────────────────────────────────────── */
 
-.message__link {
+/* `.message__link` is applied by app/links.ts to every anchor we render —
+ * bare URLs found by the linkifier AND anchors coming from a message's
+ * formatted_body (markdown `[text](url)`), which used to arrive unstyled
+ * (#51). The element selectors below are a belt-and-braces fallback so an
+ * anchor rendered by some future path still reads as a link. */
+.message__link,
+.message__body a[href],
+.thread-inline__message-body a[href],
+.thread-view__root-body a[href],
+.thread-view__message-body a[href] {
   color: var(--accent-link, var(--accent-secondary, #00aaff));
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
 }
 
-.message__link:hover {
+.message__link:hover,
+.message__body a[href]:hover,
+.thread-inline__message-body a[href]:hover,
+.thread-view__root-body a[href]:hover,
+.thread-view__message-body a[href]:hover {
   opacity: 0.8;
 }
 
@@ -7371,4 +7384,86 @@ body.quark-mobile .message__link {
 .update-banner__install:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ── Attachment progress (#63) ───────────────────────────────────────────────
+ * Inline rows in the compose region, shown while a picked/pasted file is read,
+ * uploaded and sent. Styled to sit with .paste-preview (same left inset, same
+ * tinted strip) so the composer keeps one visual language, and rendered as
+ * monospace text — spinner, [████░░░░] bar, byte counts — rather than a
+ * graphical widget. */
+
+.attach-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 12px 6px 52px;
+  background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+  border-top: var(--border-width) solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.attach-progress__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: calc(var(--font-size) - 1px);
+  color: color-mix(in srgb, var(--fg) 70%, transparent);
+  white-space: nowrap;
+}
+
+.attach-progress__icon {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.attach-progress__name {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* The filename yields first: the status readout is the part that changes. */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.attach-progress__status {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.attach-progress__row--success .attach-progress__icon,
+.attach-progress__row--success .attach-progress__status {
+  color: var(--accent-success);
+}
+
+.attach-progress__row--error .attach-progress__icon,
+.attach-progress__row--error .attach-progress__status {
+  color: var(--accent-error);
+  white-space: normal;
+}
+
+.attach-progress__cancel {
+  background: none;
+  border: none;
+  color: color-mix(in srgb, var(--fg) 55%, transparent);
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  line-height: 1;
+  /* Touch target: the row itself is only ~18px tall. */
+  padding: 4px 8px;
+  margin: -4px -4px -4px 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.attach-progress__cancel:hover {
+  color: var(--accent-error);
+}
+
+/* The compose region owns its own drag handling on mobile (#33) — nothing in
+ * this strip scrolls, so no drag over it may reach the visual-viewport pan. */
+body.quark-mobile .attach-progress {
+  touch-action: none;
 }

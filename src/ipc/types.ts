@@ -32,6 +32,13 @@ export interface RoomInfo {
   member_count: number;
   /** Timestamp (ms since Unix epoch) of the most recent event. Used for recency sorting. */
   last_activity_ts?: number | null;
+  /**
+   * Whether the account's push rules mute this room. Server-side state, so it
+   * reflects mutes set from other clients — this, not the local `mute_rooms`
+   * list, is what the UI should display. Optional so a stale cached payload
+   * from an older backend still parses.
+   */
+  muted?: boolean;
 }
 
 /** Options for creating a room — matches matrix::rooms::CreateRoomOptions */
