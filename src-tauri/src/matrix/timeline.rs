@@ -822,7 +822,7 @@ fn convert_sync_encrypted(
     }
 }
 
-fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> TimelineEvent {
+pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> TimelineEvent {
     let timestamp = ev.origin_server_ts.get().into();
     let sender = ev.sender.to_string();
     let event_id = ev.event_id.to_string();
