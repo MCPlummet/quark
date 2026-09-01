@@ -17,6 +17,7 @@
 		89FE51C8EC746384976C6E50 /* QuarkNSE.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BE8186A178C2E24CC76D850C /* QuarkNSE.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B8AC53A8A4EA633BC1B0B43C /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6C767C0B388C3A6F800A865E /* UserNotifications.framework */; };
 		BB449AF5E95AD615E98A1B49 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63A48257C35B25AF383EF1D5 /* NotificationService.swift */; };
+		D1A69E7A6733A60AF95BEBF1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DD616153C0B902343AC7D8C8 /* PrivacyInfo.xcprivacy */; };
 		DD4FD50E09A58765A7F4B08F /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 9543BF492D7C6FCC7F54E40A /* main.mm */; };
 		DEC05FF889A653F06DC453B6 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E2BFC48F008E8ED8BE348317 /* CoreGraphics.framework */; };
 		E03E8A1C7A9622621CC96252 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8E7F544E5A12B91EABD17494 /* Metal.framework */; };
@@ -102,6 +103,7 @@
 		CC6960C4FE8303D734EB7A9C /* timeline.rs */ = {isa = PBXFileReference; path = timeline.rs; sourceTree = "<group>"; };
 		CD6C42F38C5035118DE3DEAB /* media_cache.rs */ = {isa = PBXFileReference; path = media_cache.rs; sourceTree = "<group>"; };
 		D44DC7156AE2715E61044134 /* theme.rs */ = {isa = PBXFileReference; path = theme.rs; sourceTree = "<group>"; };
+		DD616153C0B902343AC7D8C8 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E25F3783B73DC867A83EBB4A /* stickers.rs */ = {isa = PBXFileReference; path = stickers.rs; sourceTree = "<group>"; };
 		E2BFC48F008E8ED8BE348317 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		EF178041CBE41AA17EEFF283 /* quarkrc.rs */ = {isa = PBXFileReference; path = quarkrc.rs; sourceTree = "<group>"; };
@@ -298,6 +300,7 @@
 			isa = PBXGroup;
 			children = (
 				88CCC89E6787EC25C8CD31F9 /* Info.plist */,
+				DD616153C0B902343AC7D8C8 /* PrivacyInfo.xcprivacy */,
 				9861659CD6479E789A8BAA73 /* quark_iOS.entitlements */,
 			);
 			path = quark_iOS;
@@ -333,7 +336,7 @@
 			path = gif;
 			sourceTree = "<group>";
 		};
-		"TEMP_8797CA6A-9DBF-4B1B-B292-78FF893E733C" /* x86_64 */ = {
+		"TEMP_98FCB7D6-0A98-40D9-8CC8-F1A302ADE906" /* x86_64 */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -427,6 +430,7 @@
 			files = (
 				1664DB2CD1CE8E27D37A96C9 /* Assets.xcassets in Resources */,
 				456B175B40B887297AA6A2E3 /* LaunchScreen.storyboard in Resources */,
+				D1A69E7A6733A60AF95BEBF1 /* PrivacyInfo.xcprivacy in Resources */,
 				5D50CE864BA2CDF537FF78CD /* assets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -510,9 +514,9 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = tel.quark.app;
-				PRODUCT_NAME = "Quark";
+				PRODUCT_NAME = Quark;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				VALID_ARCHS = arm64;
 			};
 			name = release;
@@ -592,7 +596,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = tel.quark.app.nse;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = debug;
 		};
@@ -621,9 +625,9 @@
 				"LIBRARY_SEARCH_PATHS[arch=arm64]" = "$(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				"LIBRARY_SEARCH_PATHS[arch=x86_64]" = "$(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME) $(TOOLCHAIN_DIR)/usr/lib/swift-5.0/$(PLATFORM_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = tel.quark.app;
-				PRODUCT_NAME = "Quark";
+				PRODUCT_NAME = Quark;
 				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 				VALID_ARCHS = arm64;
 			};
 			name = debug;
@@ -647,7 +651,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = tel.quark.app.nse;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = release;
 		};
