@@ -53,7 +53,13 @@ beforeEach(() => {
   document.body.appendChild(roomList.getElement());
   setComponents({ roomList } as unknown as AppComponents);
   AppState.patch({
-    roomListCache: [makeRoom("!dm:x", { is_direct: true }), makeRoom("!group:x")],
+    // A real group room, not a 2-member one: `member_count: 2` here would make
+    // "!group:x" indistinguishable from a DM to the placement filter and hide
+    // the very case :converttodm exists for.
+    roomListCache: [
+      makeRoom("!dm:x", { is_direct: true }),
+      makeRoom("!group:x", { member_count: 12 }),
+    ],
     currentSpaceId: "__dms__",
     spaceRoomIds: [],
     homeViewActive: false,

@@ -38,6 +38,8 @@ const KNOWN_COMMANDS: string[] = [
   "spacesettings",
   "converttodm",
   "converttoroom",
+  "convert-to-dm",
+  "convert-to-room",
   "debug",
   "version",
   "update",

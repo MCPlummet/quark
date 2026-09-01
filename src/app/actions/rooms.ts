@@ -993,6 +993,12 @@ function clearActiveRoom(): void {
 /**
  * Navigate to an existing DM room with `userId`, or create one if none exists.
  */
+/** Upper bound on how large an `is_direct` room may be before the DM scan
+ *  below stops fetching its member list. Not a DM test — a bridged DM carries
+ *  a relay bot or two beyond the humans, so the bound has to clear that while
+ *  still refusing to page in a 500-member room the user marked direct. */
+const DM_SCAN_MEMBER_LIMIT = 8;
+
 export async function openOrCreateDm(userId: string): Promise<void> {
   // Fast path: use cached room ID from a previously visited DM
   const cachedRoomId = _dmRoomByUser.get(userId);
@@ -1005,8 +1011,9 @@ export async function openOrCreateDm(userId: string): Promise<void> {
   const rooms = AppState.get("roomListCache");
   const ownUserId = AppState.get("ownUserId");
   for (const room of rooms) {
-    if (!room.is_direct || room.member_count !== 2) continue;
-    // Fetch members to verify — only for small DM rooms
+    if (!room.is_direct || room.member_count > DM_SCAN_MEMBER_LIMIT) continue;
+    // Fetch members to verify — the count above is only a cost bound on this
+    // fetch, not a definition of DM-ness (see isDm in pseudo_spaces.ts).
     try {
       const members = await getRoomMembers(room.room_id);
       if (members.some((m) => m.user_id === userId) &&

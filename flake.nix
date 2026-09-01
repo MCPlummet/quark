@@ -165,20 +165,21 @@
           nodePackages.pnpm
           cargo-tauri
           pkg-config
-        ] ++ lib.optionals stdenv.hostPlatform.isLinux [
-          squashfsTools  # provides mksquashfs for fakeAppimagetool
-
-          # Flatpak packaging
-          flatpak-builder
-          appstream  # provides appstreamcli for metainfo validation
 
           # adb / fastboot, for driving a connected phone: `adb logcat -s quark`,
           # `adb install`, and the PushDebugReceiver broadcast that exercises the
           # push cold path. Small, and useful without the whole SDK — building an
           # APK needs `nix develop .#android` instead, which brings its own adb
           # from platform-tools (don't enter both shells, or the two adb clients
-          # will fight over the server).
+          # will fight over the server). platforms.unix, so it stays out of the
+          # Linux-only block below — a macOS contributor needs adb too.
           android-tools
+        ] ++ lib.optionals stdenv.hostPlatform.isLinux [
+          squashfsTools  # provides mksquashfs for fakeAppimagetool
+
+          # Flatpak packaging
+          flatpak-builder
+          appstream  # provides appstreamcli for metainfo validation
         ];
 
         buildInputs = tauriDeps;

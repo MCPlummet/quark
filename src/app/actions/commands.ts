@@ -143,16 +143,28 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
+    // Direction is a literal per case rather than derived from the command
+    // name: an alias like :converttodirectmessage would fall the wrong side of
+    // any endsWith("dm") test and silently convert the opposite way.
     case "converttodm":
+    case "convert-to-dm": {
+      const roomId = parsed.args[0] ?? AppState.get("currentRoomId");
+      if (!roomId) {
+        showError("No room selected");
+        return;
+      }
+      await convertRoomDirectness(roomId, true);
+      break;
+    }
+
     case "converttoroom":
-    case "convert-to-dm":
     case "convert-to-room": {
       const roomId = parsed.args[0] ?? AppState.get("currentRoomId");
       if (!roomId) {
         showError("No room selected");
         return;
       }
-      await convertRoomDirectness(roomId, parsed.name.replace(/-/g, "").endsWith("dm"));
+      await convertRoomDirectness(roomId, false);
       break;
     }
 

@@ -696,13 +696,22 @@ Scoped maps (`tmap`, `rmap`, `pmap`) take precedence over global `nmap` when tha
 :search [query]              Search messages in the current room
 :source <path>               Reload quarkrc or source a file
 :roomsettings                Open room settings (name/topic/access/permissions)
-:converttodm                 Mark the current room as a DM (m.direct)
+:converttodm                 Mark the current room as a DM (m.direct); any size
 :converttoroom               Unmark the current room as a DM
+:convert-to-dm               Alias for :converttodm
+:convert-to-room             Alias for :converttoroom
 :spacesettings               Open space settings (name/topic/children)
 :debug                       Open debug viewer for current room state events
 :debug $eventId              Open debug viewer for a specific event
 :version                     Show the current app version
 ```
+
+A room's `m.direct` flag is the sole test for whether it appears under the
+**Direct Messages** pseudo-space rather than **Group Rooms** — member count does
+not override it. Bridged DMs routinely carry a relay bot beside the two humans,
+and `:converttodm` exists so the user can declare a room a DM regardless of who
+else is in it. The flag is account data, so it needs no power level and works in
+rooms you do not moderate.
 
 ### Settings Dialog
 
@@ -1044,7 +1053,7 @@ The `[updater]` section (above) holds the prefs; both are also editable live:
 
 In-app update covers the **AppImage** (Linux x86_64), the **`.app`** (macOS Apple-Silicon / `aarch64` only), and the **NSIS `-setup.exe`** (Windows x86_64). `.deb`/`.rpm`/Flatpak/Android builds update through their own package channels, not this updater. macOS auto-update is best-effort until Apple notarization is configured (Gatekeeper may still warn on a freshly downloaded build).
 
-**Immutable installs** (Flatpak, Snap, Nix) are detected at runtime — `FLATPAK_ID`/`/.flatpak-info`, `SNAP`, an executable under `/nix/store`, or the `QUARK_IMMUTABLE_INSTALL=1` env var (set by the Nix wrapper) — and the updater disables itself: `update_check` reports "no update", `:update` explains that updates come from the system package manager, and Settings → About swaps the Updates controls for the same hint (the `update_supported` IPC command carries the flag to the frontend).
+**Immutable installs** (Flatpak, Snap, Nix) are detected at runtime — `FLATPAK_ID`/`/.flatpak-info`, `SNAP`, an executable under `/nix/store`, the `QUARK_IMMUTABLE_INSTALL=1` env var (set by the Nix wrapper on Linux), or a `.quark-immutable` marker file beside the executable — and the updater disables itself: `update_check` reports "no update", `:update` explains that updates come from the system package manager, and Settings → About swaps the Updates controls for the same hint (the `update_supported` IPC command carries the flag to the frontend). The marker file exists because neither of the other Nix signals survives on macOS: there is no shell wrapper to set the env var for a Finder or Dock launch, and nix-darwin rsyncs the `.app` out of the store into `/Applications/Nix Apps`, so the `/nix/store` path check no longer matches. The darwin build drops the marker into `Quark.app/Contents/MacOS/`.
 
 ### F-Droid repository (Android)
 

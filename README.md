@@ -61,14 +61,14 @@ A [Nix flake](flake.nix) is provided — `direnv allow` (or `nix develop`) drops
 
 ### Install with Nix
 
-The flake also builds Quark as a package (Linux):
+The flake also builds Quark as a package (Linux and macOS):
 
 ```bash
 nix run github:mcplummet/quark    # try it without installing
 nix profile install github:mcplummet/quark
 ```
 
-Or consume it declaratively from a NixOS / home-manager flake:
+Or consume it declaratively from a NixOS, nix-darwin or home-manager flake:
 
 ```nix
 {
@@ -84,6 +84,11 @@ Or consume it declaratively from a NixOS / home-manager flake:
   nixpkgs.overlays = [ inputs.quark.overlays.default ];
 }
 ```
+
+On macOS the build produces a `Quark.app`; nix-darwin copies it into
+`/Applications/Nix Apps`, and `$out/bin/quark` launches the same binary from a
+shell. Both are read-only, so the in-app updater turns itself off — upgrade with
+`nix flake update` instead.
 
 ### Run it
 
