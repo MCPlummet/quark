@@ -17,7 +17,16 @@ import {
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { isTauri } from "../../ipc/mock.js";
 
-import { showProgressToast, showError, showSuccess } from "../../ui/NotificationToast.js";
+// Imported straight from ipc/media.js rather than ipc/index.js: the barrel
+// re-exports by name and isn't ours to extend here.
+import {
+  listenAttachmentProgress,
+  newUploadId,
+  type AttachmentProgressPayload,
+} from "../../ipc/media.js";
+import type { AttachmentProgressHandle } from "../../ui/AttachmentProgress.js";
+
+import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
 import { getComponents } from "./context.js";
 import { openQuickReactPicker } from "./reactions.js";
@@ -44,12 +53,151 @@ function platformOnce(): Promise<string> {
   return _platform;
 }
 
-/** Encode a blob's bytes as base64 for the media IPC commands. */
-async function blobToBase64(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
+/** Thrown by the reader when the user cancels an attachment before it is sent. */
+class AttachmentCancelled extends Error {
+  constructor() {
+    super("Attachment cancelled");
+    this.name = "AttachmentCancelled";
+  }
+}
+
+/** A base64 read in flight, with the handle needed to abort it. */
+interface BlobRead {
+  promise: Promise<string>;
+  cancel(): void;
+}
+
+/**
+ * Encode a blob's bytes as base64 for the media IPC commands, reporting read
+ * progress and staying cancellable.
+ *
+ * `FileReader` first, deliberately: it encodes natively instead of in a
+ * per-byte JS loop, which for a multi-megabyte pick on an Android WebView is
+ * the difference between a composer that can paint a progress row and one
+ * frozen solid — the dead air issue #63 is actually about. The manual path
+ * remains as a fallback, chunked so it neither blocks in one long tick nor
+ * blows the argument limit of `String.fromCharCode`.
+ */
+function readBlobAsBase64(blob: Blob, onProgress?: (loaded: number, total: number) => void): BlobRead {
+  if (typeof FileReader !== "undefined") {
+    const reader = new FileReader();
+    let cancelled = false;
+    const promise = new Promise<string>((resolve, reject) => {
+      reader.onload = () => {
+        if (cancelled) return;
+        const result = String(reader.result ?? "");
+        const comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = () => {
+        if (cancelled) return;
+        reject(reader.error ?? new Error("Failed to read file"));
+      };
+      reader.onabort = () => reject(new AttachmentCancelled());
+      reader.onprogress = (e) => {
+        if (e.lengthComputable) onProgress?.(e.loaded, e.total);
+      };
+      reader.readAsDataURL(blob);
+    });
+    return {
+      promise,
+      cancel: () => {
+        cancelled = true;
+        try {
+          reader.abort();
+        } catch {
+          /* already settled */
+        }
+      },
+    };
+  }
+
+  let cancelled = false;
+  const promise = (async () => {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const CHUNK = 8192;
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i += CHUNK) {
+      if (cancelled) throw new AttachmentCancelled();
+      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+      onProgress?.(Math.min(i + CHUNK, bytes.byteLength), bytes.byteLength);
+      // Yield so the composer can repaint between chunks.
+      if (i + CHUNK < bytes.byteLength) await new Promise((r) => setTimeout(r, 0));
+    }
+    return btoa(binary);
+  })();
+  return { promise, cancel: () => { cancelled = true; } };
+}
+
+/**
+ * Run one attachment end to end behind an inline composer progress row (#63):
+ * read → upload → send, then a tick or a readable error. Returns true when the
+ * event was sent.
+ *
+ * Every phase the user experiences as one wait is covered, because on a phone
+ * any of them can dominate: reading the picked file out of the WebView,
+ * handing the bytes across IPC, the upload itself (real byte progress, from
+ * matrix-sdk's send-progress observable), and finally sending the event.
+ */
+async function runAttachment(
+  blob: Blob,
+  filename: string,
+  send: (dataBase64: string, uploadId: string) => Promise<unknown>,
+): Promise<boolean> {
+  const total = blob.size;
+
+  let read: BlobRead | null = null;
+  let row: AttachmentProgressHandle | null = null;
+  try {
+    row = getComponents().input.startAttachmentProgress(filename, () => read?.cancel());
+  } catch {
+    // A composer that can't show the row (not mounted yet) must not block the
+    // send; the send still reports through the toast fallback below.
+    row = null;
+  }
+
+  const uploadId = newUploadId();
+  let unlisten: (() => void) | null = null;
+
+  try {
+    row?.setPhase("reading");
+    read = readBlobAsBase64(blob, (loaded) => row?.setProgress(loaded, total));
+    const dataBase64 = await read.promise;
+
+    // Past this point nothing local can call the upload back, so the cancel
+    // affordance goes away rather than lying about what it would do.
+    row?.setCancellable(false);
+    row?.setPhase("uploading");
+    row?.setIndeterminate();
+
+    unlisten = await listenAttachmentProgress((p: AttachmentProgressPayload) => {
+      if (p.upload_id !== uploadId) return;
+      if (p.total > 0 && p.transferred >= p.total) {
+        // Bytes are all out; what is left is the homeserver's reply and the
+        // timeline event, neither of which has a byte count.
+        row?.setPhase("sending");
+        return;
+      }
+      row?.setProgress(p.transferred, p.total);
+    });
+
+    await send(dataBase64, uploadId);
+    row?.succeed();
+    return true;
+  } catch (err) {
+    if (err instanceof AttachmentCancelled) {
+      row?.dismiss();
+      return false;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    // The row is the error surface: it clears the spinner and stays put with
+    // the reason, so a failed attachment can never look like one still going.
+    if (row) row.fail(message);
+    else showError(`Failed to attach ${filename}: ${message}`);
+    return false;
+  } finally {
+    unlisten?.();
+  }
 }
 
 /**
@@ -78,20 +226,13 @@ export async function sendPendingImage(
     if (cap && input.getValue().trim().length === 0) input.setValue(cap);
   };
 
-  try {
-    const dataBase64 = await blobToBase64(blob);
+  const sent = await runAttachment(blob, name, (dataBase64, uploadId) =>
+    sendPastedImage(roomId, dataBase64, blob.type, name, cap, replyToEventId, uploadId),
+  );
 
-    const progress = showProgressToast("Uploading image…");
-    try {
-      await sendPastedImage(roomId, dataBase64, blob.type, name, cap, replyToEventId);
-      progress.succeed("Image sent");
-      if (replyToEventId) cancelReply();
-    } catch (err) {
-      progress.fail(`Failed to send image: ${err instanceof Error ? err.message : String(err)}`);
-      restore();
-    }
-  } catch (err) {
-    showError(`Failed to send image: ${err instanceof Error ? err.message : String(err)}`);
+  if (sent) {
+    if (replyToEventId) cancelReply();
+  } else {
     restore();
   }
 }
@@ -105,38 +246,35 @@ export async function handleFilePick(file: File): Promise<void> {
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
-  try {
-    const dataBase64 = await blobToBase64(file);
+  const isVideo = file.type.startsWith("video/");
 
-    const isVideo = file.type.startsWith("video/");
-    const noun = isVideo ? "video" : "file";
-    const progress = showProgressToast(`Uploading ${file.name}…`);
-    try {
-      if (isVideo) {
-        // Send as m.video (not m.file) so it renders as a playable embed. Probe
-        // dimensions/duration up front so the timeline can reserve the right
-        // aspect ratio before the video is downloaded.
-        const meta = await probeVideoMetadata(file);
-        await sendVideo(
-          roomId,
-          dataBase64,
-          file.type,
-          file.name,
-          meta?.width,
-          meta?.height,
-          meta?.durationMs,
-          file.size,
-        );
-      } else {
-        await sendFile(roomId, dataBase64, file.type || "application/octet-stream", file.name, file.size);
-      }
-      progress.succeed(`${noun.charAt(0).toUpperCase()}${noun.slice(1)} sent`);
-    } catch (err) {
-      progress.fail(`Failed to send ${noun}: ${err instanceof Error ? err.message : String(err)}`);
+  await runAttachment(file, file.name, async (dataBase64, uploadId) => {
+    if (isVideo) {
+      // Send as m.video (not m.file) so it renders as a playable embed. Probe
+      // dimensions/duration up front so the timeline can reserve the right
+      // aspect ratio before the video is downloaded.
+      const meta = await probeVideoMetadata(file);
+      return sendVideo(
+        roomId,
+        dataBase64,
+        file.type,
+        file.name,
+        meta?.width,
+        meta?.height,
+        meta?.durationMs,
+        file.size,
+        uploadId,
+      );
     }
-  } catch (err) {
-    showError(`Failed to send file: ${err instanceof Error ? err.message : String(err)}`);
-  }
+    return sendFile(
+      roomId,
+      dataBase64,
+      file.type || "application/octet-stream",
+      file.name,
+      file.size,
+      uploadId,
+    );
+  });
 }
 
 /**
