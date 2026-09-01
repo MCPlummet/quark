@@ -385,6 +385,13 @@ follows something the user just did — the launch-time ask arrived in front of
 the login screen and pre-empted it. A token without permission is harmless: it
 arrives, and nothing is displayed until they agree.
 
+`is_permission_granted` answers `null` for two unrelated states — never asked
+(`PermissionState::Prompt`) and unanswerable (desktop, mock mode, a build
+without the plugin) — so `app/notifications.ts` keeps them apart as `prompt` and
+`unavailable`. Reading the first as the second means a fresh install is never
+prompted and, because push follows the permission on iOS, never registers a
+pusher either.
+
 The homeserver POSTs to our own Sygnal at `push.quark.tel`, which signs for APNs;
 `apns.rs` is the transport module, and unlike `unifiedpush.rs` it discovers
 nothing. The OS is the transport and the only gateway that can sign for

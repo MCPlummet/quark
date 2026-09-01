@@ -95,34 +95,68 @@ export async function initNotifications(): Promise<void> {
 }
 
 /**
+ * Where the OS notification permission stands.
+ *
+ * `prompt` and `unavailable` are deliberately distinct. The plugin answers
+ * `null` to `is_permission_granted` for two unrelated situations — a permission
+ * that has never been requested (iOS undetermined, Android 13+ before the first
+ * ask) and one it could not ask about at all — and collapsing them is what
+ * stopped fresh installs being prompted at all: an unasked permission looked
+ * like an unanswerable one and returned before reaching the request.
+ */
+type NotificationPermission = "granted" | "denied" | "prompt" | "unavailable";
+
+/** Read the current permission state, without ever surfacing a dialog. */
+async function _permissionState(): Promise<NotificationPermission> {
+  if (!isTauri()) return "unavailable";
+  try {
+    // Option<bool> on the Rust side: null is PermissionState::Prompt — asked of
+    // nobody yet, which is exactly the new install this has to prompt.
+    const granted = await invoke<boolean | null>(
+      "plugin:notification|is_permission_granted"
+    );
+    if (granted === null || granted === undefined) return "prompt";
+    return granted ? "granted" : "denied";
+  } catch (err) {
+    // Plugin may be missing in some build configurations (e.g. minimal mobile
+    // smoke builds). Log and keep going — in-app toasts still function.
+    console.warn("Notification permission check failed:", err);
+    return "unavailable";
+  }
+}
+
+/**
  * Is the OS notification permission granted? `null` when the question could not
- * be asked at all — desktop, mock mode, or a build without the plugin.
+ * be asked at all — desktop, mock mode, a build without the plugin, or a
+ * permission nobody has been asked for yet.
  *
  * The three-way answer matters because push follows it: an unknown must leave
  * push exactly as it is, while a plain `false` is a decision to act on.
  */
 async function _permissionGranted(): Promise<boolean | null> {
-  if (!isTauri()) return null;
-  try {
-    return await invoke<boolean>("plugin:notification|is_permission_granted");
-  } catch (err) {
-    // Plugin may be missing in some build configurations (e.g. minimal mobile
-    // smoke builds). Log and keep going — in-app toasts still function.
-    console.warn("Notification permission check failed:", err);
-    return null;
-  }
+  const state = await _permissionState();
+  if (state === "granted") return true;
+  if (state === "denied") return false;
+  return null;
 }
 
 /**
  * Check + request the OS notification permission, reporting where it landed.
  *
  * On Android 13+ and iOS this surfaces the system dialog the first time it
- * runs. Called after login rather than at launch: the prompt then follows
- * something the user just did, instead of meeting them on the login screen.
+ * runs — iOS reaches `requestAuthorization` through the plugin, which is the
+ * only place it is called from. Called after login rather than at launch: the
+ * prompt then follows something the user just did, instead of meeting them on
+ * the login screen.
  */
 async function _ensureNotificationPermission(): Promise<boolean | null> {
-  const granted = await _permissionGranted();
-  if (granted !== false) return granted;
+  const state = await _permissionState();
+  if (state === "granted") return true;
+  // Nothing to ask, and nobody to ask it of.
+  if (state === "unavailable") return null;
+  // `denied` asks again as well: the OS answers a re-request for a declined
+  // permission itself, without a dialog, so this costs nothing and picks up a
+  // grant the user made in system settings since.
   try {
     // request_permission returns "granted" | "denied" | "default".
     const result = await invoke<string>("plugin:notification|request_permission");
