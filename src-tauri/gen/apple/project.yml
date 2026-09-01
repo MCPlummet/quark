@@ -109,7 +109,7 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.18.1
+        CFBundleShortVersionString: 0.19.0
         # The BUILD NUMBER, not the marketing version. App Store Connect
         # requires this to strictly increase on every upload sharing one
         # CFBundleShortVersionString, so it cannot track the version: a
@@ -210,7 +210,7 @@ targets:
         # version-bump script rewrites both keys across every target in this
         # file — the marketing version on a version bump, the build number on
         # `version-bump build` — so these stay in lockstep with the app's above.
-        CFBundleShortVersionString: 0.18.1
+        CFBundleShortVersionString: 0.19.0
         CFBundleVersion: "1"
     entitlements:
       # The app group and nothing else. `aps-environment` belongs to the app,

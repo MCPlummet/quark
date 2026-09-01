@@ -1,6 +1,6 @@
 [package]
 name = "quark"
-version = "0.18.1"
+version = "0.19.0"
 edition = "2021"
 description = "A CLI-styled Matrix client"
 authors = ["mcplummet"]
