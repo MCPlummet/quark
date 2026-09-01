@@ -43,7 +43,7 @@ describe("aboutTab — save splices only updater into the real config", () => {
   vi.mock("../../../ipc/app_config.js", () => ({
     DEFAULT_APP_CONFIG: {
       general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: false, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true, send_key_behavior: "auto" },
-      sync: { sliding_sync: true, timeline_limit: 50 },
+      sync: { timeline_limit: 50 },
       media: { auto_load_images: true, inline_video: true, max_image_width: 600, max_image_height: 400, sticker_max_size: 256, cache_size_mb: 500 },
       gif: { provider: "klipy", api_key: "", rating: "pg", cache_results: true },
       emoji: { shortcode_autocomplete: true, autocomplete_min_chars: 2 },
@@ -53,7 +53,7 @@ describe("aboutTab — save splices only updater into the real config", () => {
     },
     getAppConfig: vi.fn(async () => ({
       general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true, send_key_behavior: "auto" },
-      sync: { sliding_sync: true, timeline_limit: 50 },
+      sync: { timeline_limit: 50 },
       media: { auto_load_images: true, inline_video: true, max_image_width: 600, max_image_height: 400, sticker_max_size: 256, cache_size_mb: 500 },
       gif: { provider: "klipy", api_key: "", rating: "pg", cache_results: true },
       emoji: { shortcode_autocomplete: true, autocomplete_min_chars: 2 },

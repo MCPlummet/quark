@@ -38,7 +38,7 @@ Quark is a [Matrix](https://matrix.org) chat client that looks like a terminal b
 ├─────────────────────────────────────┤
 │         Rust Backend (Core)         │
 │   matrix-sdk  ·  Vodozemac E2EE     │
-│   Sliding Sync  ·  Media cache      │
+│   Matrix /sync  ·  Media cache      │
 └─────────────────────────────────────┘
 ```
 

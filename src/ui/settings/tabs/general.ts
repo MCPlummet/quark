@@ -87,12 +87,6 @@ export const generalTab: SettingsTab = {
 
     section.appendChild(controls.sectionTitle("Sync"));
 
-    section.appendChild(controls.checkbox(
-      "Use Sliding Sync (MSC4186)",
-      draft.sync.sliding_sync,
-      (v) => { draft = { ...draft, sync: { ...draft.sync, sliding_sync: v } }; },
-    ));
-
     section.appendChild(controls.numberRow(
       "Timeline messages to load",
       draft.sync.timeline_limit,

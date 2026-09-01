@@ -57,11 +57,12 @@ pub struct GeneralConfig {
     pub send_key_behavior: SendKeyBehavior,
 }
 
+/// Note: no `deny_unknown_fields` here (nor on any config struct) — that is
+/// what lets keys retired from the app, such as the never-wired
+/// `sliding_sync` (issue #75), be dropped without a config written by an older
+/// build failing to parse and silently resetting every other setting.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SyncConfig {
-    /// Use Sliding Sync (MSC4186) when available.
-    #[serde(default = "bool_true")]
-    pub sliding_sync: bool,
     /// Number of messages to load initially per room.
     #[serde(default = "default_timeline_limit")]
     pub timeline_limit: u32,
@@ -244,7 +245,7 @@ impl Default for GeneralConfig {
 
 impl Default for SyncConfig {
     fn default() -> Self {
-        Self { sliding_sync: true, timeline_limit: default_timeline_limit() }
+        Self { timeline_limit: default_timeline_limit() }
     }
 }
 
@@ -450,5 +451,36 @@ mod gif_provider_tests {
     fn round_trips_lowercase() {
         let toml = toml::Value::try_from(GifProvider::Klipy).unwrap();
         assert_eq!(toml.as_str(), Some("klipy"));
+    }
+}
+
+#[cfg(test)]
+mod sync_config_tests {
+    use super::*;
+
+    #[test]
+    fn retired_sliding_sync_key_is_ignored_without_losing_the_config() {
+        // `[sync] sliding_sync` was written by every build up to 0.18 but read
+        // by nothing (issue #75). Configs still carrying it must load in full —
+        // a hard parse failure would reset every unrelated setting too, since
+        // `load_app_config_from` falls back to defaults on any parse error.
+        let cfg: AppConfig = toml::from_str(
+            "[general]\ntheme = \"gruvbox\"\n\n[sync]\nsliding_sync = false\ntimeline_limit = 200\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.sync.timeline_limit, 200);
+        assert_eq!(cfg.general.theme, "gruvbox");
+    }
+
+    #[test]
+    fn saved_config_no_longer_writes_sliding_sync() {
+        let toml = toml::to_string_pretty(&AppConfig::default()).unwrap();
+        assert!(!toml.contains("sliding_sync"), "got: {toml}");
+    }
+
+    #[test]
+    fn missing_sync_section_falls_back_to_default() {
+        let cfg: AppConfig = toml::from_str("[general]\ntheme = \"phosphor\"\n").unwrap();
+        assert_eq!(cfg.sync.timeline_limit, default_timeline_limit());
     }
 }

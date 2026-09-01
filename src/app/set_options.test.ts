@@ -29,14 +29,14 @@ describe("applySetOptions", () => {
   it("routes each option to the correct config section", () => {
     const out = applySetOptions(baseConfig(), [
       { name: "vim_mode", value: false }, // general
-      { name: "sliding_sync", value: false }, // sync
+      { name: "timeline_limit", value: 42 }, // sync
       { name: "cache_size_mb", value: 123 }, // media
       { name: "gif_provider", value: "giphy" }, // gif
       { name: "shortcode_autocomplete", value: false }, // emoji
       { name: "home_dm_limit", value: 7 }, // home
     ]);
     expect(out.general.vim_mode).toBe(false);
-    expect(out.sync.sliding_sync).toBe(false);
+    expect(out.sync.timeline_limit).toBe(42);
     expect(out.media.cache_size_mb).toBe(123);
     expect(out.gif.provider).toBe("giphy");
     expect(out.emoji.shortcode_autocomplete).toBe(false);
@@ -68,6 +68,17 @@ describe("applySetOptions", () => {
     const out = applySetOptions(cfg, [{ name: "no_such_option", value: 1 }]);
     expect(warn).toHaveBeenCalledOnce();
     expect(warn.mock.calls[0][0]).toContain("no_such_option");
+    expect(out).toEqual(cfg);
+  });
+
+  it("skips the retired sliding_sync option", () => {
+    // The Sliding Sync toggle was never wired to anything (issue #75) and was
+    // removed; a quarkrc still carrying `set sliding_sync=false` must warn and
+    // no-op rather than resurrect a dead field.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cfg = baseConfig();
+    const out = applySetOptions(cfg, [{ name: "sliding_sync", value: false }]);
+    expect(warn).toHaveBeenCalledOnce();
     expect(out).toEqual(cfg);
   });
 
