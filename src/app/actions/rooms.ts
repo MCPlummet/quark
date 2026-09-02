@@ -1293,9 +1293,11 @@ export async function refreshRooms(): Promise<void> {
     }));
     spaceStrip.setSpaces(spaceItems);
 
-    // Resolve space avatar mxc:// URLs in the background
+    // Resolve space avatar mxc:// URLs in the background. The strip keeps the
+    // ones it has already resolved across re-renders, so a refresh only fetches
+    // what is genuinely new rather than re-downloading every avatar per sync.
     for (const s of topLevelSpaces) {
-      if (s.avatar_url?.startsWith("mxc://")) {
+      if (s.avatar_url?.startsWith("mxc://") && !spaceStrip.hasResolvedAvatar(s.room_id)) {
         const mxcUrl = s.avatar_url;
         const roomId = s.room_id;
         // Use full media (not thumbnail) so animated GIF/WEBP space avatars are preserved.
@@ -1304,7 +1306,12 @@ export async function refreshRooms(): Promise<void> {
             const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
             spaceStrip.updateSpaceAvatar(roomId, dataUrl);
           })
-          .catch(() => { /* non-critical */ });
+          .catch((err) => {
+            // Non-fatal — the space keeps its letter fallback. Logged rather
+            // than swallowed: a silent catch here hid a space-icon bug for
+            // several releases.
+            console.warn(`Failed to resolve avatar for space ${roomId}:`, err);
+          });
       }
     }
 

@@ -14,6 +14,22 @@ export interface SpaceItem {
 export class SpaceStrip {
   private _el: HTMLElement;
   private _items: SpaceItem[] = [];
+  /**
+   * Resolved space avatars, keyed by space ID.
+   *
+   * `_render()` rebuilds the strip from scratch (`innerHTML = ""`), and it has
+   * more than one trigger: `setSpaces()` on every room refresh, and
+   * `setOwnProfile()` when the user's own avatar download lands. Those two race
+   * at startup, so without somewhere durable to keep them, an already-resolved
+   * space icon is destroyed by whichever render happens to come last — and
+   * nothing re-fetches it, because the download loop lives in `refreshRooms()`,
+   * which on a warm session restore runs exactly once. Icons then stay letters
+   * for the rest of the session.
+   *
+   * Keeping the resolved data URLs here makes `_render()` idempotent: every
+   * render path restores what has already been downloaded.
+   */
+  private _resolvedAvatars = new Map<string, string>();
   private _activeId: string | null = null;
   private _onSelect: ((id: string) => void) | null = null;
   private _onSettings: (() => void) | null = null;
@@ -63,7 +79,18 @@ export class SpaceStrip {
 
   setSpaces(items: SpaceItem[]): void {
     this._items = items;
+    // Drop avatars for spaces that are gone, so the map can't grow without
+    // bound across a long-running session.
+    const live = new Set(items.map((i) => i.id));
+    for (const id of this._resolvedAvatars.keys()) {
+      if (!live.has(id)) this._resolvedAvatars.delete(id);
+    }
     this._render();
+  }
+
+  /** Space IDs whose avatar has already been downloaded and cached. */
+  hasResolvedAvatar(spaceId: string): boolean {
+    return this._resolvedAvatars.has(spaceId);
   }
 
   setActiveSpace(id: string): void {
@@ -110,22 +137,44 @@ export class SpaceStrip {
 
   /** Swap in a resolved avatar data URL for a space item. */
   updateSpaceAvatar(spaceId: string, dataUrl: string): void {
+    // Remembered first, and unconditionally: the element may not be in the DOM
+    // at this instant (a render can land between the download starting and
+    // finishing), and the next `_render()` has to be able to restore it.
+    this._resolvedAvatars.set(spaceId, dataUrl);
+
     const item = this._el.querySelector<HTMLElement>(`[data-space-id="${CSS.escape(spaceId)}"]`);
     if (!item) return;
-    // Replace existing img or text with the resolved image
     const existing = item.querySelector("img");
     if (existing) {
       existing.src = dataUrl;
       if (isAnimatedUrl(dataUrl)) existing.dataset.gif = "1";
     } else {
+      const label = item.textContent ?? "";
       item.textContent = "";
-      const img = document.createElement("img");
-	  img.className = "space-strip__icon";
-      img.src = dataUrl;
-      img.alt = "";
-      if (isAnimatedUrl(dataUrl)) img.dataset.gif = "1";
-      item.appendChild(img);
+      item.appendChild(this._createIcon(dataUrl, label));
     }
+  }
+
+  /**
+   * Build the `<img>` for a resolved space avatar.
+   *
+   * `onerror` restores the letter fallback: the image replaces the initial, so
+   * a data URL the renderer refuses to decode would otherwise leave an empty
+   * box with nothing in it at all.
+   */
+  private _createIcon(dataUrl: string, fallbackLabel: string): HTMLImageElement {
+    const img = document.createElement("img");
+    img.className = "space-strip__icon";
+    img.src = dataUrl;
+    img.alt = "";
+    if (isAnimatedUrl(dataUrl)) img.dataset.gif = "1";
+    img.addEventListener("error", () => {
+      const parent = img.parentElement;
+      if (!parent) return;
+      img.remove();
+      parent.textContent = fallbackLabel;
+    });
+    return img;
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
@@ -218,17 +267,14 @@ export class SpaceStrip {
     el.setAttribute("aria-label", item.name);
     el.dataset.spaceId = item.id;
 
-    if (item.avatarUrl) {
-      const img = document.createElement("img");
-      img.src = item.avatarUrl;
-      img.alt = item.name;
-      img.style.width = "20px";
-      img.style.height = "20px";
-      img.style.objectFit = "cover";
-      if (isAnimatedUrl(item.avatarUrl)) img.dataset.gif = "1";
-      el.appendChild(img);
+    const label = overrideLabel ?? item.name.charAt(0).toUpperCase();
+    // An avatar resolved by an earlier download survives this rebuild; without
+    // it, any render triggered after the download would drop the icon for good.
+    const resolved = this._resolvedAvatars.get(item.id) ?? item.avatarUrl;
+    if (resolved) {
+      el.appendChild(this._createIcon(resolved, label));
     } else {
-      el.textContent = overrideLabel ?? item.name.charAt(0).toUpperCase();
+      el.textContent = label;
     }
 
     el.addEventListener("click", () => this._selectId(item.id));
