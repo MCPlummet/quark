@@ -24,15 +24,26 @@ Quark's version string lives in **eight** places. The project guidance (CLAUDE.m
 
 App Store Connect requires the build number to **strictly increase across every upload sharing one `CFBundleShortVersionString`**. If it tracked the marketing version, each release would permit exactly one upload — and the second attempt (a rejected build, a signing fix, a re-archive) would be refused *after* the archive was already built and signed, with no way forward but a version bump that misrepresents the release.
 
-So it is an **integer that never resets**, independent of the version, living in four places:
+So it is an **integer that never resets**, independent of the version, living in five places:
 
 | File | Key |
 |------|-----|
 | `src-tauri/gen/apple/quark_iOS/Info.plist` | `CFBundleVersion` |
 | `src-tauri/gen/apple/QuarkNSE/Info.plist` | `CFBundleVersion` |
 | `src-tauri/gen/apple/project.yml` | `CFBundleVersion`, once per iOS target |
+| `src-tauri/tauri.conf.json` | `bundle.iOS.bundleVersion` |
 
-Those four must agree with each other, for the same reason the version must: validation rejects an app and extension that disagree. The script checks this on **every** run — including a plain version bump — so a hand-introduced drift surfaces at the next bump instead of at an upload.
+Those five must agree with each other, for the same reason the version must: validation rejects an app and extension that disagree. The script checks this on **every** run — including a plain version bump — so a hand-introduced drift surfaces at the next bump instead of at an upload.
+
+### Why `tauri.conf.json` is in that list
+
+`bundle.iOS.bundleVersion` is not a fifth copy for tidiness — it is what stops the Tauri CLI overwriting the other four.
+
+Left unset, the CLI derives `CFBundleVersion` from the top-level `version` and rewrites **both** plists on every `pnpm tauri ios build`. The build number is replaced by the marketing version — not an integer, and identical across every upload of a release: exactly the scheme the build number exists to avoid. It is silent, and it reaches the archive. An upload shipped this way once already.
+
+Setting it makes the CLI write the number we chose, so the CLI, xcodegen and this script all write the same value and the order they run in stops mattering.
+
+It does **not** make the plists redundant. Archiving from Xcode fires only the `xcode-script` pre-build hook, which never consults `tauri.conf.json` — on that path the plist on disk is what ships. All five still have to agree.
 
 ```bash
 bash .claude/skills/version-bump/bump.sh build      # 3 -> 4
@@ -88,7 +99,7 @@ bash .claude/skills/version-bump/bump.sh build       # next TestFlight upload
 The script:
 1. Reads the current version from `package.json` (the source of truth).
 2. **Aborts if the eight files don't already agree** — printing which one drifted (naming the `project.yml` key explicitly, since its build number is checked separately), so you reconcile an existing mismatch rather than burying it.
-3. **Aborts if the four build numbers don't agree**, or if the build number isn't an integer. This runs on every invocation, `build` and version bumps alike.
+3. **Aborts if the five build numbers don't agree**, or if the build number isn't an integer — the shape a Tauri CLI overwrite leaves behind. This runs on every invocation, `build` and version bumps alike.
 4. On `build`: increments (or sets) the build number, refusing any value that doesn't strictly increase, then verifies and exits without touching the version.
 5. Computes the new version (or takes the explicit one).
 6. **Aborts a redundant bump of an unreleased version** — if the current version has no `vX.Y.Z` release tag and the requested bump wouldn't escalate its SemVer tier (see ["Don't re-bump a version that hasn't shipped yet"](#dont-re-bump-a-version-that-hasnt-shipped-yet)). Override with `ALLOW_UNSHIPPED_BUMP=1`.
@@ -101,6 +112,7 @@ It only edits the working tree — it does **not** commit, tag, or push. Review 
 
 - **Don't hand-edit just one file.** That's the exact drift this skill exists to prevent. Always go through the script.
 - **Cargo.lock**: the script updates only the `quark` entry. A later `cargo build` will reproduce the same change, so either order is fine.
+- **A `tauri ios build` immediately before archiving will undo a build bump.** That is what the `bundleVersion` entry prevents; if a plist ever carries the marketing version in `CFBundleVersion`, the CLI wrote it, and the fix is to check `bundle.iOS.bundleVersion` is still set rather than to hand-edit the plist back. Verify all five agree before Distribute — App Store Connect burns a build number on upload whatever the binary turned out to contain.
 - **`project.yml` sits under `gen/`, but it is tracked and hand-maintained** — don't drop it from the list on the assumption that everything under `gen/` is regenerated scratch (some of it, like `gen/schemas`, is untracked). If `tauri ios init`/xcodegen ever rewrites it, re-check the two `CFBundle*` keys against the tree version.
 - **`reconcile to 'X' before bumping`**: the script found the files disagreeing. Set them all to the intended current version first (run the script with that explicit `X.Y.Z`, or fix by hand), then bump.
 - **`current version X has NOT shipped yet`**: the current version has no release tag and you're stacking a same-tier bump on top of it. Usually the right move is *not* to bump — let your changes ride the pending version. Only override (`ALLOW_UNSHIPPED_BUMP=1`) if you genuinely need a fresh version number anyway.

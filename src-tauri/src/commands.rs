@@ -498,6 +498,20 @@ pub async fn get_rooms(
     crate::matrix::rooms::get_rooms(&client, &recency).await
 }
 
+/// Resolve the existing DM room shared with `user_id` from the account's
+/// `m.direct` mapping, or `None` when there is none to open.
+///
+/// Local store read only — see `rooms::find_dm_room`.
+#[tauri::command]
+pub async fn find_dm_room(
+    state: State<'_, MatrixState>,
+    recency: State<'_, crate::matrix::rooms::RecencyState>,
+    user_id: String,
+) -> Result<Option<String>, String> {
+    let client = get_client(&state)?;
+    Ok(crate::matrix::rooms::find_dm_room(&client, &user_id, &recency))
+}
+
 #[tauri::command]
 pub async fn get_room_members(
     state: State<'_, MatrixState>,
@@ -1281,11 +1295,47 @@ pub async fn open_media_externally(
     Ok(())
 }
 
+/// Upload attachment bytes, streaming real byte progress to the frontend when
+/// the caller supplied an `upload_id`.
+///
+/// The id is minted by the frontend so it can correlate
+/// [`EVENT_ATTACHMENT_PROGRESS`](crate::matrix::media::EVENT_ATTACHMENT_PROGRESS)
+/// events with the composer row it is already showing. Without an id we take
+/// the plain upload path, which skips the SDK's streaming request body.
+async fn upload_attachment(
+    app: &AppHandle,
+    client: &Client,
+    data: Vec<u8>,
+    mime_type: &str,
+    filename: &str,
+    upload_id: Option<String>,
+) -> Result<String, String> {
+    use tauri::Emitter;
+
+    let Some(upload_id) = upload_id else {
+        return crate::matrix::media::upload_media(client, data, mime_type, Some(filename)).await;
+    };
+
+    let app = app.clone();
+    crate::matrix::media::upload_media_with_progress(client, data, mime_type, move |transferred, total| {
+        let _ = app.emit(
+            crate::matrix::media::EVENT_ATTACHMENT_PROGRESS,
+            crate::matrix::media::AttachmentProgress {
+                upload_id: upload_id.clone(),
+                transferred,
+                total,
+            },
+        );
+    })
+    .await
+}
+
 /// Upload image data (base64-encoded) and send it as an m.image event, with an
 /// optional MSC2530 caption, optionally as a reply. Used for clipboard paste
 /// and picked images from the frontend.
 #[tauri::command]
 pub async fn send_pasted_image(
+    app: AppHandle,
     state: State<'_, MatrixState>,
     room_id: String,
     data_base64: String,
@@ -1293,18 +1343,13 @@ pub async fn send_pasted_image(
     filename: String,
     caption: Option<String>,
     reply_to_event_id: Option<String>,
+    upload_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = crate::matrix::media::upload_media(
-        &client,
-        data,
-        &mime_type,
-        Some(&filename),
-    )
-    .await?;
+    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
 
     crate::matrix::timeline::send_image(
         &client,
@@ -1324,24 +1369,20 @@ pub async fn send_pasted_image(
 /// Used for the file picker attach flow.
 #[tauri::command]
 pub async fn send_file(
+    app: AppHandle,
     state: State<'_, MatrixState>,
     room_id: String,
     data_base64: String,
     mime_type: String,
     filename: String,
     file_size: Option<u64>,
+    upload_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = crate::matrix::media::upload_media(
-        &client,
-        data,
-        &mime_type,
-        Some(&filename),
-    )
-    .await?;
+    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
 
     crate::matrix::timeline::send_file(
         &client,
@@ -1359,6 +1400,7 @@ pub async fn send_file(
 /// renders as a playable embed rather than a generic file attachment.
 #[tauri::command]
 pub async fn send_video(
+    app: AppHandle,
     state: State<'_, MatrixState>,
     room_id: String,
     data_base64: String,
@@ -1368,18 +1410,13 @@ pub async fn send_video(
     height: Option<u64>,
     duration_ms: Option<u64>,
     file_size: Option<u64>,
+    upload_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = crate::matrix::media::upload_media(
-        &client,
-        data,
-        &mime_type,
-        Some(&filename),
-    )
-    .await?;
+    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
 
     crate::matrix::timeline::send_video(
         &client,
@@ -2773,8 +2810,15 @@ pub async fn get_background_sync_state(
 ///
 /// Read-only: opening Settings must not be what mints `push.json`, which on
 /// desktop would create the file for a platform that can never use it.
+///
+/// The account-wide mute is read here rather than left to a second call,
+/// because it is a rung of the same ladder: without it the whole chain can
+/// report green while `.m.rule.master` guarantees the homeserver sends nothing.
+/// A session is not required to answer — a logged-out client simply is not
+/// muted — so a missing client narrows the answer instead of failing it.
 #[tauri::command]
 pub async fn get_push_status(
+    matrix_state: State<'_, MatrixState>,
     config_state: State<'_, Mutex<NotificationConfig>>,
     paths: State<'_, crate::Paths>,
     app_handle: AppHandle,
@@ -2785,7 +2829,44 @@ pub async fn get_push_status(
         .clone();
     let state = crate::push::load_push_state(&paths.config_dir);
     let transport = crate::unifiedpush::transport_status_async(&app_handle).await;
-    Ok(crate::push::status(&config, state.as_ref(), &transport))
+    let account_muted = match get_client(&matrix_state) {
+        Ok(client) => crate::notifications::account_muted(&client).await,
+        Err(_) => false,
+    };
+    Ok(crate::push::status(&config, state.as_ref(), &transport, account_muted))
+}
+
+/// Is the account-wide `.m.rule.master` mute on?
+///
+/// Separate from `get_push_status` because it is not a push question. The rule
+/// empties `push_actions` on the warm sync path too, so a desktop build — which
+/// has no push section at all, and therefore never sees `PushReadiness` — is
+/// silenced just as completely and needs somewhere to be told so.
+///
+/// Reads the SDK's cached ruleset, not the homeserver; see
+/// `notifications::account_muted`.
+#[tauri::command]
+pub async fn get_account_mute(state: State<'_, MatrixState>) -> Result<bool, String> {
+    match get_client(&state) {
+        Ok(client) => Ok(crate::notifications::account_muted(&client).await),
+        // No session yet: there is no account to be muted, and reporting that
+        // as an error would put a toast in front of a user who has done nothing
+        // wrong.
+        Err(_) => Ok(false),
+    }
+}
+
+/// Turn the account-wide mute on or off.
+///
+/// The action half of the report above: the rule was written by another client,
+/// so without this the only way out of the state Quark just diagnosed is to go
+/// and find that client. A real `Err` on failure — there is no local fallback
+/// here, so nothing took effect and saying otherwise would leave the account
+/// silent with the UI claiming it was fixed.
+#[tauri::command]
+pub async fn set_account_mute(state: State<'_, MatrixState>, muted: bool) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::notifications::set_account_muted(&client, muted).await
 }
 
 /// Turn push on or off.

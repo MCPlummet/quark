@@ -2,6 +2,7 @@
 
 import { Mode } from "../vim/mode.js";
 import { isMobile, onMobileChange, guardViewportPan } from "../app/mobile.js";
+import { AttachmentProgressList, type AttachmentProgressHandle } from "./AttachmentProgress.js";
 
 const MODE_LABELS: Record<string, string> = {
   Normal: "NOR",
@@ -37,6 +38,7 @@ export class Input {
   private _onFilePick: ((file: File) => void) | null = null;
   private _onFocusEnterInsert: (() => void) | null = null;
   private _fileInputEl: HTMLInputElement | null = null;
+  private _attachProgress: AttachmentProgressList;
   private _vimMode: boolean = true;
 
   constructor() {
@@ -47,6 +49,12 @@ export class Input {
     // Nothing in the compose region scrolls except the field itself, so no drag
     // over it may reach the visual-viewport pan (#33).
     guardViewportPan(this._el, (t) => !!t?.closest(".input-bar__field"));
+
+    // ── Attachment progress (hidden until something is being attached) ────
+    // Above the paste preview so a queued send and the row describing it read
+    // top-down in the order they happened.
+    this._attachProgress = new AttachmentProgressList();
+    this._el.appendChild(this._attachProgress.getElement());
 
     // ── Paste image preview (hidden by default, shown above compose bar) ──
     this._pastePreviewEl = document.createElement("div");
@@ -310,6 +318,26 @@ export class Input {
   /** Register a callback invoked when the user picks a file via the attach button. */
   onFilePick(handler: (file: File) => void): void {
     this._onFilePick = handler;
+  }
+
+  /**
+   * Start an inline attachment-progress row for `filename` (#63). Returns the
+   * handle that drives it through read → upload → send, or into an error the
+   * user can actually see. `onCancel` renders a cancel button; omit it where a
+   * cancel could not take effect. `roomId` scopes the row to the room the
+   * attachment is going to, so it does not follow the user out of it.
+   */
+  startAttachmentProgress(
+    filename: string,
+    onCancel?: () => void,
+    roomId?: string,
+  ): AttachmentProgressHandle {
+    return this._attachProgress.start(filename, onCancel, roomId);
+  }
+
+  /** Scope the visible attachment rows to the room now open (null for none). */
+  setAttachmentRoom(roomId: string | null): void {
+    this._attachProgress.setActiveRoom(roomId);
   }
 
   /** Open the native file picker dialog. */

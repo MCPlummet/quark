@@ -15,10 +15,72 @@ import {
   getPushStatus,
   setPushEnabled,
   selectPushDistributor,
+  getAccountMute,
+  setAccountMute,
 } from "../../../ipc/notifications.js";
 import type { PushStatus, BackgroundSyncState } from "../../../ipc/notifications.js";
 import { showSuccess, showError } from "../../NotificationToast.js";
 import type { SettingsTab } from "../types.js";
+
+/**
+ * What an account-wide mute means, in the user's terms rather than the rule's.
+ *
+ * Exported as one string because it is said in two places — the notice at the
+ * top of the tab, and the push hint — and the two must not drift into
+ * describing different problems.
+ */
+export const ACCOUNT_MUTE_MESSAGE =
+  "Notifications are disabled for your whole account (set by another client). " +
+  "Push will deliver nothing until that is turned off.";
+
+/**
+ * The banner for an account-wide `.m.rule.master` mute, with the button that
+ * clears it.
+ *
+ * Lives at the top of the tab rather than inside the push section on purpose:
+ * the rule empties `push_actions` on the warm sync path too, so it silences a
+ * desktop build — which renders no push section at all — exactly as
+ * thoroughly. It is also the only state in this tab that no control below it
+ * can explain: every toggle here can read "on" while this one rule drops every
+ * notification.
+ *
+ * `onFix` is expected to reject on failure; a mute that could not be cleared
+ * must leave the notice standing, because the account is still silent.
+ */
+export function accountMuteNotice(onFix: () => Promise<void>): HTMLElement {
+  const notice = document.createElement("div");
+  notice.className = "settings-dialog__section";
+
+  const text = document.createElement("div");
+  text.className = "settings-dialog__hint";
+  text.style.color = "var(--accent-warning)";
+  text.textContent = ACCOUNT_MUTE_MESSAGE;
+  notice.appendChild(text);
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "settings-dialog__save-btn";
+  btn.textContent = "[ re-enable notifications for this account ]";
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    void onFix()
+      .then(() => {
+        showSuccess("Notifications re-enabled for your account");
+        // The push section above was built from a status read before this
+        // fix, so it still says "blocked". Removing the notice is the honest
+        // half we can do from here; the section catches up when Settings is
+        // reopened.
+        notice.remove();
+      })
+      .catch((err) => {
+        btn.disabled = false;
+        showError(`Could not re-enable notifications: ${err instanceof Error ? err.message : String(err)}`);
+      });
+  });
+  notice.appendChild(btn);
+
+  return notice;
+}
 
 /**
  * What push is currently doing, in the terms of the platform's own transport.
@@ -39,6 +101,12 @@ export function pushStatusLine(s: PushStatus): string {
   switch (s.readiness) {
     case "off":
       return "push: off · the app must stay running to notify";
+    // Not a stall in the chain at all: everything below can be green while the
+    // account-wide rule guarantees the homeserver sends nothing. Naming the
+    // rule is deliberate — it is what makes the state searchable, and what
+    // several hours of debugging the gateway chain would otherwise cost.
+    case "muted_account":
+      return "push: blocked by an account-wide mute (.m.rule.master) — nothing will be delivered";
     case "ready":
       return `push: registered · gateway: ${s.gateway_url ?? "unknown"}`;
     case "no_transport":
@@ -63,6 +131,14 @@ export function pushStatusLine(s: PushStatus): string {
 export function pushHint(s: PushStatus): string {
   const privacy =
     "Only a room ID and event ID ever reach the push gateway — never message content.";
+  // Ahead of the transport-specific advice, because none of it is the problem:
+  // installing a distributor or waiting for a token fixes a chain that will
+  // still deliver nothing while the account is muted. The control that undoes
+  // it is at the top of this tab, which is where every platform can reach it —
+  // desktop has no push section for it to live in.
+  if (s.readiness === "muted_account") {
+    return `${ACCOUNT_MUTE_MESSAGE} Turn it back on at the top of this tab. ${privacy}`;
+  }
   if (s.transport === "apns") {
     // Not a switch on iOS: it follows "Enable notifications" above, because
     // push is the only way the app hears anything while it is closed.
@@ -98,6 +174,19 @@ export const notificationsTab: SettingsTab = {
     }
 
     section.innerHTML = "";
+
+    // Before anything the user can toggle here, because it overrules all of
+    // it: with `.m.rule.master` enabled every switch below can read "on" and
+    // not one notification will arrive. A failed read is not worth a toast —
+    // logged out is a legitimate answer, and the command reports it as "not
+    // muted" rather than an error.
+    try {
+      if (await getAccountMute()) {
+        section.appendChild(accountMuteNotice(() => setAccountMute(false)));
+      }
+    } catch {
+      /* status only — the rest of the tab still works */
+    }
 
     let draft = { ...config };
 

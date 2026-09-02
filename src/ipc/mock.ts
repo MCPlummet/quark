@@ -12,11 +12,11 @@ export interface CacheStats {
 
 const _now = Date.now();
 const MOCK_ROOMS: RoomInfo[] = [
-  { room_id: "!general:matrix.org", name: "general", topic: "General discussion", avatar_url: null, unread_count: 3, notification_count: 1, is_direct: false, is_encrypted: true, member_count: 42, last_activity_ts: _now - 5 * 60_000 },
-  { room_id: "!dev:matrix.org", name: "dev", topic: "Development talk", avatar_url: null, unread_count: 0, notification_count: 0, is_direct: false, is_encrypted: true, member_count: 18, last_activity_ts: _now - 2 * 60 * 60_000 },
-  { room_id: "!random:matrix.org", name: "random", topic: "Off-topic banter", avatar_url: null, unread_count: 12, notification_count: 0, is_direct: false, is_encrypted: false, member_count: 35, last_activity_ts: _now - 30 * 60_000 },
-  { room_id: "!dm-alice:matrix.org", name: "Alice", topic: null, avatar_url: null, unread_count: 1, notification_count: 0, is_direct: true, is_encrypted: true, member_count: 2, last_activity_ts: _now - 10 * 60_000 },
-  { room_id: "!dm-bob:matrix.org", name: "Bob", topic: null, avatar_url: null, unread_count: 0, notification_count: 0, is_direct: true, is_encrypted: true, member_count: 2, last_activity_ts: _now - 3 * 60 * 60_000 },
+  { room_id: "!general:matrix.org", name: "general", topic: "General discussion", avatar_url: null, unread_count: 3, notification_count: 1, is_direct: false, is_encrypted: true, member_count: 42, last_activity_ts: _now - 5 * 60_000, muted: false },
+  { room_id: "!dev:matrix.org", name: "dev", topic: "Development talk", avatar_url: null, unread_count: 0, notification_count: 0, is_direct: false, is_encrypted: true, member_count: 18, last_activity_ts: _now - 2 * 60 * 60_000, muted: false },
+  { room_id: "!random:matrix.org", name: "random", topic: "Off-topic banter", avatar_url: null, unread_count: 12, notification_count: 0, is_direct: false, is_encrypted: false, member_count: 35, last_activity_ts: _now - 30 * 60_000, muted: true },
+  { room_id: "!dm-alice:matrix.org", name: "Alice", topic: null, avatar_url: null, unread_count: 1, notification_count: 0, is_direct: true, is_encrypted: true, member_count: 2, last_activity_ts: _now - 10 * 60_000, muted: false },
+  { room_id: "!dm-bob:matrix.org", name: "Bob", topic: null, avatar_url: null, unread_count: 0, notification_count: 0, is_direct: true, is_encrypted: true, member_count: 2, last_activity_ts: _now - 3 * 60 * 60_000, muted: false },
 ];
 
 let msgCounter = 100;
@@ -213,6 +213,16 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     }
     case "get_room_members":
       return MOCK_MEMBERS;
+    case "find_dm_room": {
+      // Mirrors the real m.direct lookup: the two mock DM rooms are named
+      // after their sole other party.
+      const uid = args?.userId as string | undefined;
+      const name = uid?.split(":")[0]?.replace(/^@/, "");
+      const dm = MOCK_ROOMS.find(
+        (r) => r.is_direct && r.name?.toLowerCase() === name?.toLowerCase(),
+      );
+      return dm?.room_id ?? null;
+    }
     case "get_room_receipts": {
       // Mock: spread a few members' read positions across the last two messages —
       // three on the newest (to exercise the "2 avatars + …" overflow) and one
@@ -257,6 +267,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         is_encrypted: true,
         member_count: opts?.is_direct ? 2 : 1,
         last_activity_ts: Date.now(),
+        muted: false,
       });
       return roomId;
     }
@@ -468,7 +479,14 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         readiness: "off",
         distributor: null,
         distributors: [],
+        account_muted: false,
       };
+    // The account-wide `.m.rule.master` mute. Mocked as off: it is a state
+    // another client has to have created, so it is not the browser default.
+    case "get_account_mute":
+      return false;
+    case "set_account_mute":
+      return null;
     case "select_push_distributor":
       return null;
     case "set_avatar":
@@ -574,7 +592,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "get_app_config":
       return {
         general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true },
-        sync: { sliding_sync: true, timeline_limit: 50 },
+        sync: { timeline_limit: 50 },
         media: { auto_load_images: true, inline_video: true, max_image_width: 600, max_image_height: 400, sticker_max_size: 256, cache_size_mb: 500 },
         gif: { provider: "klipy", api_key: "", rating: "pg", cache_results: true },
         emoji: { shortcode_autocomplete: true, autocomplete_min_chars: 2 },

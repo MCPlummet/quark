@@ -159,6 +159,7 @@ pub fn run() {
             commands::start_sync,
             // Rooms
             commands::get_rooms,
+            commands::find_dm_room,
             commands::get_room_members,
             commands::join_room,
             commands::leave_room,
@@ -284,6 +285,8 @@ pub fn run() {
             commands::set_background_sync,
             commands::get_background_sync_state,
             commands::get_push_status,
+            commands::get_account_mute,
+            commands::set_account_mute,
             commands::set_push_enabled,
             commands::select_push_distributor,
             commands::request_battery_exemption,

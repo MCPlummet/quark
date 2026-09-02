@@ -27,11 +27,11 @@ Quark is a keyboard-driven, CLI-aesthetic Matrix client that renders in a GUI wi
 ├─────────────────────────────────────┤
 │         Rust Backend (Core)         │
 │   matrix-sdk  ·  Vodozemac E2EE     │
-│   Sliding Sync  ·  Media cache      │
+│   Matrix /sync  ·  Media cache      │
 └─────────────────────────────────────┘
 ```
 
-**Why Tauri over Electron?** ~10x smaller binary, ~3-5x less RAM. The Rust backend uses `matrix-sdk` directly — the same SDK powering Element X — giving us best-in-class E2EE, Sliding Sync, and protocol coverage without FFI wrappers.
+**Why Tauri over Electron?** ~10x smaller binary, ~3-5x less RAM. The Rust backend uses `matrix-sdk` directly — the same SDK powering Element X — giving us best-in-class E2EE and protocol coverage without FFI wrappers.
 
 **Why not a real TUI?** Inline custom emoji (`<img data-mx-emoticon>`) and stickers require rendering images inline with text flow. Terminal image protocols (Sixel/Kitty) can't do this reliably across terminals. The CLI aesthetic is achieved purely through CSS (monospace fonts, dark background, prompt-style input).
 
@@ -40,7 +40,7 @@ Quark is a keyboard-driven, CLI-aesthetic Matrix client that renders in a GUI wi
 The backend handles all Matrix protocol interaction and exposes commands to the frontend via Tauri's IPC.
 
 **Crates:**
-- `matrix-sdk` — client, sync, room operations, E2EE (Vodozemac), Sliding Sync
+- `matrix-sdk` — client, sync, room operations, E2EE (Vodozemac)
 - `matrix-sdk-crypto` — cross-signing, key backup, device verification
 - `tauri` — windowing, IPC, system tray, file dialogs
 - `serde` / `serde_json` — serialization
@@ -49,7 +49,7 @@ The backend handles all Matrix protocol interaction and exposes commands to the 
 
 **Responsibilities:**
 - Login (OIDC via MAS + legacy password fallback)
-- Sliding Sync room list management & subscriptions
+- Sync loop, room list management & subscriptions — classic v3 `/sync` (see *Core Protocol* below)
 - Sending/receiving messages, reactions, edits, redactions
 - E2EE: device verification (SAS emoji, QR), key backup, cross-signing
 - Media download/upload with authenticated media (MSC3916)
@@ -185,11 +185,48 @@ anything hands the gateway an address for nothing.
 **"Enabled" and "working" are different states**, and everything between them is
 software Quark doesn't control — a distributor the user installs, a gateway that
 may decline, a homeserver round-trip that may fail. `PushReadiness` names the
-four (`off`, `no_transport`, `waiting`, `ready`) and Settings reports them
-separately, because collapsing any two produces the failure push can least
-afford: telling someone it works while nothing delivers it. `no_transport` earns
-its own state on Android as both the likeliest cause and the only one the user
-can fix — the foreground service remains the fallback there.
+five (`off`, `muted_account`, `no_transport`, `waiting`, `ready`) and Settings
+reports them separately, because collapsing any two produces the failure push
+can least afford: telling someone it works while nothing delivers it.
+`no_transport` earns its own state on Android as both the likeliest cause and
+the only one the user can fix — the foreground service remains the fallback
+there.
+
+**`muted_account` is the rung that is not about this device at all.**
+`.m.rule.master` is an account-wide kill switch — one override rule matching
+every event and notifying on nothing — which Quark never writes and other
+clients expose as "disable all notifications". While it is set the homeserver
+notifies for nothing on any client, so every rung below it can be green while
+not a single push is sent. That is exactly the failure this ladder exists to
+refuse, and it is invisible locally, which is why readiness consults the ruleset
+and not just the pusher and the transport. It is read from the SDK's cached
+ruleset (`Account::push_rules`, a state-store read of the `m.push_rules`
+account-data event, *not* a `GET /_matrix/client/v3/pushrules/`), so status
+costs nothing and stays correct as sync carries another client's change in.
+
+It outranks the device-level rungs, because installing a distributor fixes a
+chain that will still deliver nothing; it does not outrank `off`, since a user
+who never opted into push is not owed an account-wide diagnosis inside the push
+section. The mute also empties `push_actions` on the warm sync path, so it
+silences a desktop build — which renders no push section at all — just as
+completely. Settings therefore reports it twice: as a readiness state inside the
+push section, and as a notice at the top of the Notifications tab carrying the
+button that clears it (`set_account_mute`, a real homeserver write with no local
+cache to fall back on, so a failure is an `Err` and the notice stays). The
+button is the point: the rule was written by another client, so without it the
+only way out of the state Quark has just diagnosed is to go and find that
+client. Note the inversion — the rule being *enabled* means notifications are
+*off* — and that absence is not silence: a ruleset with no master rule is not
+muted.
+
+Per-room mute rules set on other clients are a narrower case and are handled
+separately: `RoomInfo.muted` resolves each room's `RoomNotificationMode` from
+the same locally-cached ruleset, so a room muted in Element shows its muted
+marker in Quark's room list and the Room Info dialog offers `[unmute]` rather
+than `[mute]`. That is a per-room read on the room-list refresh path, and it is
+affordable because the ruleset is evaluated in memory — one store read plus an
+N-room match, not N round-trips. The local `mute_rooms` list stays as the
+offline fallback for a room the client store has not seen.
 
 The ladder asks about a **registered pusher first**, ahead of the transport
 probe. `transport_status` cannot distinguish a device with no distributor from
@@ -347,6 +384,13 @@ never mints a token or hands the gateway an address. The notification
 follows something the user just did — the launch-time ask arrived in front of
 the login screen and pre-empted it. A token without permission is harmless: it
 arrives, and nothing is displayed until they agree.
+
+`is_permission_granted` answers `null` for two unrelated states — never asked
+(`PermissionState::Prompt`) and unanswerable (desktop, mock mode, a build
+without the plugin) — so `app/notifications.ts` keeps them apart as `prompt` and
+`unavailable`. Reading the first as the second means a fresh install is never
+prompted and, because push follows the permission on iOS, never registers a
+pusher either.
 
 The homeserver POSTs to our own Sygnal at `push.quark.tel`, which signs for APNs;
 `apns.rs` is the transport module, and unlike `unifiedpush.rs` it discovers
@@ -562,6 +606,10 @@ The room list has a two-column layout inspired by Cinny:
   - User can pin rooms to top via `:pin` command
 - No room avatars or icons — text only, matching the CLI aesthetic
 - Unread indicators via color (theme-configurable) and optional badge count
+- Muted rooms are marked and excluded from unread highlighting. The flag comes
+  from the room's `RoomNotificationMode` (server-side push rules), not the local
+  `mute_rooms` list, so a mute set in another client shows up here too — see
+  *Push notifications*
 - Nested spaces shown as indented sections with collapsible headers
 - Categories/sections within a space rendered as visual dividers (using `m.space.child` ordering)
 
@@ -713,6 +761,27 @@ and `:converttodm` exists so the user can declare a room a DM regardless of who
 else is in it. The flag is account data, so it needs no power level and works in
 rooms you do not moderate.
 
+**Opening a DM with someone** — the `[message]` button in the profile view, and
+anything else that reaches `openOrCreateDm` — resolves the existing room from
+the account's `m.direct` mapping in the backend (`find_dm_room`, a local store
+read; no HTTP). Only when that returns nothing is a room created. The
+authoritative lookup matters because the alternative, scanning the cached room
+list for small `is_direct` rooms and fetching each one's members to confirm,
+misses a DM whose other party has left, one that is still an unaccepted invite,
+and one sync has not surfaced yet — and every miss creates a *second* DM with
+the same person. The SDK deliberately keeps a departed member in the room's
+`dm_targets` for exactly this reason. Where several rooms match, a joined room
+beats an invite and the most recently active wins. A failed lookup is reported,
+never treated as "no DM exists".
+
+When the resolved room is a pending invite, opening it accepts the invite
+first. `get_rooms` enumerates joined rooms alone, so no room-list refresh can
+ever surface an invite — without the join, the room opens with no `RoomInfo`
+behind it (a raw room ID for a name, no topic, member count or encryption
+state) and its timeline is requested for a room the account is not in. The user
+asked to message this person and the invite is that same DM, so accepting it is
+what the action means.
+
 ### Settings Dialog
 
 Opened via `:settings` or the settings UI affordance. The dialog has eight tabs, rendered in this order:
@@ -751,17 +820,26 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
 
 ### Core Protocol
 - [x] Login: OIDC (MAS) + legacy password + SSO
-- [x] Sliding Sync (MSC4186) — native, no proxy
+- [x] Sync: classic v3 `/sync` — long-poll against a server-side filter, resumed from a persisted `since` cursor
+- [ ] Sliding Sync (MSC4186) — **not implemented.** matrix-sdk 0.9 does not compile in its sliding-sync support
+      (`experimental-sliding-sync` is not in its default features) and nothing in the backend uses it. Adopting it
+      needs the matrix-sdk 0.9 → 0.18 upgrade first, where sliding sync is no longer feature-gated at all. No issue
+      tracks that upgrade yet; #57 (iOS push Phase 4) only records that it should be *decided* before the NSE work
+      builds on the current API. The upgrade does not itself require sliding sync — 0.18 still exposes `sync`,
+      `sync_once` and `sync_with_callback`, so the v3 loop survives it and the two are separable pieces of work.
 - [x] E2EE: Megolm via Vodozemac, cross-signing, key backup (SSSS)
 - [x] Device verification: SAS emoji, QR code
 - [x] Room creation, join, leave, invite, kick, ban
 - [x] Room directory & federated room search
 - [x] In-room message search — header search box (`:search`) with four tiers: loaded window (instant) · local cache (matrix-sdk event cache, offline) · back-to-date · entire history. Server tiers stream results one page at a time (bounded memory) and are cancelable.
 - [x] Spaces: hierarchy display, space-scoped room lists, restricted joins
-- [x] Threads (m.thread relation)
+- [x] Threads (m.thread relation) — replies carry media and MSC2530 captions,
+      converted by the same code path as the main timeline
 - [x] Rich replies (m.in_reply_to)
 - [x] Reactions (m.annotation) — Unicode + custom emoji
-- [x] Message editing & redaction
+- [x] Message editing & redaction — an edit re-runs the outgoing formatter, so
+      `m.new_content` keeps the HTML `formatted_body` and custom emoji survive
+      the edit instead of degrading to literal `:shortcode:` text
 - [x] Read receipts (public m.read + private m.read.private) — displayed Element-style as shifting, overlapping avatars at the bottom-right of each other user's last-read message (seeded on room open via `get_room_receipts`, updated live). Settings toggles: "send my read receipts" (private-only when off) and "show others' read receipts".
 - [x] Typing indicators
 - [x] Presence (when homeserver enables it)
@@ -846,6 +924,23 @@ When the user types `:` followed by characters in insert mode, an inline autocom
 - Triggered after `shortcode_min_chars` characters (default: 2, configurable via `set shortcode_min_chars=2` in quarkrc)
 - Sources: Unicode emoji database + `im.ponies.user_emotes` + `im.ponies.room_emotes` from current room
 
+### Links
+
+Every anchor a message can produce — auto-linkified plain text, an `<a>` in a
+sanitised `formatted_body`, the same in a thread reply or after an edit — is
+styled and activated by one shared path (`src/app/links.ts`), so a markdown link
+whose label is not itself a URL looks and behaves like every other link.
+
+Activation is a **single capture-phase guard on the document**, not a listener
+per anchor. Left click and middle click both open the URL in the system browser
+and cancel the in-window navigation; middle-click `mousedown` is cancelled too,
+since the engine starts navigating (and autoscroll) before `auxclick` fires.
+Modifiers are ignored on purpose: "open in a new tab" means nothing in a
+single-window WebView, so every activation lands in the same place. Anchors with
+`download`, and any non-http(s) href, are left alone. Only the mobile WebView
+gets `target="_blank"` — on desktop it makes wry open the URL itself, which
+alongside `openExternalUrl` opened every link twice.
+
 ### Media Handling
 - Authenticated media download via `/_matrix/client/v1/media/download/`
 - Inline image previews in timeline (configurable max dimensions)
@@ -863,6 +958,37 @@ When the user types `:` followed by characters in insert mode, an inline autocom
   room switches like text drafts and send to the room current at send time.
   Videos and non-image files still upload immediately. Known limitation: with
   a thread open, images post to the main timeline (no thread relation).
+- **Attachment progress.** Attaching is several phases the user cannot see —
+  reading the picked file's bytes, handing them across IPC, then the upload
+  itself — and on Android a multi-megabyte pick spends long enough in the first
+  two to look like a hang. An inline row above the compose bar names the file
+  and reports each phase, showing a real byte percentage where one exists
+  (matrix-sdk's upload progress observable) and an honest indeterminate spinner
+  where none does, rather than inventing a number. A failure replaces the
+  spinner with the backend's message and stays until dismissed; cancel is
+  offered only during the local read, the one phase that can still be abandoned
+  without something having already been sent.
+
+  Rows are scoped to the room the attachment is going to. The composer is
+  shared by every room, so an unscoped row followed the user out — a failed
+  upload parked its error in whichever room came next, and a success tick
+  landed in the wrong one. Switching away hides the row rather than removing
+  it: the upload keeps running, and the row (an unread error included) is still
+  there on the way back.
+
+  Only phase changes and terminal states are announced to a screen reader, from
+  a dedicated live region beside the stack rather than the stack itself. The
+  row's status text is rewritten on every progress tick — up to ~100 times per
+  upload — so a live region over the rows read the whole bar out again and
+  again instead of the few transitions that carry information. The region sits
+  outside the hideable stack because one that is `display: none` while idle
+  announces nothing when it returns.
+- **Thread media (MSC2530 in threads).** The thread timeline is built by the
+  same converter as the main timeline, so a reply carrying an image, video,
+  sticker or file arrives with its media fields and caption intact. It was
+  previously assembled by a separate hand-rolled converter that hardcoded
+  `m.text` and dropped every media field, which is why media in a thread used to
+  render as a bare filename line.
 - Hovering a message reveals the exact send time (HH:MM:SS) in the action bar;
   its tooltip (and the header timestamps') shows the full localized date
 - Inline video playback — `m.video` plays inline and seekable: a loopback HTTP server (Range requests) on Linux/WebKitGTK, the asset protocol on macOS/Windows/iOS; graceful fallback to the external player on decode failure
@@ -984,7 +1110,6 @@ send_key_behavior = "auto"    # auto | enter | newline — what the Enter key do
                               # Settings → General → Input.
 
 [sync]
-sliding_sync = true           # use Sliding Sync (MSC4186)
 timeline_limit = 50           # initial messages to load per room
 
 [media]

@@ -186,6 +186,9 @@ export async function startSync(components: AppComponents): Promise<() => void> 
               payload.event.body,
               payload.event.formatted_body ?? undefined,
             );
+            // An edit can introduce custom (MSC2545) emoji that were not in the
+            // original body — resolve their mxc:// srcs like the append path.
+            if (payload.event.formatted_body) resolveInlineEmojiForTimeline(timeline);
           } else {
             // `currentTimeline` (already including this event, appended above)
             // is the lookup list for the reply preview — the same list the

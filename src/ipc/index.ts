@@ -44,7 +44,7 @@ export { login, restoreSession, clearStoredSession, logout, getOwnProfile, setPr
 export type { PresenceInfo, RestoreOutcome } from "./client.js";
 
 // ─── Rooms ────────────────────────────────────────────────────────────────────
-export { getRooms, getHomeData, joinRoom, leaveRoom, createRoom, getRoomMembers, markRoomRead, getRoomReceipts, getPinnedEvents, searchRoomDirectory, inviteUser, kickUser, banUser, unbanUser, searchRoomCache, searchRoomMessages, cancelRoomSearch, listenSearchEvents, EVENT_SEARCH_HIT, EVENT_SEARCH_PROGRESS } from "./rooms.js";
+export { getRooms, getHomeData, joinRoom, leaveRoom, createRoom, getRoomMembers, findDmRoom, markRoomRead, getRoomReceipts, getPinnedEvents, searchRoomDirectory, inviteUser, kickUser, banUser, unbanUser, searchRoomCache, searchRoomMessages, cancelRoomSearch, listenSearchEvents, EVENT_SEARCH_HIT, EVENT_SEARCH_PROGRESS } from "./rooms.js";
 export type { SearchHitPayload, SearchProgressPayload } from "./rooms.js";
 
 // ─── Timeline ─────────────────────────────────────────────────────────────────
@@ -92,6 +92,8 @@ export {
   getPushStatus,
   setPushEnabled,
   selectPushDistributor,
+  getAccountMute,
+  setAccountMute,
 } from "./notifications.js";
 export type {
   NotificationConfig,

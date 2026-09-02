@@ -139,6 +139,16 @@ read_yml_build(){ read_yml_key CFBundleVersion; }
 # on the shorter key cannot silently pick up the longer one.
 read_plist_build(){ awk '/CFBundleVersion/{getline; gsub(/[[:space:]]*<\/?string>/,""); print; exit}' "$PLIST"; }
 read_nse_plist_build(){ awk '/CFBundleVersion/{getline; gsub(/[[:space:]]*<\/?string>/,""); print; exit}' "$NSE_PLIST"; }
+# tauri.conf.json's bundle.iOS.bundleVersion. Without it the Tauri CLI derives
+# CFBundleVersion from the top-level `version` and overwrites both plists on
+# every `tauri ios build` — which is how an upload shipped with the build number
+# replaced by the marketing version. Setting it makes the CLI write the number
+# we chose, so it agrees with whatever xcodegen and this script wrote.
+#
+# Keyed on "bundleVersion" and not on `"version"`, which it contains only as a
+# suffix: the version rewrite anchors on a quote immediately before `version`,
+# so it cannot match here.
+read_conf_build(){ grep -m1 '"bundleVersion"' "$TAURI_CONF" | sed -E 's/.*"bundleVersion"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'; }
 
 CURRENT="$(read_pkg)"
 [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "could not parse current version from $PKG_JSON (got '$CURRENT')"
@@ -168,8 +178,8 @@ done
 # App Store validation rejects an app and extension whose versions disagree.
 # Verified even on a version bump, so a drift introduced by hand is caught at
 # the next bump rather than at an upload.
-BUILD_FILES=("$PLIST (CFBundleVersion)" "$NSE_PLIST (CFBundleVersion)" "$XCODEGEN (CFBundleVersion)")
-BUILD_FOUND=("$(read_plist_build)" "$(read_nse_plist_build)" "$(read_yml_build)")
+BUILD_FILES=("$PLIST (CFBundleVersion)" "$NSE_PLIST (CFBundleVersion)" "$XCODEGEN (CFBundleVersion)" "$TAURI_CONF (bundle.iOS.bundleVersion)")
+BUILD_FOUND=("$(read_plist_build)" "$(read_nse_plist_build)" "$(read_yml_build)" "$(read_conf_build)")
 CURRENT_BUILD="${BUILD_FOUND[0]}"
 bdrift=0
 for i in "${!BUILD_FILES[@]}"; do
@@ -198,19 +208,22 @@ if [[ "${1:-}" == "build" ]]; then
   perl -0pi -e "s/(<key>CFBundleVersion<\\/key>\\s*<string>)${CURRENT_BUILD}(<\\/string>)/\${1}${NEW_BUILD}\${2}/" "$PLIST"
   perl -0pi -e "s/(<key>CFBundleVersion<\\/key>\\s*<string>)${CURRENT_BUILD}(<\\/string>)/\${1}${NEW_BUILD}\${2}/" "$NSE_PLIST"
   perl -0pi -e "s/(CFBundleVersion:[ \\t]*\")${CURRENT_BUILD}(\")/\${1}${NEW_BUILD}\${2}/g"                        "$XCODEGEN"
+  perl -0pi -e "s/(\"bundleVersion\"\\s*:\\s*\")${CURRENT_BUILD}(\")/\${1}${NEW_BUILD}\${2}/"                      "$TAURI_CONF"
 
   bfail=0
   bcheck() { [[ "$2" == "$NEW_BUILD" ]] || { echo "  FAILED to update $1 (still '$2')" >&2; bfail=1; }; }
   bcheck "$PLIST"     "$(read_plist_build)"
   bcheck "$NSE_PLIST" "$(read_nse_plist_build)"
   bcheck "$XCODEGEN"  "$(read_yml_build)"
+  bcheck "$TAURI_CONF" "$(read_conf_build)"
   [[ $bfail -eq 0 ]] || die "one or more build numbers did not update cleanly — inspect the diff."
 
-  echo "version-bump: build number now $NEW_BUILD in all four places"
+  echo "version-bump: build number now $NEW_BUILD in all five places"
   echo
   echo "Changed lines:"
   grep -nH -A1 '<key>CFBundleVersion</key>' "$PLIST" "$NSE_PLIST" | grep '<string>'
   grep -nH 'CFBundleVersion:' "$XCODEGEN"
+  grep -nH '"bundleVersion"' "$TAURI_CONF"
   exit 0
 fi
 
@@ -302,6 +315,7 @@ untouched() { [[ "$2" == "$CURRENT_BUILD" ]] || die "version bump altered the bu
 untouched "$PLIST"     "$(read_plist_build)"
 untouched "$NSE_PLIST" "$(read_nse_plist_build)"
 untouched "$XCODEGEN"  "$(read_yml_build)"
+untouched "$TAURI_CONF" "$(read_conf_build)"
 
 echo "version-bump: all eight files now at $NEW"
 echo

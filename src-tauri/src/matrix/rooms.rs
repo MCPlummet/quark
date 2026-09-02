@@ -1,4 +1,5 @@
 use matrix_sdk::{
+    notification_settings::RoomNotificationMode,
     room::RoomMemberRole,
     ruma::{
         api::client::room::create_room::v3::Request as CreateRoomRequest,
@@ -30,6 +31,10 @@ pub struct RoomInfo {
     /// Timestamp (ms since Unix epoch) of the most recent event in the room.
     /// Used to sort DMs by recency. May be None if the room has no local events.
     pub last_activity_ts: Option<u64>,
+    /// Whether the account's push rules mute this room. Server-side state, so
+    /// a mute set from another client shows up here too — unlike the local
+    /// `mute_rooms` list, which only records mutes this device tried to set.
+    pub muted: bool,
 }
 
 /// Live record of each room's most-recent message timestamp (ms since epoch),
@@ -352,11 +357,34 @@ pub async fn get_home_data(
     Ok(result)
 }
 
+/// Whether a room's push-rule notification mode counts as muted for the UI.
+///
+/// Only a *user-defined* mode can be `Mute`: the SDK's default mode resolves to
+/// `AllMessages` or `MentionsAndKeywordsOnly` and never to `Mute`, so `None`
+/// here means "no per-room rule", i.e. not muted. This mirrors
+/// `commands::set_room_mute`, which mutes by setting exactly this mode.
+fn is_muted_mode(mode: Option<RoomNotificationMode>) -> bool {
+    matches!(mode, Some(RoomNotificationMode::Mute))
+}
+
 /// Get info for all joined rooms.
 pub async fn get_rooms(client: &Client, recency: &RecencyState) -> Result<Vec<RoomInfo>, String> {
     let rooms = client.joined_rooms();
     let semaphore = Arc::new(Semaphore::new(8));
     let mut tasks = tokio::task::JoinSet::new();
+
+    // Mute state is read from the account's push ruleset, and doing so costs no
+    // network — checked deliberately, since this function is the room-list
+    // refresh path that the `RecencyState` comment above exists to keep cheap.
+    // In matrix-sdk 0.9 `Client::notification_settings()` resolves the ruleset
+    // via `Account::push_rules()`, which reads
+    // `store().get_account_data_event_static::<PushRulesEventContent>()` — the
+    // local state store, kept current by sync (the HTTP variant is the
+    // separate `fetch_account_data`). Each per-room lookup below is then a
+    // pure in-memory match over that ruleset
+    // (`notification_settings/rules.rs::get_user_defined_room_notification_mode`),
+    // so N rooms cost one store read, not N round-trips.
+    let notification_settings = Arc::new(client.notification_settings().await);
 
     for room in rooms {
         let permit = semaphore.clone().acquire_owned().await.unwrap();
@@ -364,8 +392,19 @@ pub async fn get_rooms(client: &Client, recency: &RecencyState) -> Result<Vec<Ro
         // persisted across runs). Only rooms the store has never seen fall
         // back to a network probe inside the task.
         let known_ts = recency.get(room.room_id().as_str());
+        let notification_settings = notification_settings.clone();
         tasks.spawn(async move {
             let _permit = permit;
+            // Resolved in here rather than on the caller: the lookup takes
+            // `NotificationSettings`' `RwLock`, and running it between
+            // `acquire_owned` and `spawn` held a permit idle across an await
+            // the permit does not gate, while serialising all N lookups on the
+            // room-list refresh path.
+            let muted = is_muted_mode(
+                notification_settings
+                    .get_user_defined_room_notification_mode(room.room_id())
+                    .await,
+            );
             let name = room.compute_display_name().await.ok().map(|n| n.to_string());
             let topic = room.topic();
             let avatar_url = room.avatar_url().map(|url| url.to_string());
@@ -396,6 +435,7 @@ pub async fn get_rooms(client: &Client, recency: &RecencyState) -> Result<Vec<Ro
                 is_encrypted,
                 member_count,
                 last_activity_ts,
+                muted,
             }
         });
     }
@@ -704,8 +744,64 @@ pub struct CreateRoomOptions {
     pub enable_encryption: bool,
 }
 
+/// Find the existing DM room shared with `user_id`, if any.
+///
+/// Reads the account's `m.direct` mapping, which the SDK keeps in each room's
+/// `base_info.dm_targets` — `Room::direct_targets()` is a plain in-memory read
+/// of that, so this scans the local store with no HTTP at all.
+///
+/// This replaces the frontend heuristic that scanned the cached room list for
+/// `is_direct` rooms under a member-count bound and then fetched each one's
+/// member list over IPC to confirm (#68). That missed a DM whenever the room
+/// wasn't in the cache yet, whenever the other party had left (so they were no
+/// longer a member), and whenever the DM was still an unaccepted invite — and
+/// a miss silently created a *second* DM room with the same person, which is
+/// the reported symptom. `m.direct` is the authoritative answer to "which room
+/// is my DM with X", and the SDK deliberately keeps a departed member in
+/// `dm_targets` precisely so the DM can be re-found and the user re-invited.
+///
+/// Joined rooms win over invites, and among equals the most recently active
+/// room wins (per `RecencyState`, the same locally-tracked timestamps the room
+/// list sorts by), so a user with historical duplicates lands in the live one.
+pub fn find_dm_room(client: &Client, user_id: &str, recency: &RecencyState) -> Option<String> {
+    use matrix_sdk::RoomState;
+
+    let target = matrix_sdk::ruma::UserId::parse(user_id).ok()?;
+
+    let mut candidates: Vec<(u8, u64, String)> = Vec::new();
+    for room in client.rooms() {
+        // Knocked/banned/left rooms are not somewhere to send a message.
+        let rank = match room.state() {
+            RoomState::Joined => 2u8,
+            RoomState::Invited => 1u8,
+            _ => continue,
+        };
+        // `m.direct` may hold third-party identifiers (email, MSISDN) as well
+        // as user IDs; `as_user_id` yields None for those, so they never match.
+        if !room
+            .direct_targets()
+            .iter()
+            .any(|t| t.as_user_id() == Some(target.as_ref()))
+        {
+            continue;
+        }
+        let room_id = room.room_id().to_string();
+        let ts = recency.get(&room_id).unwrap_or(0);
+        candidates.push((rank, ts, room_id));
+    }
+    pick_best_dm(candidates)
+}
+
+/// Pick the DM room to open from `(state rank, activity timestamp, room id)`
+/// candidates: highest rank first (joined beats invited), then most recently
+/// active. Split out from `find_dm_room` so the ordering is unit-testable
+/// without a `Client`.
+fn pick_best_dm(mut candidates: Vec<(u8, u64, String)>) -> Option<String> {
+    candidates.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
+    candidates.into_iter().next().map(|(_, _, room_id)| room_id)
+}
+
 /// Create a new room.
-#[allow(dead_code)]
 pub async fn create_room(
     client: &Client,
     options: CreateRoomOptions,
@@ -1303,6 +1399,7 @@ mod tests {
             is_encrypted,
             member_count: 2,
             last_activity_ts: None,
+            muted: false,
         }
     }
 
@@ -1465,6 +1562,7 @@ mod tests {
             is_encrypted: true,
             member_count: 42,
             last_activity_ts: Some(1_700_000_000_000),
+            muted: true,
         };
         let json = serde_json::to_string(&info).expect("serialize");
         let back: RoomInfo = serde_json::from_str(&json).expect("deserialize");
@@ -1477,6 +1575,21 @@ mod tests {
         assert!(!back.is_direct);
         assert_eq!(back.member_count, 42);
         assert_eq!(back.last_activity_ts, Some(1_700_000_000_000));
+        assert!(back.muted);
+    }
+
+    // --- Mute mode resolution ---
+
+    #[test]
+    fn muted_only_when_the_room_rule_says_mute() {
+        assert!(is_muted_mode(Some(RoomNotificationMode::Mute)));
+        assert!(!is_muted_mode(Some(RoomNotificationMode::AllMessages)));
+        assert!(!is_muted_mode(Some(
+            RoomNotificationMode::MentionsAndKeywordsOnly
+        )));
+        // No user-defined rule for the room: the account default applies, and
+        // that default can never be Mute.
+        assert!(!is_muted_mode(None));
     }
 
     #[test]
@@ -1576,5 +1689,42 @@ mod tests {
         assert!(back.invite.is_empty());
         assert!(back.is_direct);
         assert!(!back.enable_encryption);
+    }
+
+    // #68: [message] in the profile view created a second DM when the existing
+    // one wasn't visible to the old cached-room-list scan. The m.direct lookup
+    // that replaced it can legitimately return several rooms for one person
+    // (historical duplicates, an old invite alongside a live room), so the
+    // ordering below decides which one the button actually opens.
+    #[test]
+    fn no_candidates_means_no_existing_dm() {
+        assert_eq!(pick_best_dm(vec![]), None);
+    }
+
+    #[test]
+    fn a_joined_dm_beats_an_invite_even_if_the_invite_is_newer() {
+        let picked = pick_best_dm(vec![
+            (1, 900, "!invite:x".to_string()),
+            (2, 100, "!joined:x".to_string()),
+        ]);
+        assert_eq!(picked.as_deref(), Some("!joined:x"));
+    }
+
+    #[test]
+    fn among_equals_the_most_recently_active_room_wins() {
+        let picked = pick_best_dm(vec![
+            (2, 100, "!stale:x".to_string()),
+            (2, 900, "!live:x".to_string()),
+            (2, 500, "!middling:x".to_string()),
+        ]);
+        assert_eq!(picked.as_deref(), Some("!live:x"));
+    }
+
+    #[test]
+    fn an_invite_is_still_offered_when_it_is_the_only_dm() {
+        // A DM the user has been invited to but not yet accepted is exactly the
+        // case the old room-list scan missed.
+        let picked = pick_best_dm(vec![(1, 0, "!invite:x".to_string())]);
+        assert_eq!(picked.as_deref(), Some("!invite:x"));
     }
 }

@@ -264,3 +264,78 @@ pub async fn upload_file(
 
     upload_media(client, data, mime_type, filename.as_deref()).await
 }
+
+// ── Attachment upload progress ───────────────────────────────────────────────
+
+/// Tauri event carrying real byte progress for an in-flight attachment upload.
+/// The frontend correlates events to its composer row via `upload_id`, which it
+/// mints and passes to `send_file` / `send_video` / `send_pasted_image`.
+pub const EVENT_ATTACHMENT_PROGRESS: &str = "quark://attachment/progress";
+
+/// Payload of [`EVENT_ATTACHMENT_PROGRESS`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentProgress {
+    pub upload_id: String,
+    /// Bytes handed to the transport so far.
+    pub transferred: u64,
+    /// Total bytes of the request body (0 until the SDK records it).
+    pub total: u64,
+}
+
+/// How often progress may be reported when the percentage hasn't moved.
+/// Percentage changes are always reported, so this only paces uploads big
+/// enough that a single percent takes a while.
+const PROGRESS_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Upload a file to the homeserver, reporting real transfer progress.
+///
+/// matrix-sdk only *streams* — and therefore only measures — a request body
+/// when something is subscribed to its send-progress observable before the
+/// request is awaited (`subscriber_count() != 0` in its native http client), so
+/// the subscribe-then-await ordering here is load-bearing, and `upload_media`
+/// deliberately stays subscription-free for callers that don't need progress.
+///
+/// The observable only advances while the upload future is polled, so the
+/// subscriber is drained on a side task that is aborted once the upload
+/// resolves.
+pub async fn upload_media_with_progress<F>(
+    client: &Client,
+    data: Vec<u8>,
+    mime_type: &str,
+    on_progress: F,
+) -> Result<String, String>
+where
+    F: Fn(u64, u64) + Send + 'static,
+{
+    let mime: mime::Mime = mime_type
+        .parse()
+        .map_err(|e| format!("Invalid MIME type: {e}"))?;
+
+    let request = client.media().upload(&mime, data, None);
+    let mut progress = request.subscribe_to_send_progress();
+
+    let pump = tokio::spawn(async move {
+        let mut last_percent = u64::MAX;
+        let mut last_emit: Option<std::time::Instant> = None;
+        while let Some(p) = progress.next().await {
+            let transferred = p.current as u64;
+            let total = p.total as u64;
+            let percent = (transferred * 100).checked_div(total).unwrap_or(0);
+            let stale = last_emit.is_none_or(|t| t.elapsed() >= PROGRESS_MIN_INTERVAL);
+            if percent != last_percent || stale {
+                last_percent = percent;
+                last_emit = Some(std::time::Instant::now());
+                on_progress(transferred, total);
+            }
+        }
+    });
+
+    let response = request.await;
+    pump.abort();
+
+    let response = response.map_err(|e| format!("Failed to upload media: {e}"))?;
+
+    let mxc_url = response.content_uri.to_string();
+    info!(url = %mxc_url, "Media uploaded (with progress)");
+    Ok(mxc_url)
+}

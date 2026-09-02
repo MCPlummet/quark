@@ -277,7 +277,9 @@ export function roomInfoToEntry(r: RoomInfo): RoomEntry {
     name: r.name ?? r.room_id,
     unreadCount: r.unread_count,
     mentionCount: r.notification_count,
-    muted: false,
+    // Push-rule state from the backend. Older payloads (or a cache written
+    // before the field existed) omit it, which reads as unmuted.
+    muted: r.muted ?? false,
     dmUserId,
     presence,
   };
@@ -426,11 +428,19 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
  * the thread-open path (`actions/threads.ts`) and the live sync tail so a reply
  * arriving into an open thread renders exactly like one loaded with the thread.
  *
- * Note: ThreadMessageData has no `caption` field and the inline renderer draws
- * none, so an MSC2530 caption is dropped here — see the summary in #41.
+ * Carries the MSC2530 caption through like {@link timelineEventToMessage} does
+ * (#42). Note that with a caption present the event `body` *is* the caption and
+ * the filename lives in a separate field, so `mediaAlt` doubles as the caption
+ * text — the dedicated `caption` field is what the renderer draws beneath the
+ * media.
  */
 export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageData {
   const ownUserId = AppState.get("ownUserId");
+  // Prefer an already-fetched blob URL so revisiting a thread paints cached
+  // media instantly, exactly as the main-timeline mapper does; otherwise pass
+  // the raw mxc:// through for _downloadMessageImages to swap.
+  const mediaUrl =
+    (e.media_url ? _messageMediaCache.get(e.media_url) : undefined) ?? e.media_url ?? undefined;
   return {
     id: e.event_id,
     senderName: resolveDisplayName(e.sender),
@@ -439,8 +449,9 @@ export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageDat
     body: e.body,
     htmlBody: e.formatted_body ?? undefined,
     type: _messageTypeOf(e),
-    mediaUrl: e.media_url ?? undefined,
+    mediaUrl,
     mediaAlt: e.body,
+    caption: e.caption ?? undefined,
     mediaMimeType: e.media_mimetype ?? undefined,
     mediaEncryptionInfo: e.media_encryption_info ?? undefined,
     mediaThumbnailUrl: e.media_thumbnail_url ?? undefined,

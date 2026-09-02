@@ -3,7 +3,9 @@ use matrix_sdk::{
     room::MessagesOptions,
     ruma::{
         events::{
-            room::message::{MessageType, Relation, RoomMessageEventContent},
+            room::message::{
+                MessageType, OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
+            },
             AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
         },
         EventId, RoomId, UInt,
@@ -142,46 +144,7 @@ pub async fn get_thread_timeline(
                 );
 
                 if is_root || is_thread_reply {
-                    let body = match &ev.content.msgtype {
-                        MessageType::Text(t) => t.body.clone(),
-                        MessageType::Image(i) => i.body.clone(),
-                        _ => "[unsupported]".to_string(),
-                    };
-
-                    let formatted_body = match &ev.content.msgtype {
-                        MessageType::Text(t) => {
-                            t.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body))
-                        }
-                        _ => None,
-                    };
-
-                    let thread_root = if is_thread_reply {
-                        Some(thread_root_event_id.to_string())
-                    } else {
-                        None
-                    };
-
-                    thread_events.push(TimelineEvent {
-                        event_id: event_id_str,
-                        sender: ev.sender.to_string(),
-                        body,
-                        formatted_body,
-                        timestamp: ev.origin_server_ts.get().into(),
-                        msg_type: "m.text".to_string(),
-                        is_edit: false,
-                        relates_to_event_id: None,
-                        in_reply_to: None,
-                        thread_root,
-                        media_url: None,
-                        media_mimetype: None,
-                        media_width: None,
-                        media_height: None,
-                        caption: None,
-                        media_encryption_info: None,
-                        media_thumbnail_url: None,
-                        media_thumbnail_encryption_info: None,
-                        reactions: vec![],
-                    });
+                    thread_events.push(convert_thread_event(ev, is_root, thread_root_event_id));
                 }
             }
         }
@@ -191,6 +154,32 @@ pub async fn get_thread_timeline(
     thread_events.sort_by_key(|e| e.timestamp);
 
     Ok(thread_events)
+}
+
+/// Convert one thread event into a `TimelineEvent`.
+///
+/// Delegates to the main-timeline converter rather than hand-rolling a second
+/// one. The duplicate this replaced hardcoded `msg_type: "m.text"`, dropped
+/// every media field and the MSC2530 caption, and ignored edit/reply relations,
+/// so media in a thread rendered as a bare filename line — see #42, split out
+/// of #41 which fixed the same loss on the main-timeline live tail.
+///
+/// The only thread-specific part is `thread_root`: the shared converter derives
+/// it from the event's own `m.thread` relation, which the *root* event does not
+/// carry, so the root is forced to `None` and a reply missing the relation (it
+/// was matched some other way) is backfilled with the requested root.
+fn convert_thread_event(
+    ev: OriginalSyncRoomMessageEvent,
+    is_root: bool,
+    thread_root_event_id: &str,
+) -> TimelineEvent {
+    let mut te = crate::matrix::timeline::convert_sync_room_message(ev);
+    if is_root {
+        te.thread_root = None;
+    } else if te.thread_root.is_none() {
+        te.thread_root = Some(thread_root_event_id.to_string());
+    }
+    te
 }
 
 /// Send a reply in a thread.
@@ -231,4 +220,65 @@ pub async fn send_thread_reply(
     let event_id = response.event_id.to_string();
     info!(event_id = %event_id, thread_root = %thread_root_event_id, "Thread reply sent");
     Ok(event_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image_reply(root: &str, with_relation: bool) -> OriginalSyncRoomMessageEvent {
+        let mut content = serde_json::json!({
+            "msgtype": "m.image",
+            "body": "look at this cat",
+            "filename": "pasted-image-123.png",
+            "url": "mxc://example.com/abc123",
+            "info": { "mimetype": "image/png", "w": 800, "h": 600 }
+        });
+        if with_relation {
+            content["m.relates_to"] =
+                serde_json::json!({ "rel_type": "m.thread", "event_id": root });
+        }
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$reply:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": content,
+        }))
+        .expect("deserialize thread reply")
+    }
+
+    // #42: the thread path used to hardcode `m.text` and drop every media field
+    // plus the MSC2530 caption, so a captioned image posted in a thread reached
+    // the frontend as a bare body string.
+    #[test]
+    fn thread_reply_keeps_media_and_caption() {
+        let root = "$root:example.com";
+        let te = convert_thread_event(image_reply(root, true), false, root);
+        assert_eq!(te.msg_type, "m.image");
+        assert_eq!(te.caption.as_deref(), Some("look at this cat"));
+        assert_eq!(te.media_url.as_deref(), Some("mxc://example.com/abc123"));
+        assert_eq!(te.media_mimetype.as_deref(), Some("image/png"));
+        assert_eq!(te.media_width, Some(800));
+        assert_eq!(te.media_height, Some(600));
+        assert_eq!(te.thread_root.as_deref(), Some(root));
+    }
+
+    #[test]
+    fn thread_root_is_not_marked_as_its_own_reply() {
+        let root = "$root:example.com";
+        // Even if the event somehow carried a thread relation, the root of the
+        // thread being fetched must come back with `thread_root: None` so the
+        // frontend renders it as the root rather than a reply to itself.
+        let te = convert_thread_event(image_reply(root, true), true, root);
+        assert_eq!(te.thread_root, None);
+        assert_eq!(te.msg_type, "m.image");
+    }
+
+    #[test]
+    fn reply_without_a_relation_is_backfilled_with_the_requested_root() {
+        let root = "$root:example.com";
+        let te = convert_thread_event(image_reply(root, false), false, root);
+        assert_eq!(te.thread_root.as_deref(), Some(root));
+    }
 }

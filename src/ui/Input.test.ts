@@ -297,4 +297,43 @@ describe("Input", () => {
       expect(bar.classList.contains("input-bar--no-vim")).toBe(false);
     });
   });
+
+  describe("attachment progress (#63)", () => {
+    const region = () => input.getElement().querySelector<HTMLElement>(".attach-progress")!;
+    const rowCount = () => region().querySelectorAll(".attach-progress__row").length;
+
+    it("mounts a hidden progress region above the compose bar", () => {
+      expect(region()).not.toBeNull();
+      expect(region().style.display).toBe("none");
+      expect(rowCount()).toBe(0);
+      // Ahead of the paste preview and the bar itself, so the composer reads
+      // top-down in the order things happened.
+      const children = [...input.getElement().children];
+      expect(children.indexOf(region())).toBeLessThan(
+        children.indexOf(input.getElement().querySelector(".paste-preview")!),
+      );
+    });
+
+    it("shows a named row while an attachment is in flight", () => {
+      input.startAttachmentProgress("cat.png");
+
+      expect(region().style.display).not.toBe("none");
+      expect(rowCount()).toBe(1);
+      expect(region().querySelector(".attach-progress__name")?.textContent).toBe("cat.png");
+    });
+
+    it("clears the region once the attachment finishes", () => {
+      vi.useFakeTimers();
+      try {
+        const row = input.startAttachmentProgress("cat.png");
+        row.succeed();
+        vi.advanceTimersByTime(2000);
+
+        expect(rowCount()).toBe(0);
+        expect(region().style.display).toBe("none");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

@@ -38,7 +38,6 @@ export function applySetOptions(cfg: AppConfig, sets: SetOption[]): AppConfig {
       case "vim_mode":        if (typeof value === "boolean") updated.general.vim_mode = value; break;
       case "send_key_behavior": if (value === "auto" || value === "enter" || value === "newline") updated.general.send_key_behavior = value; break;
       // sync
-      case "sliding_sync":    if (typeof value === "boolean") updated.sync.sliding_sync = value; break;
       case "timeline_limit":  if (typeof value === "number")  updated.sync.timeline_limit = value; break;
       // media
       case "auto_load_images":  if (typeof value === "boolean") updated.media.auto_load_images = value; break;

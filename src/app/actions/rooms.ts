@@ -6,6 +6,7 @@ import { isMobile, closeDrawer } from "../mobile.js";
 
 import {
   getRoomMembers,
+  findDmRoom,
   getRoomReceipts,
   getTimeline,
   getSpaceChildren,
@@ -200,6 +201,10 @@ export async function selectRoom(
   // Swap compose drafts before anything else touches the box, so the outgoing
   // room's text is stashed and the incoming room's draft appears at once (#34).
   if (prevRoom !== roomId) swapComposeDraft(prevRoom, roomId);
+  // …and scope the attachment rows the same way. The composer is shared, so
+  // without this a failed upload in the room being left parks its error row in
+  // whatever room the user lands in next.
+  getComponents().input.setAttachmentRoom(roomId);
   // Remember this room as the active space's chat so switching away and back
   // restores it instead of leaving a foreign room in the timeline (#11).
   const activeSpace = AppState.get("currentSpaceId");
@@ -985,20 +990,23 @@ function clearActiveRoom(): void {
   if (AppState.get("currentRoomId") === null) return;
   AppState.set("currentRoomId", null);
   AppState.set("currentTimeline", []);
-  const { timeline, roomHeader } = getComponents();
+  const { timeline, roomHeader, input } = getComponents();
+  input.setAttachmentRoom(null);
   timeline.setMessages([]);
   roomHeader.setRoom(""); // blank default state — same as the header's initial render
 }
 
 /**
  * Navigate to an existing DM room with `userId`, or create one if none exists.
+ *
+ * The "does a DM already exist" question is answered by the backend from the
+ * account's `m.direct` mapping, not by scanning the cached room list. The old
+ * scan (#68) walked `roomListCache` for `is_direct` rooms under a member-count
+ * bound and fetched each one's members over IPC to confirm, which missed a DM
+ * whose other party had left, one that was still an unaccepted invite, and one
+ * that simply hadn't reached the cache yet — and every miss silently created a
+ * *second* DM room with the same person.
  */
-/** Upper bound on how large an `is_direct` room may be before the DM scan
- *  below stops fetching its member list. Not a DM test — a bridged DM carries
- *  a relay bot or two beyond the humans, so the bound has to clear that while
- *  still refusing to page in a 500-member room the user marked direct. */
-const DM_SCAN_MEMBER_LIMIT = 8;
-
 export async function openOrCreateDm(userId: string): Promise<void> {
   // Fast path: use cached room ID from a previously visited DM
   const cachedRoomId = _dmRoomByUser.get(userId);
@@ -1007,23 +1015,46 @@ export async function openOrCreateDm(userId: string): Promise<void> {
     return;
   }
 
-  // Scan the cached room list for a known DM with this user
-  const rooms = AppState.get("roomListCache");
-  const ownUserId = AppState.get("ownUserId");
-  for (const room of rooms) {
-    if (!room.is_direct || room.member_count > DM_SCAN_MEMBER_LIMIT) continue;
-    // Fetch members to verify — the count above is only a cost bound on this
-    // fetch, not a definition of DM-ness (see isDm in pseudo_spaces.ts).
-    try {
-      const members = await getRoomMembers(room.room_id);
-      if (members.some((m) => m.user_id === userId) &&
-          members.some((m) => m.user_id === ownUserId)) {
-        _dmRoomByUser.set(userId, room.room_id);
-        _dmUserByRoom.set(room.room_id, userId);
-        await selectRoom(room.room_id);
+  // Authoritative lookup against m.direct (a local store read in Rust). Scoped
+  // tightly to the lookup itself: a failure here must not fall through to
+  // createRoom (that is the duplicate-room bug), but nor should a later
+  // navigation error be reported as if the lookup had failed.
+  let existing: string | null;
+  try {
+    existing = await findDmRoom(userId);
+  } catch (err) {
+    showError(`Failed to look up DM: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  if (existing) {
+    _dmRoomByUser.set(userId, existing);
+    _dmUserByRoom.set(existing, userId);
+    // A DM that m.direct knows about but the room list doesn't (an unaccepted
+    // invite, or one sync hasn't surfaced yet) needs a refresh first, or
+    // selectRoom opens a room with no cache entry behind it.
+    const inRoomList = () => AppState.get("roomListCache").some((r) => r.room_id === existing);
+    if (!inRoomList()) {
+      try {
+        await refreshRooms();
+        // Still absent: `get_rooms` enumerates `joined_rooms()` alone, so no
+        // refresh can ever surface the pending invite `find_dm_room`
+        // deliberately ranks as a candidate. Accept it — the user asked to
+        // message this person, and a room you haven't joined has no timeline to
+        // read. Otherwise selectRoom ran with no RoomInfo behind it at all: a
+        // raw "!id:server" for the room name, no topic/member count/encryption,
+        // and a getTimeline against a room this account isn't in.
+        if (!inRoomList()) {
+          await ipcJoinRoom(existing);
+          await refreshRooms();
+        }
+      } catch (err) {
+        showError(`Failed to open DM: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
-    } catch { /* skip on error */ }
+    }
+    await selectRoom(existing);
+    return;
   }
 
   // No existing DM found — create one
@@ -1262,9 +1293,11 @@ export async function refreshRooms(): Promise<void> {
     }));
     spaceStrip.setSpaces(spaceItems);
 
-    // Resolve space avatar mxc:// URLs in the background
+    // Resolve space avatar mxc:// URLs in the background. The strip keeps the
+    // ones it has already resolved across re-renders, so a refresh only fetches
+    // what is genuinely new rather than re-downloading every avatar per sync.
     for (const s of topLevelSpaces) {
-      if (s.avatar_url?.startsWith("mxc://")) {
+      if (s.avatar_url?.startsWith("mxc://") && !spaceStrip.hasResolvedAvatar(s.room_id)) {
         const mxcUrl = s.avatar_url;
         const roomId = s.room_id;
         // Use full media (not thumbnail) so animated GIF/WEBP space avatars are preserved.
@@ -1273,7 +1306,12 @@ export async function refreshRooms(): Promise<void> {
             const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
             spaceStrip.updateSpaceAvatar(roomId, dataUrl);
           })
-          .catch(() => { /* non-critical */ });
+          .catch((err) => {
+            // Non-fatal — the space keeps its letter fallback. Logged rather
+            // than swallowed: a silent catch here hid a space-icon bug for
+            // several releases.
+            console.warn(`Failed to resolve avatar for space ${roomId}:`, err);
+          });
       }
     }
 

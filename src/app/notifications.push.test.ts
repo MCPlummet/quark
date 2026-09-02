@@ -112,3 +112,79 @@ describe("initNotifications, on iOS", () => {
     expect(setPushEnabled).not.toHaveBeenCalled();
   });
 });
+
+// The plugin answers null to is_permission_granted both for a permission that
+// has never been requested and for one it cannot ask about. Reading the first
+// as the second is what left new installs unprompted and unregistered.
+describe("initNotifications, on a fresh install", () => {
+  // is_permission_granted -> null (PermissionState::Prompt), then whatever the
+  // system dialog came back with.
+  const firstRun = (answer: string) =>
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === "plugin:notification|is_permission_granted") return null;
+      if (cmd === "plugin:notification|request_permission") return answer;
+      return undefined;
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPlatform).mockResolvedValue("ios");
+    vi.mocked(getNotificationConfig).mockResolvedValue(config({ push_enabled: false }));
+  });
+
+  it("asks for the permission when it has never been requested", async () => {
+    firstRun("granted");
+
+    await initNotifications();
+
+    expect(invoke).toHaveBeenCalledWith("plugin:notification|request_permission");
+  });
+
+  it("registers a pusher once the user grants it", async () => {
+    firstRun("granted");
+
+    await initNotifications();
+
+    expect(setPushEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("leaves push off when the user declines the prompt", async () => {
+    firstRun("denied");
+
+    await initNotifications();
+
+    expect(setPushEnabled).not.toHaveBeenCalled();
+  });
+
+  it("unregisters an existing pusher when the user declines", async () => {
+    vi.mocked(getNotificationConfig).mockResolvedValue(config({ push_enabled: true }));
+    firstRun("denied");
+
+    await initNotifications();
+
+    expect(setPushEnabled).toHaveBeenCalledWith(false);
+  });
+
+  // A prompt swiped away is not a decision. Collapsing "default" into the same
+  // `false` as a denial tore down a working pusher over a dialog nobody
+  // answered — `null` is what the three-way contract exists for.
+  it("leaves the pusher alone when the prompt is dismissed unanswered", async () => {
+    vi.mocked(getNotificationConfig).mockResolvedValue(config({ push_enabled: true }));
+    firstRun("default");
+
+    await initNotifications();
+
+    expect(setPushEnabled).not.toHaveBeenCalled();
+  });
+
+  // Desktop, mock mode and a build without the plugin still have to stay quiet:
+  // an unanswerable query must not unregister a working pusher.
+  it("neither asks nor touches push when the plugin is missing", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("no such plugin"));
+
+    await initNotifications();
+
+    expect(invoke).not.toHaveBeenCalledWith("plugin:notification|request_permission");
+    expect(setPushEnabled).not.toHaveBeenCalled();
+  });
+});

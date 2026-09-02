@@ -65,9 +65,20 @@ export class RoomInfoDialog extends DialogBase {
     const actions = document.createElement("div");
     actions.className = "room-info-dialog__actions";
 
-    // Mute toggle
-    const config = await getConfig().catch(() => null);
-    const isMuted = config?.mute_rooms.includes(roomId) ?? false;
+    // Mute toggle. The push rule *is* the mute (DESIGN.md → Push
+    // notifications), so the button must reflect the ruleset the backend
+    // reports on RoomInfo — a mute set from another client shows up there and
+    // never in the local list. `mute_rooms` stays as the offline fallback: it
+    // is all we have when the room isn't in the cache yet (cold start, or a
+    // room the store hasn't synced), where "did we try to mute this here" is
+    // the best available answer.
+    let isMuted: boolean;
+    if (room?.muted !== undefined) {
+      isMuted = room.muted;
+    } else {
+      const config = await getConfig().catch(() => null);
+      isMuted = config?.mute_rooms.includes(roomId) ?? false;
+    }
 
     const muteBtn = document.createElement("button");
     muteBtn.type = "button";
@@ -80,6 +91,14 @@ export class RoomInfoDialog extends DialogBase {
         } else {
           await muteRoom(roomId);
         }
+        // Patch the cached RoomInfo so reopening the dialog before the next
+        // room-list refresh doesn't show the state we just changed away from.
+        AppState.set(
+          "roomListCache",
+          AppState.get("roomListCache").map((r) =>
+            r.room_id === roomId ? { ...r, muted: !isMuted } : r
+          )
+        );
         this.hide();
       } catch {
         muteBtn.textContent = "[error]";

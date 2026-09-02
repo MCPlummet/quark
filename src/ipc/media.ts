@@ -120,8 +120,16 @@ export async function sendFile(
   mimeType: string,
   filename: string,
   fileSize?: number,
+  uploadId?: string,
 ): Promise<string> {
-  return invoke<string>("send_file", { roomId, dataBase64, mimeType, filename, fileSize: fileSize ?? null });
+  return invoke<string>("send_file", {
+    roomId,
+    dataBase64,
+    mimeType,
+    filename,
+    fileSize: fileSize ?? null,
+    uploadId: uploadId ?? null,
+  });
 }
 
 /**
@@ -138,6 +146,7 @@ export async function sendVideo(
   height?: number,
   durationMs?: number,
   fileSize?: number,
+  uploadId?: string,
 ): Promise<string> {
   return invoke<string>("send_video", {
     roomId,
@@ -148,6 +157,7 @@ export async function sendVideo(
     height: height ?? null,
     durationMs: durationMs ?? null,
     fileSize: fileSize ?? null,
+    uploadId: uploadId ?? null,
   });
 }
 
@@ -250,6 +260,7 @@ export async function sendPastedImage(
   filename: string,
   caption?: string,
   replyToEventId?: string,
+  uploadId?: string,
 ): Promise<string> {
   return invoke<string>("send_pasted_image", {
     roomId,
@@ -258,7 +269,55 @@ export async function sendPastedImage(
     filename,
     caption: caption ?? null,
     replyToEventId: replyToEventId ?? null,
+    uploadId: uploadId ?? null,
   });
+}
+
+// ─── Attachment upload progress ──────────────────────────────────────────────
+
+/**
+ * Tauri event carrying real byte progress for an in-flight attachment upload.
+ * Emitted by the backend only when the send was given an `uploadId`; matches
+ * `matrix::media::EVENT_ATTACHMENT_PROGRESS`.
+ */
+export const EVENT_ATTACHMENT_PROGRESS = "quark://attachment/progress";
+
+/** Payload of `EVENT_ATTACHMENT_PROGRESS` — matches `media::AttachmentProgress`. */
+export interface AttachmentProgressPayload {
+  upload_id: string;
+  /** Bytes handed to the transport so far. */
+  transferred: number;
+  /** Total bytes of the request body; 0 before the SDK records it. */
+  total: number;
+}
+
+/**
+ * Mint an id for one attachment send, so its progress events can be told apart
+ * from a concurrent upload's. Minted frontend-side because the row that renders
+ * the progress exists before the command is invoked.
+ */
+export function newUploadId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  return `up-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Subscribe to attachment upload progress. Resolves to an unlisten function.
+ * Outside Tauri (browser/mock dev) there is nothing to listen to, so this
+ * degrades to a no-op rather than failing the send.
+ */
+export async function listenAttachmentProgress(
+  onProgress: (p: AttachmentProgressPayload) => void,
+): Promise<() => void> {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    return await listen<AttachmentProgressPayload>(EVENT_ATTACHMENT_PROGRESS, (e) =>
+      onProgress(e.payload),
+    );
+  } catch {
+    return () => {};
+  }
 }
 
 // ─── URL Preview ─────────────────────────────────────────────────────────────

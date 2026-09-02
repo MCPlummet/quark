@@ -3,11 +3,11 @@
 import { createReactionBar, updateReactionBar, type ReactionGroup } from "./Reactions.js";
 import { invoke } from "../ipc/invoke.js";
 import type { SearchResult } from "../ipc/types.js";
-import type { ThreadMessageData } from "./ThreadView.js";
+import { appendCaption, type ThreadMessageData } from "./ThreadView.js";
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { hashColor } from "./avatarColors.js";
 import { isMobile, viewportPan } from "../app/mobile.js";
-import { openExternalUrl } from "../app/links.js";
+import { appendLinkifiedText, decorateMessageLinks } from "../app/links.js";
 import { mountOverlay } from "./overlay.js";
 
 // ── Blob URL management ───────────────────────────────────────────────────────
@@ -37,44 +37,11 @@ function revokeActiveBlobUrls(): void {
 }
 
 // ── URL linkification ─────────────────────────────────────────────────────────
-
-const URL_REGEX = /https?:\/\/[^\s<>"')\]]+/g;
-
-/**
- * Render plain text with http/https URLs as clickable anchor elements.
- * Splits the text on URL boundaries and appends text nodes + <a> tags.
- */
-function appendLinkifiedText(container: HTMLElement, text: string): void {
-  let last = 0;
-  let match: RegExpExecArray | null;
-  URL_REGEX.lastIndex = 0;
-  while ((match = URL_REGEX.exec(text)) !== null) {
-    if (match.index > last) {
-      container.appendChild(document.createTextNode(text.slice(last, match.index)));
-    }
-    const url = match[0].replace(/[.,;:!?]+$/, ""); // strip trailing punctuation
-    const a = document.createElement("a");
-    a.href = url;
-    // Only the mobile WebView needs target=_blank to register taps as a real
-    // link. On desktop, target=_blank makes wry open the URL in the system
-    // browser itself — which, together with the explicit openExternalUrl()
-    // below, opened every link twice. So set it on mobile only.
-    if (isMobile()) a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    a.textContent = url;
-    a.className = "message__link";
-    a.title = url;
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
-      openExternalUrl(url);
-    });
-    container.appendChild(a);
-    last = match.index + url.length;
-  }
-  if (last < text.length) {
-    container.appendChild(document.createTextNode(text.slice(last)));
-  }
-}
+//
+// Both the plain-text linkifier (`appendLinkifiedText`) and the
+// `formatted_body` HTML path (`decorateMessageLinks`) live in app/links.ts so
+// markdown links and bare URLs render identically, and so activation is
+// handled once by the global link guard installed there.
 
 /**
  * Activate Matrix spoilers (MSC2010 / `data-mx-spoiler`) inside a freshly
@@ -664,27 +631,11 @@ function buildMessageElement(msg: MessageData): HTMLElement {
           img.removeAttribute("src");
         }
       }
-      // Intercept all anchor clicks so they open in the system browser rather
-      // than navigating the Tauri WebView away from the chat UI. Keep the href
-      // attribute so iOS WebView treats the element as a real link (taps fire
-      // click events; the OS popup blocker accepts window.open from the handler).
-      for (const a of body.querySelectorAll<HTMLAnchorElement>("a[href]")) {
-        const href = a.getAttribute("href") ?? "";
-        if (href.startsWith("http://") || href.startsWith("https://")) {
-          // Mobile-only target=_blank — see appendLinkifiedText: on desktop it
-          // makes wry open the link a second time alongside openExternalUrl().
-          if (isMobile()) a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          a.addEventListener("click", (e) => {
-            e.preventDefault();
-            openExternalUrl(href);
-          });
-        } else {
-          a.removeAttribute("href");
-          a.setAttribute("role", "link");
-          a.style.cursor = "pointer";
-        }
-      }
+      // Give anchors from formatted_body the same class, rel and tooltip the
+      // linkifier gives bare URLs (#51), and strip non-http hrefs so nothing
+      // can navigate the WebView. Activation goes through the global link
+      // guard in app/links.ts, so no per-anchor listener is attached here.
+      decorateMessageLinks(body);
       setupSpoilers(body);
     } else {
       appendLinkifiedText(body, msg.body);
@@ -2096,17 +2047,20 @@ export class Timeline {
       img.alt = msg.mediaAlt ?? type;
       img.loading = "lazy";
       row.appendChild(img);
+      appendCaption(row, "thread-inline", msg.caption);
     } else if (type === "video") {
       const aff = buildVideoAffordance(msg.mediaUrl, msg.mediaAlt, msg.mediaMimeType, msg.mediaEncryptionInfo, msg.mediaThumbnailUrl, msg.mediaThumbnailEncryptionInfo);
       row.appendChild(aff);
+      appendCaption(row, "thread-inline", msg.caption);
     } else {
       const body = document.createElement("div");
       body.className = "thread-inline__message-body";
       if (msg.htmlBody) {
         body.innerHTML = msg.htmlBody;
+        decorateMessageLinks(body);
         setupSpoilers(body);
       } else {
-        body.textContent = msg.body;
+        appendLinkifiedText(body, msg.body);
       }
       row.appendChild(body);
     }
@@ -2336,7 +2290,13 @@ export class Timeline {
     const idx = this._messages.findIndex((m) => m.id === eventId);
     if (idx >= 0) {
       this._messages[idx].body = newBody;
-      if (newHtmlBody !== undefined) this._messages[idx].htmlBody = newHtmlBody;
+      // Assigned unconditionally, `undefined` included: the edit's formatted
+      // body is the whole truth about the new content, so an edit that strips
+      // all formatting has to clear the stashed HTML too. Skipping the write
+      // left the pre-edit markup in the buffer while the DOM below painted the
+      // plain text, and the message reverted to its old rendering the next time
+      // `setMessages`/`_cullWindow` rebuilt the group from `MessageData`.
+      this._messages[idx].htmlBody = newHtmlBody;
     }
     const el = this.getMessageElementById(eventId);
     if (!el) return;
@@ -2344,9 +2304,23 @@ export class Timeline {
     if (!bodyEl) return;
     if (newHtmlBody) {
       bodyEl.innerHTML = newHtmlBody;
+      // Same mxc:// stashing the initial render does (see buildMessageElement):
+      // custom-emoji <img>s arrive with an unloadable mxc:// src, which is moved
+      // to data-mxc so the app layer can download and swap in a data: URL.
+      for (const img of bodyEl.querySelectorAll<HTMLImageElement>("img[data-mx-emoticon]")) {
+        const src = img.getAttribute("src") ?? "";
+        if (src.startsWith("mxc://")) {
+          img.dataset.mxc = src;
+          img.removeAttribute("src");
+        }
+      }
+      decorateMessageLinks(bodyEl);
       setupSpoilers(bodyEl);
     } else {
-      bodyEl.textContent = newBody;
+      // Re-linkify: assigning textContent would drop the anchors the initial
+      // render produced, leaving an edited message's URLs as dead plain text.
+      bodyEl.textContent = "";
+      appendLinkifiedText(bodyEl, newBody);
     }
     // Mark as edited if not already marked
     if (!el.querySelector(".message__edited-marker")) {
@@ -2358,7 +2332,21 @@ export class Timeline {
     }
   }
 
+  /** Swap a sender's fallback initial for their downloaded avatar.
+   *
+   *  Writes the URL back into the message buffer as well as the DOM — like
+   *  `updateMessageBody` and `updateMessageMedia` do. Patching only the DOM was
+   *  #55: `_cullWindow`/`_extendWindowUp` rebuild groups from `MessageData` via
+   *  `buildMessageGroup`, so any avatar that arrived *after* its group was
+   *  first rendered reverted to the initial-letter fallback on the next
+   *  re-render — which the cull schedules ~120ms after a scroll settles, i.e.
+   *  exactly when the user pages back through history. */
   updateSenderAvatar(sender: string, dataUrl: string): void {
+    // `data-sender` is `senderId ?? senderName` (see buildMessageGroup), so
+    // match on the same fallback chain rather than senderId alone.
+    for (const m of this._messages) {
+      if ((m.senderId ?? m.senderName) === sender) m.senderAvatarUrl = dataUrl;
+    }
     const wrappers = this._listEl.querySelectorAll<HTMLElement>(`[data-sender="${CSS.escape(sender)}"]`);
     for (const wrapper of wrappers) {
       const fallback = wrapper.querySelector<HTMLElement>(".message-group__avatar-fallback");

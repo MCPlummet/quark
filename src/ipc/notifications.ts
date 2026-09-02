@@ -54,10 +54,28 @@ export interface PushStatus {
    * resolve on its own.
    */
   distributors: string[];
+  /**
+   * The account-wide `.m.rule.master` mute is on, so the homeserver notifies
+   * for nothing at all. Carried separately from `readiness` because a user who
+   * has push switched off still reads `off` — the mute is then a fact about
+   * their account rather than about push.
+   */
+  account_muted: boolean;
 }
 
-/** How far push has got — matches push::PushReadiness */
-export type PushReadiness = "off" | "no_transport" | "waiting" | "ready";
+/**
+ * How far push has got — matches push::PushReadiness.
+ *
+ * `muted_account` is the rung that is not about this device at all: the
+ * account-wide `.m.rule.master` rule silences push evaluation for every client,
+ * so the rest of the chain can be complete and still deliver nothing.
+ */
+export type PushReadiness =
+  | "off"
+  | "muted_account"
+  | "no_transport"
+  | "waiting"
+  | "ready";
 
 /** Background-sync snapshot — matches mobile_sync::BackgroundSyncState */
 export interface BackgroundSyncState {
@@ -179,4 +197,26 @@ export async function setPushEnabled(enabled: boolean): Promise<void> {
  */
 export async function selectPushDistributor(distributor: string): Promise<void> {
   return invoke<void>("select_push_distributor", { distributor });
+}
+
+/**
+ * Is the account-wide `.m.rule.master` mute on?
+ *
+ * Asked separately from `getPushStatus` because it is not a push question:
+ * the rule empties `push_actions` on the warm sync path too, so it silences a
+ * desktop build — which never renders a push section — just as completely.
+ * Answers `false` when there is no session rather than throwing.
+ */
+export async function getAccountMute(): Promise<boolean> {
+  return invoke<boolean>("get_account_mute");
+}
+
+/**
+ * Turn the account-wide mute on or off, for every client on the account.
+ *
+ * The way out of a state Quark cannot otherwise fix: the rule is written by
+ * some other client, so without this the user has to go back and find it.
+ */
+export async function setAccountMute(muted: boolean): Promise<void> {
+  return invoke<void>("set_account_mute", { muted });
 }
