@@ -2301,7 +2301,13 @@ export class Timeline {
     const idx = this._messages.findIndex((m) => m.id === eventId);
     if (idx >= 0) {
       this._messages[idx].body = newBody;
-      if (newHtmlBody !== undefined) this._messages[idx].htmlBody = newHtmlBody;
+      // Assigned unconditionally, `undefined` included: the edit's formatted
+      // body is the whole truth about the new content, so an edit that strips
+      // all formatting has to clear the stashed HTML too. Skipping the write
+      // left the pre-edit markup in the buffer while the DOM below painted the
+      // plain text, and the message reverted to its old rendering the next time
+      // `setMessages`/`_cullWindow` rebuilt the group from `MessageData`.
+      this._messages[idx].htmlBody = newHtmlBody;
     }
     const el = this.getMessageElementById(eventId);
     if (!el) return;

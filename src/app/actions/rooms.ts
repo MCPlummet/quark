@@ -1028,8 +1028,25 @@ export async function openOrCreateDm(userId: string): Promise<void> {
     // A DM that m.direct knows about but the room list doesn't (an unaccepted
     // invite, or one sync hasn't surfaced yet) needs a refresh first, or
     // selectRoom opens a room with no cache entry behind it.
-    if (!AppState.get("roomListCache").some((r) => r.room_id === existing)) {
-      await refreshRooms();
+    const inRoomList = () => AppState.get("roomListCache").some((r) => r.room_id === existing);
+    if (!inRoomList()) {
+      try {
+        await refreshRooms();
+        // Still absent: `get_rooms` enumerates `joined_rooms()` alone, so no
+        // refresh can ever surface the pending invite `find_dm_room`
+        // deliberately ranks as a candidate. Accept it — the user asked to
+        // message this person, and a room you haven't joined has no timeline to
+        // read. Otherwise selectRoom ran with no RoomInfo behind it at all: a
+        // raw "!id:server" for the room name, no topic/member count/encryption,
+        // and a getTimeline against a room this account isn't in.
+        if (!inRoomList()) {
+          await ipcJoinRoom(existing);
+          await refreshRooms();
+        }
+      } catch (err) {
+        showError(`Failed to open DM: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
     }
     await selectRoom(existing);
     return;

@@ -48,7 +48,7 @@ vi.mock("./context.js", async (importActual) => {
 import { openOrCreateDm } from "./rooms.js";
 import { setComponents, _dmRoomByUser, _dmUserByRoom } from "./context.js";
 import { AppState } from "../state.js";
-import { findDmRoom, createRoom, getRooms } from "../../ipc/index.js";
+import { findDmRoom, createRoom, getRooms, joinRoom } from "../../ipc/index.js";
 import { showError } from "../../ui/NotificationToast.js";
 import type { AppComponents } from "../../ui/App.js";
 import type { RoomInfo } from "../../ipc/types.js";
@@ -81,6 +81,10 @@ describe("openOrCreateDm (#68)", () => {
     _dmRoomByUser.clear();
     _dmUserByRoom.clear();
     setComponents(fakeComponents());
+    // `clearAllMocks` clears calls but not implementations, so re-establish the
+    // defaults the per-test overrides below replace.
+    vi.mocked(getRooms).mockResolvedValue([]);
+    vi.mocked(joinRoom).mockResolvedValue("!joined:x");
     AppState.patch({ roomListCache: [], currentRoomId: null, currentTimeline: [] });
   });
 
@@ -97,17 +101,55 @@ describe("openOrCreateDm (#68)", () => {
     expect(_dmUserByRoom.get("!existing:x")).toBe("@alice:x");
   });
 
-  it("finds a DM missing from the room-list cache, refreshing before opening it", async () => {
-    // The precise miss that produced the duplicate: an unaccepted invite, or a
-    // DM sync hasn't surfaced yet. The old scan only ever looked at the cache.
+  it("refreshes for a DM sync hasn't surfaced yet, without joining it", async () => {
+    // One of the misses that produced the duplicate: the room is joined, just
+    // not in the cache yet. The old scan only ever looked at the cache.
     AppState.set("roomListCache", []);
-    vi.mocked(findDmRoom).mockResolvedValue("!invited:x");
+    vi.mocked(findDmRoom).mockResolvedValue("!late:x");
+    vi.mocked(getRooms).mockResolvedValue([makeRoom("!late:x")]);
 
     await openOrCreateDm("@bob:x");
 
     expect(createRoom).not.toHaveBeenCalled();
     expect(getRooms).toHaveBeenCalled();
+    expect(joinRoom).not.toHaveBeenCalled();
+    expect(AppState.get("currentRoomId")).toBe("!late:x");
+    expect(_dmRoomByUser.get("@bob:x")).toBe("!late:x");
+  });
+
+  it("accepts a pending DM invite, which no room-list refresh can surface", async () => {
+    // The other miss: `find_dm_room` ranks invited rooms as candidates, but
+    // `get_rooms` enumerates `joined_rooms()` alone — so refreshing can never
+    // produce this one however many times it runs. Left unjoined, selectRoom
+    // ran with no RoomInfo behind it at all: a raw "!id:server" in the header,
+    // no topic/member count/encryption, and a getTimeline against a room this
+    // account isn't in.
+    AppState.set("roomListCache", []);
+    vi.mocked(findDmRoom).mockResolvedValue("!invited:x");
+    vi.mocked(joinRoom).mockImplementation(async () => {
+      vi.mocked(getRooms).mockResolvedValue([makeRoom("!invited:x")]);
+      return "!invited:x";
+    });
+
+    await openOrCreateDm("@bob:x");
+
+    expect(createRoom).not.toHaveBeenCalled();
+    expect(joinRoom).toHaveBeenCalledWith("!invited:x");
+    expect(AppState.get("roomListCache").map((r) => r.room_id)).toContain("!invited:x");
+    expect(AppState.get("currentRoomId")).toBe("!invited:x");
     expect(_dmRoomByUser.get("@bob:x")).toBe("!invited:x");
+  });
+
+  it("reports a failed invite accept instead of opening a room it cannot read", async () => {
+    AppState.set("roomListCache", []);
+    vi.mocked(findDmRoom).mockResolvedValue("!invited:x");
+    vi.mocked(joinRoom).mockRejectedValue(new Error("invite withdrawn"));
+
+    await openOrCreateDm("@bob:x");
+
+    expect(showError).toHaveBeenCalled();
+    expect(createRoom).not.toHaveBeenCalled();
+    expect(AppState.get("currentRoomId")).toBeNull();
   });
 
   it("finds a DM the other party has left, which has no members to scan", async () => {

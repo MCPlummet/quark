@@ -82,7 +82,27 @@ function readBlobAsBase64(blob: Blob, onProgress?: (loaded: number, total: numbe
   if (typeof FileReader !== "undefined") {
     const reader = new FileReader();
     let cancelled = false;
+    // Assigned synchronously by the executor below, before `new Promise` returns.
+    let cancel!: () => void;
     const promise = new Promise<string>((resolve, reject) => {
+      // Cancelling rejects from here rather than leaning on an `abort` event:
+      // `abort()` on a reader that already reached DONE dispatches nothing, and
+      // it can throw in its own right. Either way `onabort` never ran, while
+      // `onload`/`onerror` bail out on `cancelled` — leaving this promise
+      // pending forever. `runAttachment` then never returned: the row stayed on
+      // screen for good, the blob stayed pinned, and `sendPendingImage` never
+      // reached the `restore()` that puts a cancelled image back in the
+      // composer, so the staged image was simply lost.
+      cancel = () => {
+        if (cancelled) return;
+        cancelled = true;
+        reject(new AttachmentCancelled());
+        try {
+          reader.abort();
+        } catch {
+          /* nothing left to abort */
+        }
+      };
       reader.onload = () => {
         if (cancelled) return;
         const result = String(reader.result ?? "");
@@ -93,23 +113,14 @@ function readBlobAsBase64(blob: Blob, onProgress?: (loaded: number, total: numbe
         if (cancelled) return;
         reject(reader.error ?? new Error("Failed to read file"));
       };
-      reader.onabort = () => reject(new AttachmentCancelled());
+      // No `onabort` handler: `abort()` is reached only through `cancel()`
+      // above, which has already settled the promise by the time it fires.
       reader.onprogress = (e) => {
         if (e.lengthComputable) onProgress?.(e.loaded, e.total);
       };
       reader.readAsDataURL(blob);
     });
-    return {
-      promise,
-      cancel: () => {
-        cancelled = true;
-        try {
-          reader.abort();
-        } catch {
-          /* already settled */
-        }
-      },
-    };
+    return { promise, cancel };
   }
 
   let cancelled = false;

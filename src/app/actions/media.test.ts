@@ -271,6 +271,48 @@ describe("attachment progress (#63)", () => {
     expect(rowApi.fail).not.toHaveBeenCalled();
   });
 
+  it("settles the read when the reader's abort dispatches nothing", async () => {
+    // `abort()` on a reader that has already reached DONE dispatches no `abort`
+    // event, and it can throw in its own right — both were swallowed, while
+    // onload/onerror bail out once cancelled. The read promise then never
+    // settled, so `runAttachment` never returned: the row stayed on screen for
+    // good, the blob stayed pinned, and a cancelled `sendPendingImage` never
+    // reached the `restore()` that hands the staged image back to the composer.
+    class SilentAbortReader {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      onprogress: ((e: ProgressEvent) => void) | null = null;
+      result: string | null = null;
+      error: DOMException | null = null;
+      readAsDataURL(): void {
+        /* never completes on its own; the test cancels instead */
+      }
+      abort(): void {
+        throw new Error("abort on a reader that is already DONE");
+      }
+    }
+    const RealFileReader = globalThis.FileReader;
+    globalThis.FileReader = SilentAbortReader as unknown as typeof FileReader;
+    startAttachmentProgress.mockImplementationOnce((_name, onCancel) => {
+      queueMicrotask(() => onCancel?.());
+      return rowApi;
+    });
+
+    try {
+      const outcome = await Promise.race([
+        handleFilePick(file()).then(() => "settled"),
+        new Promise((r) => setTimeout(() => r("hung"), 50)),
+      ]);
+
+      expect(outcome).toBe("settled");
+      expect(sendFile).not.toHaveBeenCalled();
+      expect(rowApi.dismiss).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.FileReader = RealFileReader;
+    }
+  });
+
   it("still sends when the composer can't show a row", async () => {
     startAttachmentProgress.mockImplementationOnce(() => {
       throw new Error("no composer");

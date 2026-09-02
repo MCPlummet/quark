@@ -774,6 +774,14 @@ the same person. The SDK deliberately keeps a departed member in the room's
 beats an invite and the most recently active wins. A failed lookup is reported,
 never treated as "no DM exists".
 
+When the resolved room is a pending invite, opening it accepts the invite
+first. `get_rooms` enumerates joined rooms alone, so no room-list refresh can
+ever surface an invite — without the join, the room opens with no `RoomInfo`
+behind it (a raw room ID for a name, no topic, member count or encryption
+state) and its timeline is requested for a room the account is not in. The user
+asked to message this person and the invite is that same DM, so accepting it is
+what the action means.
+
 ### Settings Dialog
 
 Opened via `:settings` or the settings UI affordance. The dialog has eight tabs, rendered in this order:

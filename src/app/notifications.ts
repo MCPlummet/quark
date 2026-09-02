@@ -160,7 +160,14 @@ async function _ensureNotificationPermission(): Promise<boolean | null> {
   try {
     // request_permission returns "granted" | "denied" | "default".
     const result = await invoke<string>("plugin:notification|request_permission");
-    return result === "granted";
+    if (result === "granted") return true;
+    if (result === "denied") return false;
+    // "default": the dialog was dismissed without an answer. That is not a
+    // decision, and reporting it as `false` would let
+    // `_syncPushWithNotifications` tear the iOS pusher down over a prompt the
+    // user merely swiped away — `null` is the "leave push alone" answer the
+    // three-way contract above exists for.
+    return null;
   } catch (err) {
     console.warn("Notification permission request failed:", err);
     return null;

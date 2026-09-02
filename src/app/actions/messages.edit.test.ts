@@ -211,6 +211,24 @@ describe("editMessage — optimistic render (path 1)", () => {
     expect(bodyEl().textContent).toContain("just text");
     expect(getThumbnail).not.toHaveBeenCalled();
   });
+
+  it("clears the stored formatted body when an edit strips all formatting", async () => {
+    // The message starts out as custom-emoji HTML. Editing it down to plain
+    // text painted plain text in the DOM but left the pre-edit <img> on the
+    // stored MessageData, so the emoji came back the moment the timeline
+    // rebuilt the group from its store — the #55 class of bug, on the #74 path.
+    await editMessage(ORIGINAL, "just text");
+
+    timeline.selectLast();
+    const stored = timeline.selectedMessage!;
+    expect(stored.body).toBe("just text");
+    expect(stored.htmlBody).toBeUndefined();
+
+    // Re-render from the store: no resurrected emoji.
+    timeline.setMessages([stored]);
+    expect(bodyEl().querySelector("img")).toBeNull();
+    expect(bodyEl().textContent).toContain("just text");
+  });
 });
 
 describe("edit render — sync echo (path 2)", () => {

@@ -156,6 +156,27 @@ describe("initNotifications, on a fresh install", () => {
     expect(setPushEnabled).not.toHaveBeenCalled();
   });
 
+  it("unregisters an existing pusher when the user declines", async () => {
+    vi.mocked(getNotificationConfig).mockResolvedValue(config({ push_enabled: true }));
+    firstRun("denied");
+
+    await initNotifications();
+
+    expect(setPushEnabled).toHaveBeenCalledWith(false);
+  });
+
+  // A prompt swiped away is not a decision. Collapsing "default" into the same
+  // `false` as a denial tore down a working pusher over a dialog nobody
+  // answered — `null` is what the three-way contract exists for.
+  it("leaves the pusher alone when the prompt is dismissed unanswered", async () => {
+    vi.mocked(getNotificationConfig).mockResolvedValue(config({ push_enabled: true }));
+    firstRun("default");
+
+    await initNotifications();
+
+    expect(setPushEnabled).not.toHaveBeenCalled();
+  });
+
   // Desktop, mock mode and a build without the plugin still have to stay quiet:
   // an unanswerable query must not unregister a working pusher.
   it("neither asks nor touches push when the plugin is missing", async () => {
