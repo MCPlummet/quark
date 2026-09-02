@@ -153,6 +153,7 @@ function readBlobAsBase64(blob: Blob, onProgress?: (loaded: number, total: numbe
 async function runAttachment(
   blob: Blob,
   filename: string,
+  roomId: string,
   send: (dataBase64: string, uploadId: string) => Promise<unknown>,
 ): Promise<boolean> {
   const total = blob.size;
@@ -160,7 +161,11 @@ async function runAttachment(
   let read: BlobRead | null = null;
   let row: AttachmentProgressHandle | null = null;
   try {
-    row = getComponents().input.startAttachmentProgress(filename, () => read?.cancel());
+    row = getComponents().input.startAttachmentProgress(
+      filename,
+      () => read?.cancel(),
+      roomId,
+    );
   } catch {
     // A composer that can't show the row (not mounted yet) must not block the
     // send; the send still reports through the toast fallback below.
@@ -237,7 +242,7 @@ export async function sendPendingImage(
     if (cap && input.getValue().trim().length === 0) input.setValue(cap);
   };
 
-  const sent = await runAttachment(blob, name, (dataBase64, uploadId) =>
+  const sent = await runAttachment(blob, name, roomId, (dataBase64, uploadId) =>
     sendPastedImage(roomId, dataBase64, blob.type, name, cap, replyToEventId, uploadId),
   );
 
@@ -259,7 +264,7 @@ export async function handleFilePick(file: File): Promise<void> {
 
   const isVideo = file.type.startsWith("video/");
 
-  await runAttachment(file, file.name, async (dataBase64, uploadId) => {
+  await runAttachment(file, file.name, roomId, async (dataBase64, uploadId) => {
     if (isVideo) {
       // Send as m.video (not m.file) so it renders as a playable embed. Probe
       // dimensions/duration up front so the timeline can reserve the right

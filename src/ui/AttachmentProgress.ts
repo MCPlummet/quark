@@ -57,6 +57,8 @@ export interface AttachmentProgressHandle {
 }
 
 interface Row {
+  /** The room this attachment is being sent to; `null` when unscoped. */
+  roomId: string | null;
   el: HTMLElement;
   iconEl: HTMLElement;
   nameEl: HTMLElement;
@@ -93,17 +95,53 @@ export function renderBar(fraction: number): string {
  */
 export class AttachmentProgressList {
   private _el: HTMLElement;
+  private _rowsEl: HTMLElement;
+  private _announceEl: HTMLElement;
   private _rows: Set<Row> = new Set();
+  private _activeRoom: string | null = null;
   private _spinTimer: ReturnType<typeof setInterval> | null = null;
   private _frame = 0;
 
   constructor() {
+    // A wrapper with no box of its own, so the announcer can stay mounted while
+    // the stack hides. The stack has to hide — it carries padding, a border and
+    // a background — and a live region that is `display: none` while idle
+    // announces nothing when it comes back.
     this._el = document.createElement("div");
-    this._el.className = "attach-progress";
-    this._el.style.display = "none";
-    this._el.setAttribute("role", "status");
-    this._el.setAttribute("aria-live", "polite");
-    this._el.setAttribute("aria-label", "Attachment progress");
+    this._el.style.display = "contents";
+
+    this._rowsEl = document.createElement("div");
+    this._rowsEl.className = "attach-progress";
+    this._rowsEl.style.display = "none";
+    this._rowsEl.setAttribute("role", "group");
+    this._rowsEl.setAttribute("aria-label", "Attachment progress");
+    this._el.appendChild(this._rowsEl);
+
+    // Phase changes and terminal states are announced here, and nowhere else.
+    // A row's status text is rewritten on every progress tick — up to ~100
+    // mutations per upload — so holding the live region over the rows read the
+    // whole bar out again and again ("uploading [████░░░░] 31% · 1.2 MB/4.0 MB",
+    // over and over) instead of the handful of transitions that carry meaning.
+    this._announceEl = document.createElement("span");
+    this._announceEl.className = "sr-only";
+    this._announceEl.setAttribute("role", "status");
+    this._announceEl.setAttribute("aria-live", "polite");
+    this._el.appendChild(this._announceEl);
+  }
+
+  /**
+   * Scope the visible rows to `roomId`.
+   *
+   * The composer is shared by every room, but an attachment is being sent to
+   * one of them: without this, a failed upload in one room parked its red
+   * `[!] file — reason` row for ten seconds in whatever room the user switched
+   * to next, and a success tick landed in the wrong room entirely. Rows are
+   * hidden rather than removed, so an upload keeps running and its row (error
+   * included) is still there on the way back.
+   */
+  setActiveRoom(roomId: string | null): void {
+    this._activeRoom = roomId;
+    this._syncVisibility();
   }
 
   /** The element to mount in the compose region. */
@@ -123,7 +161,7 @@ export class AttachmentProgressList {
    * @param onCancel Called if the user cancels. Omit when the send can't be
    *                 stopped — no button is rendered rather than a fake one.
    */
-  start(filename: string, onCancel?: () => void): AttachmentProgressHandle {
+  start(filename: string, onCancel?: () => void, roomId?: string): AttachmentProgressHandle {
     const el = document.createElement("div");
     el.className = "attach-progress__row";
 
@@ -151,7 +189,10 @@ export class AttachmentProgressList {
     if (!onCancel) cancelEl.style.display = "none";
     el.appendChild(cancelEl);
 
-    const row: Row = { el, iconEl, nameEl, statusEl, cancelEl, done: false, timer: null };
+    const row: Row = {
+      roomId: roomId ?? null,
+      el, iconEl, nameEl, statusEl, cancelEl, done: false, timer: null,
+    };
 
     cancelEl.addEventListener("click", () => {
       if (row.done) {
@@ -163,9 +204,10 @@ export class AttachmentProgressList {
       this._remove(row);
     });
 
-    this._el.appendChild(el);
+    this._rowsEl.appendChild(el);
     this._rows.add(row);
-    this._el.style.display = "";
+    this._syncVisibility();
+    this._announceFor(row, `${filename}: ${PHASE_LABEL.reading}`);
     this._startSpinner();
 
     const handle: AttachmentProgressHandle = {
@@ -173,6 +215,7 @@ export class AttachmentProgressList {
         if (row.done) return;
         row.el.dataset.phase = phase;
         row.statusEl.textContent = `${PHASE_LABEL[phase]}…`;
+        this._announceFor(row, `${row.nameEl.textContent}: ${PHASE_LABEL[phase]}`);
       },
       setProgress: (transferred, total) => {
         if (row.done) return;
@@ -211,6 +254,28 @@ export class AttachmentProgressList {
 
   // ── internals ──────────────────────────────────────────────────────────────
 
+  /** A row belongs on screen when it is unscoped or matches the active room. */
+  private _isVisible(row: Row): boolean {
+    return row.roomId === null || row.roomId === this._activeRoom;
+  }
+
+  /** Re-apply per-row visibility, and hide the stack when nothing is showing. */
+  private _syncVisibility(): void {
+    let anyVisible = false;
+    for (const row of this._rows) {
+      const show = this._isVisible(row);
+      row.el.style.display = show ? "" : "none";
+      if (show) anyVisible = true;
+    }
+    this._rowsEl.style.display = anyVisible ? "" : "none";
+  }
+
+  /** Announce a transition, but only for a row the user can actually see. */
+  private _announceFor(row: Row, text: string): void {
+    if (!this._isVisible(row)) return;
+    this._announceEl.textContent = text;
+  }
+
   private _finish(row: Row, kind: "success" | "error", message: string): void {
     if (row.done || !this._rows.has(row)) return;
     row.done = true;
@@ -221,6 +286,7 @@ export class AttachmentProgressList {
     // hasn't read yet must not be the only thing a timer takes away.
     row.cancelEl.style.display = kind === "error" ? "" : "none";
     row.cancelEl.setAttribute("aria-label", `Dismiss ${row.nameEl.textContent ?? "attachment"} error`);
+    this._announceFor(row, `${row.nameEl.textContent}: ${message}`);
     this._stopSpinnerIfIdle();
     row.timer = setTimeout(
       () => this._remove(row),
@@ -233,7 +299,7 @@ export class AttachmentProgressList {
     if (row.timer) clearTimeout(row.timer);
     this._rows.delete(row);
     row.el.remove();
-    if (this._rows.size === 0) this._el.style.display = "none";
+    this._syncVisibility();
     this._stopSpinnerIfIdle();
   }
 

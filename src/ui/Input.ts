@@ -324,15 +324,20 @@ export class Input {
    * Start an inline attachment-progress row for `filename` (#63). Returns the
    * handle that drives it through read → upload → send, or into an error the
    * user can actually see. `onCancel` renders a cancel button; omit it where a
-   * cancel could not take effect.
+   * cancel could not take effect. `roomId` scopes the row to the room the
+   * attachment is going to, so it does not follow the user out of it.
    */
-  startAttachmentProgress(filename: string, onCancel?: () => void): AttachmentProgressHandle {
-    return this._attachProgress.start(filename, onCancel);
+  startAttachmentProgress(
+    filename: string,
+    onCancel?: () => void,
+    roomId?: string,
+  ): AttachmentProgressHandle {
+    return this._attachProgress.start(filename, onCancel, roomId);
   }
 
-  /** True while an attachment row is on screen (in flight or lingering). */
-  hasAttachmentProgress(): boolean {
-    return this._attachProgress.isActive();
+  /** Scope the visible attachment rows to the room now open (null for none). */
+  setAttachmentRoom(roomId: string | null): void {
+    this._attachProgress.setActiveRoom(roomId);
   }
 
   /** Open the native file picker dialog. */

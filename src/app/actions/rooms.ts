@@ -201,6 +201,10 @@ export async function selectRoom(
   // Swap compose drafts before anything else touches the box, so the outgoing
   // room's text is stashed and the incoming room's draft appears at once (#34).
   if (prevRoom !== roomId) swapComposeDraft(prevRoom, roomId);
+  // …and scope the attachment rows the same way. The composer is shared, so
+  // without this a failed upload in the room being left parks its error row in
+  // whatever room the user lands in next.
+  getComponents().input.setAttachmentRoom(roomId);
   // Remember this room as the active space's chat so switching away and back
   // restores it instead of leaving a foreign room in the timeline (#11).
   const activeSpace = AppState.get("currentSpaceId");
@@ -986,7 +990,8 @@ function clearActiveRoom(): void {
   if (AppState.get("currentRoomId") === null) return;
   AppState.set("currentRoomId", null);
   AppState.set("currentTimeline", []);
-  const { timeline, roomHeader } = getComponents();
+  const { timeline, roomHeader, input } = getComponents();
+  input.setAttachmentRoom(null);
   timeline.setMessages([]);
   roomHeader.setRoom(""); // blank default state — same as the header's initial render
 }

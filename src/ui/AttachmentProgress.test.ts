@@ -37,6 +37,10 @@ describe("AttachmentProgressList", () => {
   let list: AttachmentProgressList;
   let el: HTMLElement;
 
+  // getElement() is a layout-free wrapper: the styled, hideable stack and the
+  // screen-reader announcer live inside it.
+  const stack = () => el.querySelector<HTMLElement>(".attach-progress")!;
+  const announced = () => el.querySelector<HTMLElement>(".sr-only")?.textContent ?? "";
   const row = () => el.querySelector<HTMLElement>(".attach-progress__row");
   const status = () => el.querySelector<HTMLElement>(".attach-progress__status")?.textContent ?? "";
   const cancelBtn = () => el.querySelector<HTMLButtonElement>(".attach-progress__cancel");
@@ -55,7 +59,7 @@ describe("AttachmentProgressList", () => {
   });
 
   it("is hidden and inactive until an attachment starts", () => {
-    expect(el.style.display).toBe("none");
+    expect(stack().style.display).toBe("none");
     expect(list.isActive()).toBe(false);
     expect(row()).toBeNull();
   });
@@ -63,7 +67,7 @@ describe("AttachmentProgressList", () => {
   it("shows a named row when an attachment starts", () => {
     list.start("cat.png");
 
-    expect(el.style.display).not.toBe("none");
+    expect(stack().style.display).not.toBe("none");
     expect(list.isActive()).toBe(true);
     expect(el.querySelector(".attach-progress__name")?.textContent).toBe("cat.png");
     expect(status()).toBe("reading…");
@@ -115,7 +119,7 @@ describe("AttachmentProgressList", () => {
     vi.advanceTimersByTime(2000);
 
     expect(row()).toBeNull();
-    expect(el.style.display).toBe("none");
+    expect(stack().style.display).toBe("none");
     expect(list.isActive()).toBe(false);
   });
 
@@ -139,7 +143,7 @@ describe("AttachmentProgressList", () => {
     cancelBtn()!.click();
 
     expect(row()).toBeNull();
-    expect(el.style.display).toBe("none");
+    expect(stack().style.display).toBe("none");
   });
 
   it("clears a failed row on its own eventually", () => {
@@ -187,6 +191,108 @@ describe("AttachmentProgressList", () => {
     expect(cancelBtn()?.style.display).toBe("none");
   });
 
+  describe("scoped to the room the attachment is going to", () => {
+    it("hides a row when the user switches away, and brings it back", () => {
+      list.setActiveRoom("!general:x");
+      const h = list.start("clip.mp4", undefined, "!general:x");
+      h.setPhase("uploading");
+
+      list.setActiveRoom("!random:x");
+      expect(row()!.style.display).toBe("none");
+      expect(stack().style.display).toBe("none");
+      // The upload is still running — it was hidden, not cancelled.
+      expect(list.isActive()).toBe(true);
+
+      list.setActiveRoom("!general:x");
+      expect(row()!.style.display).not.toBe("none");
+      expect(stack().style.display).not.toBe("none");
+    });
+
+    it("does not park a failed row in the room the user switched to", () => {
+      // The whole symptom: a red `[!] clip.mp4 — <reason>` row lingers for ten
+      // seconds, and used to do so in whichever room came next.
+      list.setActiveRoom("!general:x");
+      const h = list.start("clip.mp4", undefined, "!general:x");
+      list.setActiveRoom("!random:x");
+      h.fail("413 Payload Too Large");
+
+      expect(stack().style.display).toBe("none");
+
+      // …and it is still there, unread, on the way back.
+      list.setActiveRoom("!general:x");
+      expect(el.querySelector(".attach-progress__row--error")).not.toBeNull();
+      expect(status()).toContain("413 Payload Too Large");
+    });
+
+    it("shows only the current room's rows when several are in flight", () => {
+      list.setActiveRoom("!general:x");
+      list.start("here.png", undefined, "!general:x");
+      list.start("elsewhere.png", undefined, "!random:x");
+
+      const visible = [...el.querySelectorAll<HTMLElement>(".attach-progress__row")]
+        .filter((r) => r.style.display !== "none")
+        .map((r) => r.querySelector(".attach-progress__name")?.textContent);
+      expect(visible).toEqual(["here.png"]);
+    });
+
+    it("hides every scoped row when no room is open", () => {
+      list.setActiveRoom("!general:x");
+      list.start("clip.mp4", undefined, "!general:x");
+
+      list.setActiveRoom(null);
+
+      expect(stack().style.display).toBe("none");
+    });
+  });
+
+  describe("screen-reader announcements", () => {
+    it("announces phase changes but not progress ticks", () => {
+      const h = list.start("clip.mp4");
+      expect(announced()).toBe("clip.mp4: reading");
+
+      h.setPhase("uploading");
+      expect(announced()).toBe("clip.mp4: uploading");
+
+      // ~100 of these land per upload; none of them may re-announce the row.
+      h.setProgress(1, 100);
+      h.setProgress(31, 100);
+      h.setIndeterminate();
+      expect(announced()).toBe("clip.mp4: uploading");
+
+      h.setPhase("sending");
+      expect(announced()).toBe("clip.mp4: sending");
+    });
+
+    it("announces the terminal state", () => {
+      const h = list.start("cat.png");
+      h.succeed();
+      expect(announced()).toBe("cat.png: sent");
+
+      const f = list.start("dog.png");
+      f.fail("413 Payload Too Large");
+      expect(announced()).toBe("dog.png: 413 Payload Too Large");
+    });
+
+    it("stays quiet for a room the user is not looking at", () => {
+      list.setActiveRoom("!general:x");
+      const h = list.start("clip.mp4", undefined, "!general:x");
+      list.setActiveRoom("!random:x");
+
+      h.setPhase("uploading");
+      h.fail("boom");
+
+      expect(announced()).toBe("clip.mp4: reading");
+    });
+
+    it("keeps the live region mounted while the stack is hidden", () => {
+      // A live region that is `display: none` while idle announces nothing when
+      // it comes back, which is why it sits outside the hideable stack.
+      expect(stack().style.display).toBe("none");
+      expect(el.querySelector(".sr-only")).not.toBeNull();
+      expect(el.querySelector(".attach-progress .sr-only")).toBeNull();
+    });
+  });
+
   it("keeps concurrent attachments in their own rows", () => {
     const a = list.start("a.png");
     const b = list.start("b.png");
@@ -200,6 +306,6 @@ describe("AttachmentProgressList", () => {
 
     a.dismiss();
     expect(el.querySelectorAll(".attach-progress__row")).toHaveLength(1);
-    expect(el.style.display).not.toBe("none");
+    expect(stack().style.display).not.toBe("none");
   });
 });

@@ -968,6 +968,21 @@ alongside `openExternalUrl` opened every link twice.
   spinner with the backend's message and stays until dismissed; cancel is
   offered only during the local read, the one phase that can still be abandoned
   without something having already been sent.
+
+  Rows are scoped to the room the attachment is going to. The composer is
+  shared by every room, so an unscoped row followed the user out — a failed
+  upload parked its error in whichever room came next, and a success tick
+  landed in the wrong one. Switching away hides the row rather than removing
+  it: the upload keeps running, and the row (an unread error included) is still
+  there on the way back.
+
+  Only phase changes and terminal states are announced to a screen reader, from
+  a dedicated live region beside the stack rather than the stack itself. The
+  row's status text is rewritten on every progress tick — up to ~100 times per
+  upload — so a live region over the rows read the whole bar out again and
+  again instead of the few transitions that carry information. The region sits
+  outside the hideable stack because one that is `display: none` while idle
+  announces nothing when it returns.
 - **Thread media (MSC2530 in threads).** The thread timeline is built by the
   same converter as the main timeline, so a reply carrying an image, video,
   sticker or file arrives with its media fields and caption intact. It was
