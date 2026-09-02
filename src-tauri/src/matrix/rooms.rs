@@ -384,21 +384,27 @@ pub async fn get_rooms(client: &Client, recency: &RecencyState) -> Result<Vec<Ro
     // pure in-memory match over that ruleset
     // (`notification_settings/rules.rs::get_user_defined_room_notification_mode`),
     // so N rooms cost one store read, not N round-trips.
-    let notification_settings = client.notification_settings().await;
+    let notification_settings = Arc::new(client.notification_settings().await);
 
     for room in rooms {
         let permit = semaphore.clone().acquire_owned().await.unwrap();
-        let muted = is_muted_mode(
-            notification_settings
-                .get_user_defined_room_notification_mode(room.room_id())
-                .await,
-        );
         // Timestamp from the live recency store (fed by sync handlers,
         // persisted across runs). Only rooms the store has never seen fall
         // back to a network probe inside the task.
         let known_ts = recency.get(room.room_id().as_str());
+        let notification_settings = notification_settings.clone();
         tasks.spawn(async move {
             let _permit = permit;
+            // Resolved in here rather than on the caller: the lookup takes
+            // `NotificationSettings`' `RwLock`, and running it between
+            // `acquire_owned` and `spawn` held a permit idle across an await
+            // the permit does not gate, while serialising all N lookups on the
+            // room-list refresh path.
+            let muted = is_muted_mode(
+                notification_settings
+                    .get_user_defined_room_notification_mode(room.room_id())
+                    .await,
+            );
             let name = room.compute_display_name().await.ok().map(|n| n.to_string());
             let topic = room.topic();
             let avatar_url = room.avatar_url().map(|url| url.to_string());
@@ -738,8 +744,6 @@ pub struct CreateRoomOptions {
     pub enable_encryption: bool,
 }
 
-/// Create a new room.
-#[allow(dead_code)]
 /// Find the existing DM room shared with `user_id`, if any.
 ///
 /// Reads the account's `m.direct` mapping, which the SDK keeps in each room's
@@ -797,6 +801,7 @@ fn pick_best_dm(mut candidates: Vec<(u8, u64, String)>) -> Option<String> {
     candidates.into_iter().next().map(|(_, _, room_id)| room_id)
 }
 
+/// Create a new room.
 pub async fn create_room(
     client: &Client,
     options: CreateRoomOptions,

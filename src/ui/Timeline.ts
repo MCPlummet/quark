@@ -3,7 +3,7 @@
 import { createReactionBar, updateReactionBar, type ReactionGroup } from "./Reactions.js";
 import { invoke } from "../ipc/invoke.js";
 import type { SearchResult } from "../ipc/types.js";
-import type { ThreadMessageData } from "./ThreadView.js";
+import { appendCaption, type ThreadMessageData } from "./ThreadView.js";
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { hashColor } from "./avatarColors.js";
 import { isMobile, viewportPan } from "../app/mobile.js";
@@ -2013,17 +2013,6 @@ export class Timeline {
     return panel;
   }
 
-  /** Draw an MSC2530 caption beneath a thread reply's media, reusing the main
-   *  timeline's caption styling so threads and the timeline read the same.
-   *  No-op without a caption — a bare-filename body is not one (#42). */
-  private _appendInlineCaption(row: HTMLElement, caption?: string): void {
-    if (!caption) return;
-    const el = document.createElement("div");
-    el.className = "thread-inline__message-body message__image-caption";
-    el.textContent = caption;
-    row.appendChild(el);
-  }
-
   private _buildInlineMsgEl(msg: ThreadMessageData): HTMLElement {
     const row = document.createElement("div");
     row.className = "thread-inline__message" + (msg.isOwn ? " thread-inline__message--own" : "");
@@ -2058,11 +2047,11 @@ export class Timeline {
       img.alt = msg.mediaAlt ?? type;
       img.loading = "lazy";
       row.appendChild(img);
-      this._appendInlineCaption(row, msg.caption);
+      appendCaption(row, "thread-inline", msg.caption);
     } else if (type === "video") {
       const aff = buildVideoAffordance(msg.mediaUrl, msg.mediaAlt, msg.mediaMimeType, msg.mediaEncryptionInfo, msg.mediaThumbnailUrl, msg.mediaThumbnailEncryptionInfo);
       row.appendChild(aff);
-      this._appendInlineCaption(row, msg.caption);
+      appendCaption(row, "thread-inline", msg.caption);
     } else {
       const body = document.createElement("div");
       body.className = "thread-inline__message-body";

@@ -38,11 +38,16 @@ type ThreadCloseCallback = () => void;
 
 /** Render an MSC2530 media caption beneath the media, reusing Timeline's
  *  `.message__image-caption` styling so threads and the main timeline match.
- *  No-op when the event carried no caption (a bare-filename body isn't one). */
-function appendCaption(row: HTMLElement, caption?: string): void {
+ *  No-op when the event carried no caption (a bare-filename body isn't one).
+ *
+ *  `blockName` is the caller's BEM block — this panel and Timeline's inline
+ *  thread panel style their message bodies separately. Shared rather than
+ *  copied so the next caption change (escaping, a spoiler, a max-height)
+ *  cannot land on one thread surface and miss the other. */
+export function appendCaption(row: HTMLElement, blockName: string, caption?: string): void {
   if (!caption) return;
   const el = document.createElement("div");
-  el.className = "thread-view__message-body message__image-caption";
+  el.className = `${blockName}__message-body message__image-caption`;
   el.textContent = caption;
   row.appendChild(el);
 }
@@ -272,7 +277,7 @@ export class ThreadView {
       img.alt = msg.mediaAlt ?? type;
       img.loading = "lazy";
       row.appendChild(img);
-      appendCaption(row, msg.caption);
+      appendCaption(row, "thread-view", msg.caption);
     } else if (type === "video") {
       const aff = document.createElement("div");
       aff.className = "message__video-affordance";
@@ -299,7 +304,7 @@ export class ThreadView {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
       });
       row.appendChild(aff);
-      appendCaption(row, msg.caption);
+      appendCaption(row, "thread-view", msg.caption);
     } else {
       const body = document.createElement("div");
       body.className = "thread-view__message-body";

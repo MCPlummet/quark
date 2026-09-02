@@ -70,11 +70,7 @@ vi.mock("../../ipc/media.js", () => ({
 // convertFileSrc pulls in the Tauri runtime; stub it.
 vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (s: string) => s }));
 
-// Progress toast: return a controllable handle.
-const succeed = vi.fn();
-const fail = vi.fn();
 vi.mock("../../ui/NotificationToast.js", () => ({
-  showProgressToast: () => ({ succeed, fail }),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }));
