@@ -333,6 +333,90 @@ describe("Timeline", () => {
       expect(timeline.selectLast()).toBe(true);
     });
   });
+
+  // Sending implies reading: a user's receipt avatar must sit on their own
+  // newest message even when the homeserver never sends a receipt alongside it.
+  // The placement logic lives in _renderReceipts, so every path that puts new
+  // message DOM on screen has to re-run it — otherwise the avatar sits above
+  // messages the user demonstrably has seen.
+  describe("read receipts", () => {
+    const ts = (iso: string): number => Date.parse(iso);
+    /** Event ID of the message carrying a receipt cluster, or null. */
+    const receiptOn = (): string | null =>
+      timeline.getElement().querySelector<HTMLElement>(".read-receipts")?.dataset.receiptEvent ??
+      null;
+
+    // Bob has read up to 12:00:30 and has not posted since, so his avatar sits
+    // on Alice's 12:00 message.
+    beforeEach(() => {
+      timeline.setMessages([
+        makeMsg({ id: "e1", senderId: "@alice:x", senderName: "Alice", timestamp: "2024-01-01T12:00:00Z" }),
+        makeMsg({ id: "e2", senderId: "@alice:x", senderName: "Alice", timestamp: "2024-01-01T12:01:00Z" }),
+      ]);
+      timeline.setReadReceipts([
+        { userId: "@bob:x", eventId: "e1", ts: ts("2024-01-01T12:00:30Z") },
+      ]);
+    });
+
+    it("places a receipt on the newest message at or before its timestamp", () => {
+      expect(receiptOn()).toBe("e1");
+    });
+
+    it("advances a receipt to the reader's own live-appended message", () => {
+      timeline.appendMessage(
+        makeMsg({ id: "e3", senderId: "@bob:x", senderName: "Bob", timestamp: "2024-01-01T12:02:00Z" }),
+      );
+
+      expect(receiptOn()).toBe("e3");
+    });
+
+    it("advances a receipt when the live message merges into the sender's group", () => {
+      // Merging into the previous group is its own early-return path out of
+      // appendMessage, so it needs its own re-decoration.
+      timeline.appendMessage(
+        makeMsg({ id: "e3", senderId: "@bob:x", senderName: "Bob", timestamp: "2024-01-01T12:02:00Z" }),
+      );
+      expect(receiptOn()).toBe("e3");
+
+      timeline.appendMessage(
+        makeMsg({ id: "e4", senderId: "@bob:x", senderName: "Bob", timestamp: "2024-01-01T12:02:10Z" }),
+      );
+
+      expect(receiptOn()).toBe("e4");
+    });
+
+    it("leaves a receipt alone when someone else posts", () => {
+      timeline.appendMessage(
+        makeMsg({ id: "e3", senderId: "@carol:x", senderName: "Carol", timestamp: "2024-01-01T12:02:00Z" }),
+      );
+
+      expect(receiptOn()).toBe("e1");
+    });
+
+    it("advances a receipt through forward pagination", () => {
+      timeline.appendMessages([
+        makeMsg({ id: "e3", senderId: "@bob:x", senderName: "Bob", timestamp: "2024-01-01T12:02:00Z" }),
+      ]);
+
+      expect(receiptOn()).toBe("e3");
+    });
+
+    it("decorates freshly prepended history", () => {
+      timeline.setMessages([
+        makeMsg({ id: "e9", senderId: "@dave:x", senderName: "Dave", timestamp: "2024-01-01T13:00:00Z" }),
+      ]);
+      timeline.setReadReceipts([
+        { userId: "@bob:x", eventId: "e0", ts: ts("2024-01-01T11:00:30Z") },
+      ]);
+      expect(receiptOn()).toBeNull(); // receipted event is older than the window
+
+      timeline.prependMessages([
+        makeMsg({ id: "e0", senderId: "@alice:x", senderName: "Alice", timestamp: "2024-01-01T11:00:00Z" }),
+      ]);
+
+      expect(receiptOn()).toBe("e0");
+    });
+  });
 });
 
 // #40 — separator labels are relative to "now", so they must be built against a
