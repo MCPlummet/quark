@@ -96,7 +96,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     fetcherVersion = 3;
     # After changing pnpm-lock.yaml: set to lib.fakeHash, rebuild, copy the
     # "got:" hash from the mismatch error.
-    hash = "sha256-gInnhvLdGjk4JpM4yCeOuyLPSaTTbtt/3B9lWdkydGw=";
+    hash = "sha256-8MOecinRFwm70YC2Rzvjabo9kMY4fmnfCGpUK4tHIvk=";
   };
 
   nativeBuildInputs = [
