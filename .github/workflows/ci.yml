@@ -14,6 +14,10 @@
 #              warnings and a deliberate hand-formatting style, so clippy can't
 #              hard-gate yet.
 #
+# The flake's pinned pnpmDeps hash is gated separately in nix.yml, which only
+# fires when pnpm-lock.yaml (or the Nix packaging) actually changes — see the
+# rationale there for why it is scoped that way rather than living here.
+#
 # Required repository secrets: NONE. This workflow needs no secrets at all —
 # only the automatically-provided GITHUB_TOKEN (not used here beyond checkout).
 #

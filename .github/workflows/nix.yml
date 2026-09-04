@@ -1,0 +1,115 @@
+# Quark — Nix packaging gate
+#
+# nix/package.nix pins the hash of the offline pnpm store that fetchPnpmDeps
+# builds from pnpm-lock.yaml. That pin can only ever go stale when the lockfile
+# (or the packaging around it) changes, and when it does the published flake is
+# broken for everyone installing it — so this is a hard gate, but a narrow one.
+#
+# Why it needs a gate at all: the rot is invisible to whoever causes it.
+# fetchPnpmDeps addresses its output by (name, hash) alone, and the name carries
+# no version, so a machine that still holds the previous fetch keeps reusing it
+# after the lockfile moves. The pin silently rots locally and only strangers hit
+# it. That is exactly how the hash sat two releases behind pnpm-lock.yaml's
+# refresh in #44 (form-data 4.0.5 -> 4.0.6 et al), surfacing as
+# ERR_PNPM_NO_OFFLINE_TARBALL for anyone installing the flake.
+#
+# Why it lives here and not in ci.yml: scoping. The hash cannot break unless one
+# of the paths below changes, so running it on every PR would mean that a hash
+# broken on main turns *every* contributor's unrelated PR red for something they
+# did not touch and may not recognise. Filtered this way, it can only ever go
+# red on the change that actually caused it.
+#
+# Why a fresh runner is the point: it holds no stale store path and cannot
+# substitute one (this derivation exists in no public cache), so the fetch really
+# re-runs and the hash is really checked. Do NOT add a Nix store cache to this
+# workflow — caching the FOD would restore the very masking the gate exists to
+# catch.
+#
+# Why only .pnpmDeps and not .#quark: the drift is settled by the fetch, and a
+# full build would add a Tauri/matrix-sdk compile for no extra signal.
+#
+# **You do not need Nix installed to fix a failure here** — the run prints the
+# correct hash and the exact line to paste it into. See the failure step below.
+
+name: Nix
+
+on:
+  pull_request:
+    paths:
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "nix/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/nix.yml"
+  push:
+    branches: [main]
+    paths:
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "nix/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/nix.yml"
+
+concurrency:
+  group: nix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pnpm-deps:
+    name: Nix pnpm deps hash
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # On a stale pin this fails with "hash mismatch in fixed-output
+      # derivation", and the correct hash is in the "got:" line of that error —
+      # computed by this run, from the lockfile in this very commit. The step
+      # lifts it out and prints the one-line remedy to the job summary, so a
+      # contributor who does not use Nix can fix the branch by copying a string
+      # out of this page. Regenerating it locally (set the hash to lib.fakeHash,
+      # rebuild, copy the "got:" value) is an equivalent route, not a required
+      # one.
+      - name: Verify pnpmDeps hash matches pnpm-lock.yaml
+        run: |
+          set -o pipefail
+          if nix build --no-link --print-out-paths '.#quark.pnpmDeps' 2>&1 | tee nix-deps.log; then
+            echo "pnpmDeps hash is in sync with pnpm-lock.yaml." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          got=$(grep -oE 'sha256-[A-Za-z0-9+/=]{44}' nix-deps.log | tail -1)
+
+          {
+            echo "## Nix pnpmDeps hash is out of date"
+            echo
+            echo "\`pnpm-lock.yaml\` changed, so the pinned hash of the offline pnpm"
+            echo "store in \`nix/package.nix\` no longer matches it. Until it is updated,"
+            echo "installing the flake fails with \`ERR_PNPM_NO_OFFLINE_TARBALL\`."
+            echo
+            if [ -n "$got" ]; then
+              echo "**You do not need Nix installed to fix this.** This run already computed"
+              echo "the correct hash from the lockfile in this commit. Replace the \`hash =\`"
+              echo "line inside \`pnpmDeps\` in \`nix/package.nix\` with:"
+              echo
+              echo '```nix'
+              echo "    hash = \"$got\";"
+              echo '```'
+            else
+              echo "The build failed before producing a hash — this is probably not a stale"
+              echo "pin. Check the step log for the real error."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::error title=Nix pnpmDeps hash is out of date::See the job summary for the exact hash to paste into nix/package.nix"
+          exit 1
