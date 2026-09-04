@@ -9,6 +9,9 @@
 #              runs `pnpm build` (which also type-checks via tsc), then
 #              `pnpm test` (vitest) and `cargo test` (with rustc warnings denied).
 #              A failure blocks the merge.
+#   • nix-deps — HARD GATE. Builds the flake's pnpmDeps fixed-output derivation
+#              to assert nix/package.nix's pinned hash still matches
+#              pnpm-lock.yaml. Fetch only, no Rust compile.
 #   • clippy — ADVISORY. Runs `cargo clippy` but is marked continue-on-error so
 #              it never blocks a merge — the backend carries known clippy
 #              warnings and a deliberate hand-formatting style, so clippy can't
@@ -123,6 +126,44 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
         env:
           RUSTFLAGS: "-Dwarnings"
+
+  # ─── nix-deps (hard gate) ──────────────────────────────────────────────────
+  #
+  # nix/package.nix pins the hash of the offline pnpm store that fetchPnpmDeps
+  # builds from pnpm-lock.yaml. Nothing local ever forces that pin to be
+  # revisited: fetchPnpmDeps addresses its output by (name, hash) alone, and the
+  # name carries no version, so a developer whose store still holds the previous
+  # fetch keeps reusing it after the lockfile moves — the pin silently rots and
+  # only strangers hit it. That is exactly how the hash went two releases stale
+  # behind pnpm-lock.yaml's refresh in #44 (form-data 4.0.5 → 4.0.6 et al),
+  # surfacing as ERR_PNPM_NO_OFFLINE_TARBALL for anyone installing the flake.
+  #
+  # A fresh runner has no such store path and cannot substitute one (this
+  # derivation exists in no public cache), so the fetch genuinely re-runs and
+  # the hash is genuinely checked. Do NOT add a Nix store cache to this job —
+  # caching the FOD would restore the very masking this gate exists to catch.
+  #
+  # Deliberately builds only .pnpmDeps, not .#quark: the drift this catches is
+  # settled by the fetch, while a full build would add a Tauri/matrix-sdk
+  # compile to every PR for no extra signal.
+  nix-deps:
+    name: Nix pnpm deps hash
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Fails with "hash mismatch in fixed-output derivation" the moment
+      # pnpm-lock.yaml and nix/package.nix's pnpmDeps.hash disagree. The fix is
+      # in the comment beside that hash: set it to lib.fakeHash, rebuild, copy
+      # the "got:" value back.
+      - name: Verify pnpmDeps hash matches pnpm-lock.yaml
+        run: nix build --no-link --print-out-paths '.#quark.pnpmDeps'
 
   # ─── clippy (advisory — never blocks) ──────────────────────────────────────
   clippy:
