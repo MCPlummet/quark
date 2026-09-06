@@ -1305,19 +1305,28 @@ pub async fn open_media_externally(
 async fn upload_attachment(
     app: &AppHandle,
     client: &Client,
+    room_id: &str,
     data: Vec<u8>,
     mime_type: &str,
-    filename: &str,
     upload_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<matrix_sdk::ruma::events::room::MediaSource, String> {
     use tauri::Emitter;
 
+    // The room decides whether the bytes are encrypted before they leave, so it
+    // is resolved here rather than at each call site — no send path can skip the
+    // question (#81).
+    let parsed = matrix_sdk::ruma::RoomId::parse(room_id)
+        .map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&parsed)
+        .ok_or_else(|| format!("Room {room_id} not found"))?;
+
     let Some(upload_id) = upload_id else {
-        return crate::matrix::media::upload_media(client, data, mime_type, Some(filename)).await;
+        return crate::matrix::media::upload_media(client, &room, data, mime_type).await;
     };
 
     let app = app.clone();
-    crate::matrix::media::upload_media_with_progress(client, data, mime_type, move |transferred, total| {
+    crate::matrix::media::upload_media_with_progress(client, &room, data, mime_type, move |transferred, total| {
         let _ = app.emit(
             crate::matrix::media::EVENT_ATTACHMENT_PROGRESS,
             crate::matrix::media::AttachmentProgress {
@@ -1349,14 +1358,14 @@ pub async fn send_pasted_image(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
+    let source = upload_attachment(&app, &client, &room_id, data, &mime_type, upload_id).await?;
 
     crate::matrix::timeline::send_image(
         &client,
         &room_id,
         &filename,
         caption.as_deref(),
-        &mxc_url,
+        source,
         &mime_type,
         None,
         None,
@@ -1382,13 +1391,13 @@ pub async fn send_file(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
+    let source = upload_attachment(&app, &client, &room_id, data, &mime_type, upload_id).await?;
 
     crate::matrix::timeline::send_file(
         &client,
         &room_id,
         &filename,
-        &mxc_url,
+        source,
         &mime_type,
         file_size,
     )
@@ -1416,13 +1425,13 @@ pub async fn send_video(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
+    let source = upload_attachment(&app, &client, &room_id, data, &mime_type, upload_id).await?;
 
     crate::matrix::timeline::send_video(
         &client,
         &room_id,
         &filename,
-        &mxc_url,
+        source,
         &mime_type,
         width,
         height,
@@ -2089,6 +2098,7 @@ fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 /// it as an `m.image` event. This avoids leaking external URLs to recipients.
 #[tauri::command]
 pub async fn send_gif(
+    app: AppHandle,
     state: State<'_, MatrixState>,
     room_id: String,
     gif_url: String,
@@ -2127,18 +2137,14 @@ pub async fn send_gif(
         None => (None, None),
     };
 
-    // Upload to the homeserver and get an mxc:// URL.
-    let mxc_url = crate::matrix::media::upload_media(
-        &client,
-        bytes,
-        "image/gif",
-        Some(&format!("{title}.gif")),
-    )
-    .await?;
+    // Upload to the homeserver. Encrypted in an encrypted room like any other
+    // attachment: a GIF picked from a public search is not public *here* — the
+    // fact that this room received it is exactly what E2EE is protecting (#81).
+    let source = upload_attachment(&app, &client, &room_id, bytes, "image/gif", None).await?;
 
     // Send as m.image event. The title is the body, not an MSC2530 caption
     // (no distinct filename), matching how GIF pickers label sends.
-    crate::matrix::timeline::send_image(&client, &room_id, &title, None, &mxc_url, "image/gif", w, h, None)
+    crate::matrix::timeline::send_image(&client, &room_id, &title, None, source, "image/gif", w, h, None)
         .await
 }
 

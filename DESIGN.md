@@ -958,6 +958,14 @@ alongside `openExternalUrl` opened every link twice.
   room switches like text drafts and send to the room current at send time.
   Videos and non-image files still upload immediately. Known limitation: with
   a thread open, images post to the main timeline (no thread relation).
+- **Encrypted attachments.** In an encrypted room the bytes are encrypted
+  before upload and the event references them as an `m.file` source carrying the
+  key, never a plaintext `mxc://`. The room decides this, not the call site:
+  the upload takes the `Room` and asks `is_encrypted()` itself, so no send path
+  can skip the question, and a room whose state cannot be read is treated as
+  encrypted. Applies to images (pasted and picked), files, videos and GIFs.
+  Stickers are exempt — they reference media from an existing MSC2545 pack
+  rather than uploading anything, so that media is already public.
 - **Attachment progress.** Attaching is several phases the user cannot see —
   reading the picked file's bytes, handing them across IPC, then the upload
   itself — and on Android a multi-megabyte pick spends long enough in the first

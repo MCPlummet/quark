@@ -3,8 +3,13 @@ use matrix_sdk::{
     ruma::{
         events::{
             relation::InReplyTo,
-            room::message::{
-                MessageType, OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
+            room::{
+                message::{
+                    FileInfo, FileMessageEventContent, ImageMessageEventContent, MessageType,
+                    OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
+                    VideoInfo, VideoMessageEventContent,
+                },
+                ImageInfo, MediaSource,
             },
             sticker::StickerEventContent,
             AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
@@ -1131,35 +1136,19 @@ fn build_image_body(filename: &str, caption: Option<&str>) -> (String, Option<St
     }
 }
 
-/// Send an image (m.image) event to a room, with an optional MSC2530 caption,
-/// optionally as a reply.
-pub async fn send_image(
-    client: &Client,
-    room_id: &str,
+/// Build the `m.image` content for a media source.
+///
+/// Split out of `send_image` so the source can be asserted on without a live
+/// client: an encrypted source has to reach the event as `file` (key material
+/// included) with no plaintext `url` beside it (#81).
+fn build_image_content(
     filename: &str,
     caption: Option<&str>,
-    mxc_url: &str,
+    source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
     height: Option<u64>,
-    in_reply_to: Option<&str>,
-) -> Result<String, String> {
-    use matrix_sdk::ruma::{
-        events::room::{
-            message::ImageMessageEventContent,
-            ImageInfo, MediaSource,
-        },
-        MxcUri,
-    };
-
-    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
-    let room = client
-        .get_room(&room_id)
-        .ok_or_else(|| format!("Room {} not found", room_id))?;
-
-    let mxc_uri = <&MxcUri>::try_from(mxc_url).map_err(|e| format!("Invalid mxc URI: {e}"))?;
-    let source = MediaSource::Plain(mxc_uri.to_owned());
-
+) -> ImageMessageEventContent {
     let mut img_info = ImageInfo::default();
     img_info.mimetype = Some(mime_type.to_string());
     img_info.width = width.and_then(|w| UInt::try_from(w).ok());
@@ -1169,6 +1158,34 @@ pub async fn send_image(
     let mut img_content = ImageMessageEventContent::new(body, source);
     img_content.info = Some(Box::new(img_info));
     img_content.filename = filename_field;
+    img_content
+}
+
+/// Send an image (m.image) event to a room, with an optional MSC2530 caption,
+/// optionally as a reply.
+///
+/// Takes an already-uploaded `MediaSource` rather than an mxc URL: in an
+/// encrypted room the upload produces key material that a bare URL cannot
+/// carry, and dropping it is what left attachments readable by anyone who could
+/// reach the media endpoint (#81).
+pub async fn send_image(
+    client: &Client,
+    room_id: &str,
+    filename: &str,
+    caption: Option<&str>,
+    source: MediaSource,
+    mime_type: &str,
+    width: Option<u64>,
+    height: Option<u64>,
+    in_reply_to: Option<&str>,
+) -> Result<String, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {} not found", room_id))?;
+
+    let img_content =
+        build_image_content(filename, caption, source, mime_type, width, height);
 
     let mut msg_content = RoomMessageEventContent::new(MessageType::Image(img_content));
 
@@ -1190,37 +1207,37 @@ pub async fn send_image(
     Ok(event_id)
 }
 
-/// Send a generic file (m.file) event to a room.
-pub async fn send_file(
-    client: &Client,
-    room_id: &str,
+/// Build the `m.file` content for a media source. See `build_image_content`.
+fn build_file_content(
     body: &str,
-    mxc_url: &str,
+    source: MediaSource,
     mime_type: &str,
     file_size: Option<u64>,
-) -> Result<String, String> {
-    use matrix_sdk::ruma::{
-        events::room::{
-            message::{FileMessageEventContent, FileInfo},
-            MediaSource,
-        },
-        MxcUri,
-    };
-
-    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
-    let room = client
-        .get_room(&room_id)
-        .ok_or_else(|| format!("Room {} not found", room_id))?;
-
-    let mxc_uri = <&MxcUri>::try_from(mxc_url).map_err(|e| format!("Invalid mxc URI: {e}"))?;
-    let source = MediaSource::Plain(mxc_uri.to_owned());
-
+) -> FileMessageEventContent {
     let mut file_info = FileInfo::default();
     file_info.mimetype = Some(mime_type.to_string());
     file_info.size = file_size.and_then(|s| UInt::try_from(s).ok());
 
     let mut file_content = FileMessageEventContent::new(body.to_string(), source);
     file_content.info = Some(Box::new(file_info));
+    file_content
+}
+
+/// Send a generic file (m.file) event to a room.
+pub async fn send_file(
+    client: &Client,
+    room_id: &str,
+    body: &str,
+    source: MediaSource,
+    mime_type: &str,
+    file_size: Option<u64>,
+) -> Result<String, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {} not found", room_id))?;
+
+    let file_content = build_file_content(body, source, mime_type, file_size);
 
     let msg_content = RoomMessageEventContent::new(MessageType::File(file_content));
 
@@ -1234,34 +1251,17 @@ pub async fn send_file(
     Ok(event_id)
 }
 
-/// Send a video (m.video) event to a room.
-pub async fn send_video(
-    client: &Client,
-    room_id: &str,
+/// Build the `m.video` content for a media source. See `build_image_content`.
+fn build_video_content(
     body: &str,
-    mxc_url: &str,
+    source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
     height: Option<u64>,
     duration_ms: Option<u64>,
     file_size: Option<u64>,
-) -> Result<String, String> {
-    use matrix_sdk::ruma::{
-        events::room::{
-            message::{VideoMessageEventContent, VideoInfo},
-            MediaSource,
-        },
-        MxcUri,
-    };
+) -> VideoMessageEventContent {
     use std::time::Duration;
-
-    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
-    let room = client
-        .get_room(&room_id)
-        .ok_or_else(|| format!("Room {} not found", room_id))?;
-
-    let mxc_uri = <&MxcUri>::try_from(mxc_url).map_err(|e| format!("Invalid mxc URI: {e}"))?;
-    let source = MediaSource::Plain(mxc_uri.to_owned());
 
     let mut video_info = VideoInfo::default();
     video_info.mimetype = Some(mime_type.to_string());
@@ -1272,6 +1272,29 @@ pub async fn send_video(
 
     let mut video_content = VideoMessageEventContent::new(body.to_string(), source);
     video_content.info = Some(Box::new(video_info));
+    video_content
+}
+
+/// Send a video (m.video) event to a room.
+pub async fn send_video(
+    client: &Client,
+    room_id: &str,
+    body: &str,
+    source: MediaSource,
+    mime_type: &str,
+    width: Option<u64>,
+    height: Option<u64>,
+    duration_ms: Option<u64>,
+    file_size: Option<u64>,
+) -> Result<String, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {} not found", room_id))?;
+
+    let video_content = build_video_content(
+        body, source, mime_type, width, height, duration_ms, file_size,
+    );
 
     let msg_content = RoomMessageEventContent::new(MessageType::Video(video_content));
 
@@ -1763,6 +1786,125 @@ mod tests {
         // No cutoff (e.g. "Entire history") → every hit is in range.
         assert!(hit_in_range(0, None));
         assert!(hit_in_range(cutoff, None));
+    }
+
+    // ── Encrypted media (#81) ─────────────────────────────────────────────
+    //
+    // In an encrypted room Quark encrypted the *event* but uploaded the
+    // attachment in the clear, behind a plain mxc:// URL anyone who could reach
+    // the homeserver's media endpoint could fetch. The send paths never asked
+    // whether the room was encrypted — `is_encrypted` appeared nowhere in
+    // timeline.rs, media.rs or stickers.rs — and hand-built MediaSource::Plain
+    // unconditionally.
+    //
+    // The asymmetry is what made it easy to miss: the *read* path handles both
+    // variants, so encrypted media from other clients decrypts fine and an
+    // encrypted room looks completely normal in Quark, including Quark's own
+    // plaintext uploads rendering back perfectly.
+
+    /// An `EncryptedFile` shaped like the SDK's, for building content in tests.
+    fn test_encrypted_file() -> matrix_sdk::ruma::events::room::EncryptedFile {
+        serde_json::from_value(serde_json::json!({
+            "url": "mxc://example.org/ciphertext",
+            "key": {
+                "kty": "oct",
+                "key_ops": ["encrypt", "decrypt"],
+                "alg": "A256CTR",
+                "k": "aWQpLKGYcHNhbXBsZWtleWZvcnRlc3Rpbmcxc-8",
+                "ext": true
+            },
+            "iv": "bGlicmFyeQAAAAAAAAAAAA",
+            "hashes": { "sha256": "fdSLu/YkRx3Wyh3KQabP3rd6+SFiKg5lsJZQHtkSAYA" },
+            "v": "v2"
+        }))
+        .expect("valid EncryptedFile fixture")
+    }
+
+    #[test]
+    fn test_image_content_from_encrypted_source_has_no_plaintext_url() {
+        let content = super::build_image_content(
+            "cat.png",
+            None,
+            MediaSource::Encrypted(Box::new(test_encrypted_file())),
+            "image/png",
+            Some(800),
+            Some(600),
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert!(
+            json.get("url").is_none(),
+            "an encrypted image must not carry a plaintext url: {json}"
+        );
+        assert!(
+            json.get("file").is_some(),
+            "an encrypted image carries its key material under `file`: {json}"
+        );
+    }
+
+    #[test]
+    fn test_image_content_from_plain_source_still_carries_a_url() {
+        let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
+        let content = super::build_image_content(
+            "cat.png",
+            None,
+            MediaSource::Plain(uri.to_owned()),
+            "image/png",
+            None,
+            None,
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert_eq!(json["url"], "mxc://example.org/plain");
+        assert!(json.get("file").is_none());
+    }
+
+    #[test]
+    fn test_file_content_from_encrypted_source_has_no_plaintext_url() {
+        let content = super::build_file_content(
+            "notes.pdf",
+            MediaSource::Encrypted(Box::new(test_encrypted_file())),
+            "application/pdf",
+            Some(1024),
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert!(json.get("url").is_none(), "encrypted file leaked a url: {json}");
+        assert!(json.get("file").is_some());
+    }
+
+    #[test]
+    fn test_video_content_from_encrypted_source_has_no_plaintext_url() {
+        let content = super::build_video_content(
+            "clip.mp4",
+            MediaSource::Encrypted(Box::new(test_encrypted_file())),
+            "video/mp4",
+            Some(640),
+            Some(480),
+            Some(3000),
+            Some(2048),
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert!(json.get("url").is_none(), "encrypted video leaked a url: {json}");
+        assert!(json.get("file").is_some());
+    }
+
+    /// The caption mapping must survive being routed through an encrypted source.
+    #[test]
+    fn test_encrypted_image_keeps_its_msc2530_caption() {
+        let content = super::build_image_content(
+            "cat.png",
+            Some("look at this"),
+            MediaSource::Encrypted(Box::new(test_encrypted_file())),
+            "image/png",
+            None,
+            None,
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert_eq!(json["body"], "look at this");
+        assert_eq!(json["filename"], "cat.png");
     }
 
     #[test]
