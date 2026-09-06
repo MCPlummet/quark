@@ -400,6 +400,10 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
     htmlBody: displayHtml,
     type: msgType,
     mediaUrl,
+    // With a caption present the event `body` *is* the caption and the filename
+    // lives in its own field, so this doubles as the caption text — matching
+    // what timelineEventToThreadMessage has always done (#48).
+    mediaAlt: e.body,
     mediaMimeType: e.media_mimetype ?? undefined,
     mediaWidth: e.media_width ?? undefined,
     mediaHeight: e.media_height ?? undefined,

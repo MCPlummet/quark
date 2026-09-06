@@ -155,6 +155,20 @@ describe("sync live-tail messages use the shared mapper", () => {
     expect(msg.caption).toBeUndefined();
   });
 
+  // #48: the private sync mapper that #44 replaced set `mediaAlt: e.body`; the
+  // shared one it consolidated onto did not, so both the live tail and the
+  // room-load path fell back to a generic alt="image" / "video" label and screen
+  // readers lost the filename or caption entirely.
+  it("carries mediaAlt so screen readers get the filename, not a generic label", () => {
+    const msg = deliverToTimeline(imageEvent(null));
+    expect(msg.mediaAlt).toBe("cat.png");
+  });
+
+  it("uses the caption as mediaAlt when the image has one", () => {
+    const msg = deliverToTimeline(imageEvent("look at this cat"));
+    expect(msg.mediaAlt).toBe("look at this cat");
+  });
+
   it("carries the image dimensions so the live tail can pre-size the image", () => {
     const msg = deliverToTimeline(imageEvent("look at this cat"));
     expect(msg.mediaWidth).toBe(800);
