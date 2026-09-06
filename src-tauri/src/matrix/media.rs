@@ -84,14 +84,23 @@ pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
     from_base64(s)
 }
 
-/// Whether attachments sent to `room` must be encrypted before upload.
+/// Decide encryption from a room's encryption state, `None` when it could not
+/// be read.
 ///
-/// A failure to determine this is treated as "encrypted". The two ways to be
-/// wrong are not symmetric: encrypting in a plaintext room is merely
-/// unnecessary, while uploading in the clear to an encrypted room publishes the
-/// file to anyone who can reach the media endpoint (#81).
+/// The two ways to be wrong are not symmetric: encrypting in a plaintext room
+/// is merely unnecessary, while uploading in the clear to an encrypted room
+/// publishes the file to anyone who can reach the media endpoint (#81). So an
+/// unreadable state encrypts.
+///
+/// Split from `room_needs_encryption` only so that direction can be pinned by a
+/// test — `Room` needs a live client, this does not.
+fn encrypt_for_room_state(is_encrypted: Option<bool>) -> bool {
+    is_encrypted.unwrap_or(true)
+}
+
+/// Whether attachments sent to `room` must be encrypted before upload.
 async fn room_needs_encryption(room: &Room) -> bool {
-    room.is_encrypted().await.unwrap_or(true)
+    encrypt_for_room_state(room.is_encrypted().await.ok())
 }
 
 /// Upload a file to the homeserver and return the source to reference it by.
@@ -411,4 +420,30 @@ where
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encrypt_for_room_state;
+
+    /// The fail-safe direction is the whole point, so it is pinned rather than
+    /// left to a bare `unwrap_or` someone could later "simplify" the other way.
+    ///
+    /// The two ways to be wrong are not symmetric: encrypting in a plaintext
+    /// room costs nothing a reader would notice, while uploading in the clear
+    /// to an encrypted room publishes the file to anyone who can reach the
+    /// media endpoint (#81).
+    #[test]
+    fn test_unreadable_room_state_is_treated_as_encrypted() {
+        assert!(
+            encrypt_for_room_state(None),
+            "a room whose encryption state cannot be read must be encrypted"
+        );
+    }
+
+    #[test]
+    fn test_encrypted_room_encrypts_and_plaintext_room_does_not() {
+        assert!(encrypt_for_room_state(Some(true)));
+        assert!(!encrypt_for_room_state(Some(false)));
+    }
 }
