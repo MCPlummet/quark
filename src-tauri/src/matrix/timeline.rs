@@ -1076,7 +1076,21 @@ fn build_edit_content(
     };
 
     use matrix_sdk::ruma::events::room::message::ReplacementMetadata;
-    new_content.make_replacement(ReplacementMetadata::new(event_id.to_owned(), None), None)
+    let mut content =
+        new_content.make_replacement(ReplacementMetadata::new(event_id.to_owned(), None), None);
+
+    // ruma's `make_replacement_body` inserts an empty `FormattedBody` for every
+    // Text message before applying the `* ` fallback prefix, so a plain edit
+    // comes back claiming `format: org.matrix.custom.html` with a body of just
+    // `"* "`. Consumers that prefer the formatted fallback render the edit as a
+    // lone asterisk (#73). Drop it again when the edit had no HTML of its own.
+    if new_formatted_body.is_none() {
+        if let MessageType::Text(text) = &mut content.msgtype {
+            text.formatted = None;
+        }
+    }
+
+    content
 }
 
 /// Edit an existing message.
@@ -1799,6 +1813,59 @@ mod tests {
             panic!("expected a text fallback");
         };
         assert_eq!(fallback.body, "* fixed text");
+    }
+
+    /// A plain-text edit must not ship an HTML fallback (#73).
+    ///
+    /// ruma's `make_replacement_body` inserts an empty `FormattedBody` for
+    /// `Text` *before* applying the `* ` prefix, so an edit built from
+    /// `text_plain` comes out carrying `format: org.matrix.custom.html` and
+    /// `formatted_body: "* "`. Any consumer that prefers the formatted fallback
+    /// — bridges, non-edit-aware clients, search indexers — then renders the
+    /// edited message as a lone asterisk.
+    #[test]
+    fn test_build_edit_content_plain_edit_has_no_html_fallback() {
+        let event_id = EventId::parse("$original:example.org").unwrap();
+        let content = super::build_edit_content(&event_id, "fixed text", None);
+
+        let MessageType::Text(fallback) = &content.msgtype else {
+            panic!("expected a text fallback");
+        };
+        assert_eq!(fallback.body, "* fixed text");
+        assert!(
+            fallback.formatted.is_none(),
+            "a plain edit must not carry an HTML fallback, got {:?}",
+            fallback.formatted.as_ref().map(|f| &f.body)
+        );
+
+        // The replacement content itself stays plain too.
+        let Some(Relation::Replacement(r)) = &content.relates_to else {
+            panic!("edit content must carry an m.replace relation");
+        };
+        let MessageType::Text(new_text) = &r.new_content.msgtype else {
+            panic!("expected a text m.new_content");
+        };
+        assert!(
+            new_text.formatted.is_none(),
+            "m.new_content must not gain an HTML body either"
+        );
+    }
+
+    /// The fix for #73 must not strip the fallback off a genuinely formatted edit.
+    #[test]
+    fn test_build_edit_content_formatted_edit_keeps_its_html_fallback() {
+        let event_id = EventId::parse("$original:example.org").unwrap();
+        let content =
+            super::build_edit_content(&event_id, "bold text", Some("<b>bold text</b>"));
+
+        let MessageType::Text(fallback) = &content.msgtype else {
+            panic!("expected a text fallback");
+        };
+        assert_eq!(
+            fallback.formatted.as_ref().map(|f| f.body.as_str()),
+            Some("* <b>bold text</b>"),
+            "a formatted edit keeps its prefixed HTML fallback"
+        );
     }
 
     /// A formatted edit must keep its HTML in `m.new_content`.
