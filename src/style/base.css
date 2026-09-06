@@ -7467,3 +7467,147 @@ body.quark-mobile .message__link {
 body.quark-mobile .attach-progress {
   touch-action: none;
 }
+
+/* ── Notification toasts ─────────────────────────────────────────────────────
+ *
+ * These rules did not exist until #80, which meant every one of the app's
+ * ~127 `showError` / `showSuccess` / `showToast` call sites was silent. The DOM
+ * was always right — the toasts were built, timed and dismissed correctly — so
+ * no test caught it: `.toast-container` mounts on <body> (ui/overlay.ts) with
+ * only `.quark-overlay`, whose sole rule is the mobile pan transform. With no
+ * position of its own it laid out as a static block immediately after `#app`,
+ * which is `100dvh` tall under `body { overflow: hidden }`. Every toast was
+ * painted a full viewport below the fold, unreachable and unscrollable.
+ *
+ * Anchored bottom-right rather than top: the top edge is where the mobile top
+ * bar and the room header live, and a toast over the compose bar is the thing
+ * the user is most likely to be looking at when a send fails. */
+.toast-container {
+  position: fixed;
+  right: 16px;
+  /* Clear the home indicator / gesture bar; collapses to the plain inset on
+     desktop where the env() resolves to 0. */
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 10500; /* above dialogs and context menus (10000), below #startup-overlay */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  /* The stack spans a wide, mostly-empty column; let clicks through it and
+     re-arm them on the toasts themselves, or it would swallow presses on the
+     timeline and compose bar underneath. */
+  pointer-events: none;
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  border: var(--border-width) solid var(--border-color);
+  /* Type reads off the left edge, the way the terminal marks a gutter — the
+     accent is carried by a border rather than a fill so the toast stays a
+     bordered box like every other popover here, not a Material snackbar. */
+  border-left-width: 4px;
+  border-left-style: solid;
+  border-left-color: var(--border-color);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  line-height: 1.4;
+  cursor: pointer;
+  max-width: 100%;
+  animation: toast-in var(--transition-speed) ease-out;
+}
+
+.toast--error {
+  border-left-color: var(--accent-error);
+}
+
+.toast--success {
+  border-left-color: var(--accent-success);
+}
+
+.toast--info {
+  border-left-color: var(--accent-secondary);
+}
+
+.toast__icon {
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+
+.toast--error .toast__icon {
+  color: var(--accent-error);
+}
+
+.toast--success .toast__icon {
+  color: var(--accent-success);
+}
+
+.toast--info .toast__icon {
+  color: var(--accent-secondary);
+}
+
+.toast__message {
+  flex: 1;
+  min-width: 0;
+  /* Backend error strings are long and arrive unbroken (URLs, event IDs). */
+  overflow-wrap: anywhere;
+}
+
+.toast__close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: color-mix(in srgb, var(--fg) 55%, transparent);
+  font-family: inherit;
+  font-size: var(--font-size);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.toast__close:hover {
+  color: var(--fg);
+}
+
+/* NotificationToast._dismiss removes the element on `animationend`, with a
+   400ms belt-and-braces timeout behind it. Keep this shorter than that or the
+   fallback fires mid-animation and the toast vanishes rather than leaving. */
+.toast--leaving {
+  animation: toast-out var(--transition-speed) ease-in forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes toast-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast--leaving {
+    animation-duration: 1ms;
+  }
+}
