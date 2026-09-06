@@ -17,6 +17,7 @@ import { getPlatform } from "../ipc/index.js";
 import { invoke } from "../ipc/invoke.js";
 import { isTauri } from "../ipc/mock.js";
 import { showToast } from "../ui/NotificationToast.js";
+import { AppState } from "./state.js";
 import type { MuteOutcome, NotificationConfig } from "../ipc/notifications.js";
 
 // Re-export the type so consumers only need to import from this module.
@@ -52,12 +53,39 @@ async function _loadConfig(): Promise<NotificationConfig> {
   return _config;
 }
 
-/** Return true if notifications are enabled and the room is not muted. */
+/**
+ * Whether an in-app toast should fire for `roomId`.
+ *
+ * The server's push ruleset holds the truth about muting, so a room present in
+ * `roomListCache` is decided by its `muted` flag alone — a room muted from
+ * another client has no entry in this device's `mute_rooms` and used to toast on
+ * every message while the room list drew it as muted (#82).
+ *
+ * `mute_rooms` stays as the offline fallback, used only when the room is not
+ * cached yet (cold start, or one the store has not synced). Deleting it
+ * outright was considered and rejected: muting with no connectivity would then
+ * do nothing at all, where today it still silences this device.
+ *
+ * Pure and exported so the precedence is testable without an AppState fixture;
+ * `_shouldShowInAppToast` is the thin wrapper that reads the live state.
+ */
+export function shouldShowInAppToast(
+  config: NotificationConfig | null,
+  roomId: string,
+  cachedRoom: { muted?: boolean | null } | undefined
+): boolean {
+  if (!config) return false;
+  if (!config.enabled) return false;
+  // `?? undefined` so a payload predating the field falls through to the local
+  // list rather than reading null as "not muted".
+  const serverMuted = cachedRoom?.muted ?? undefined;
+  if (serverMuted !== undefined) return !serverMuted;
+  return !config.mute_rooms.includes(roomId);
+}
+
 function _shouldShowInAppToast(roomId: string): boolean {
-  if (!_config) return false;
-  if (!_config.enabled) return false;
-  if (_config.mute_rooms.includes(roomId)) return false;
-  return true;
+  const cached = AppState.get("roomListCache").find((r) => r.room_id === roomId);
+  return shouldShowInAppToast(_config, roomId, cached);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
@@ -260,12 +288,16 @@ export function handleIncomingMessage(
  * push it means the homeserver keeps waking the phone for a muted room, so it
  * is surfaced to the user instead.
  */
-export async function muteRoom(roomId: string): Promise<void> {
+export async function muteRoom(roomId: string): Promise<MuteOutcome> {
   const outcome = await muteRoomIpc(roomId);
   if (_config && !_config.mute_rooms.includes(roomId)) {
     _config = { ..._config, mute_rooms: [..._config.mute_rooms, roomId] };
   }
   warnIfUnsynced(outcome);
+  // Returned rather than swallowed: the caller has to know whether the account's
+  // ruleset actually changed before it patches any cached state on the strength
+  // of it (#82).
+  return outcome;
 }
 
 /**
@@ -276,7 +308,7 @@ export async function muteRoom(roomId: string): Promise<void> {
  * that outlives the unmute leaves the room silent on every client while this
  * one shows it as unmuted.
  */
-export async function unmuteRoom(roomId: string): Promise<void> {
+export async function unmuteRoom(roomId: string): Promise<MuteOutcome> {
   const outcome = await unmuteRoomIpc(roomId);
   if (_config) {
     _config = {
@@ -285,6 +317,7 @@ export async function unmuteRoom(roomId: string): Promise<void> {
     };
   }
   warnIfUnsynced(outcome);
+  return outcome;
 }
 
 /** Show the backend's explanation when a mute change didn't reach the server. */
