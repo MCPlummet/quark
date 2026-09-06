@@ -165,6 +165,23 @@ pub struct SyncRoomUnreadCount {
     pub highlight_count: u64,
 }
 
+/// Build the live-sync unread payload for a room.
+///
+/// Split out of the sync handler so the field mapping is testable: the room-list
+/// fetch path (`matrix/rooms.rs`) and this one have to agree on which SDK count
+/// is "unread", and for a long time they did not (#59). A swap here is invisible
+/// in every room where the two counts happen to be equal.
+fn unread_payload(
+    room_id: String,
+    counts: matrix_sdk::sync::UnreadNotificationsCount,
+) -> SyncRoomUnreadCount {
+    SyncRoomUnreadCount {
+        room_id,
+        unread_count: counts.notification_count,
+        highlight_count: counts.highlight_count,
+    }
+}
+
 /// Emitted when a message is redacted in a room.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRedactionUpdate {
@@ -366,12 +383,7 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
                     }
 
                     // Also emit updated unread counts for the room.
-                    let unread = room.unread_notification_counts();
-                    let unread_payload = SyncRoomUnreadCount {
-                        room_id,
-                        unread_count: unread.highlight_count,
-                        highlight_count: unread.notification_count,
-                    };
+                    let unread_payload = unread_payload(room_id, room.unread_notification_counts());
                     if let Err(e) = app.emit(EVENT_UNREAD_COUNT, &unread_payload) {
                         error!("Failed to emit {}: {}", EVENT_UNREAD_COUNT, e);
                     }
@@ -993,5 +1005,41 @@ mod tests {
         // Evicted → treated as new again (notifies). Acceptable: the cap only
         // bounds memory; a duplicate this far back in history is implausible.
         assert!(claim_notification(first), "evicted ID should be claimable again");
+    }
+
+    // ── Unread counts ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_unread_payload_uses_notification_count_for_unread() {
+        // The room-list fetch path (matrix/rooms.rs) reports the *notification*
+        // count as the unread count. The live-sync payload has to agree, or the
+        // two disagree the moment a sync update lands (#59).
+        let counts = matrix_sdk::sync::UnreadNotificationsCount {
+            notification_count: 7,
+            highlight_count: 2,
+        };
+
+        let payload = unread_payload("!room:example.com".to_owned(), counts);
+
+        assert_eq!(payload.unread_count, 7, "unread is the notification count");
+        assert_eq!(payload.highlight_count, 2, "highlight is the highlight count");
+    }
+
+    #[test]
+    fn test_unread_payload_keeps_the_two_counts_distinct() {
+        // A swap is invisible whenever the counts happen to be equal, so pin the
+        // asymmetric case: every message highlights, none of them do.
+        let all_highlights = matrix_sdk::sync::UnreadNotificationsCount {
+            notification_count: 3,
+            highlight_count: 3,
+        };
+        let no_highlights = matrix_sdk::sync::UnreadNotificationsCount {
+            notification_count: 3,
+            highlight_count: 0,
+        };
+
+        assert_eq!(unread_payload("!a:x".to_owned(), all_highlights).highlight_count, 3);
+        assert_eq!(unread_payload("!a:x".to_owned(), no_highlights).highlight_count, 0);
+        assert_eq!(unread_payload("!a:x".to_owned(), no_highlights).unread_count, 3);
     }
 }
