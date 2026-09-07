@@ -158,27 +158,33 @@ pub struct SyncVerificationRequest {
 }
 
 /// Emitted when unread counts change for a room.
+///
+/// The two count fields are named exactly as `RoomInfo` names them, so the
+/// frontend listener can fold this into its cached room entry without a
+/// per-field mapping — one less place for the #59 swap to come back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRoomUnreadCount {
     pub room_id: String,
     pub unread_count: u64,
-    pub highlight_count: u64,
+    pub notification_count: u64,
 }
 
 /// Build the live-sync unread payload for a room.
 ///
-/// Split out of the sync handler so the field mapping is testable: the room-list
-/// fetch path (`matrix/rooms.rs`) and this one have to agree on which SDK count
-/// is "unread", and for a long time they did not (#59). A swap here is invisible
-/// in every room where the two counts happen to be equal.
+/// The SDK-to-UI mapping itself lives in `RoomUnread`, shared with the room-list
+/// fetch path (`matrix/rooms.rs`): the two have to agree on which SDK count is
+/// "unread", and for a long time they did not (#59). A swap is invisible in
+/// every room where the two counts happen to be equal, so it is pinned by tests
+/// on both sides of the one conversion rather than at each call site.
 fn unread_payload(
     room_id: String,
     counts: matrix_sdk::sync::UnreadNotificationsCount,
 ) -> SyncRoomUnreadCount {
+    let unread = crate::matrix::rooms::RoomUnread::from(counts);
     SyncRoomUnreadCount {
         room_id,
-        unread_count: counts.notification_count,
-        highlight_count: counts.highlight_count,
+        unread_count: unread.unread_count,
+        notification_count: unread.notification_count,
     }
 }
 
@@ -947,13 +953,13 @@ mod tests {
         let payload = SyncRoomUnreadCount {
             room_id: "!room:example.com".to_string(),
             unread_count: 5,
-            highlight_count: 2,
+            notification_count: 2,
         };
         let json = serde_json::to_string(&payload).expect("serialize");
         let back: SyncRoomUnreadCount = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.room_id, "!room:example.com");
         assert_eq!(back.unread_count, 5);
-        assert_eq!(back.highlight_count, 2);
+        assert_eq!(back.notification_count, 2);
     }
 
     #[test]
@@ -961,12 +967,12 @@ mod tests {
         let payload = SyncRoomUnreadCount {
             room_id: "!room:example.com".to_string(),
             unread_count: 0,
-            highlight_count: 0,
+            notification_count: 0,
         };
         let json = serde_json::to_string(&payload).expect("serialize");
         let back: SyncRoomUnreadCount = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.unread_count, 0);
-        assert_eq!(back.highlight_count, 0);
+        assert_eq!(back.notification_count, 0);
     }
 
     // ── Event name constants ──────────────────────────────────────────────────
@@ -1021,8 +1027,8 @@ mod tests {
 
         let payload = unread_payload("!room:example.com".to_owned(), counts);
 
-        assert_eq!(payload.unread_count, 7, "unread is the notification count");
-        assert_eq!(payload.highlight_count, 2, "highlight is the highlight count");
+        assert_eq!(payload.unread_count, 7, "unread is the SDK notification count");
+        assert_eq!(payload.notification_count, 2, "the badge count is the SDK highlight count");
     }
 
     #[test]
@@ -1038,8 +1044,8 @@ mod tests {
             highlight_count: 0,
         };
 
-        assert_eq!(unread_payload("!a:x".to_owned(), all_highlights).highlight_count, 3);
-        assert_eq!(unread_payload("!a:x".to_owned(), no_highlights).highlight_count, 0);
+        assert_eq!(unread_payload("!a:x".to_owned(), all_highlights).notification_count, 3);
+        assert_eq!(unread_payload("!a:x".to_owned(), no_highlights).notification_count, 0);
         assert_eq!(unread_payload("!a:x".to_owned(), no_highlights).unread_count, 3);
     }
 }
