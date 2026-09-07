@@ -612,7 +612,11 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     img.alt = msg.mediaAlt ?? "sticker";
     row.appendChild(img);
   } else if (type === "file") {
-    const aff = buildFileAffordance(msg.mediaUrl, msg.body, msg.mediaMimeType, msg.mediaEncryptionInfo);
+    // mediaAlt, not body: on a captioned upload the body is the caption, which
+    // would label the row — and name the saved file — with the caption instead
+    // of the file. Falls back to the body for uploads that carry no filename,
+    // where the body is the filename.
+    const aff = buildFileAffordance(msg.mediaUrl, msg.mediaAlt ?? msg.body, msg.mediaMimeType, msg.mediaEncryptionInfo);
     row.appendChild(aff);
   } else {
     // Text / system

@@ -605,7 +605,18 @@ The room list has a two-column layout inspired by Cinny:
   - Fallback: alphabetical by room name
   - User can pin rooms to top via `:pin` command
 - No room avatars or icons — text only, matching the CLI aesthetic
-- Unread indicators via color (theme-configurable) and optional badge count
+- Unread indicators via color (theme-configurable) and optional badge count.
+  Two counters, and they are not interchangeable: the SDK's *notification* count
+  is every unread message that fired a push rule and drives the unread state,
+  while its *highlight* count is mentions only and drives the numeric badge.
+  Both room-list paths and the live-sync payload map them through one
+  `RoomUnread` conversion (`matrix/rooms.rs`) because reading them the wrong way
+  round is invisible in any room where the two happen to be equal. Counts are
+  server-authoritative: `quark://sync/unread_count` applies them as they change,
+  so a mention lights the badge without waiting for a room-list refresh and a
+  read receipt from another device clears it. The open room is exempt — its
+  badge is cleared locally on open and its read receipt sent only then, so the
+  server's count for it climbs for as long as the user sits reading
 - Muted rooms are marked and excluded from unread highlighting. The flag comes
   from the room's `RoomNotificationMode` (server-side push rules), not the local
   `mute_rooms` list, so a mute set in another client shows up here too — see
@@ -949,7 +960,13 @@ alongside `openExternalUrl` opened every link twice.
   than sending immediately. Enter (or the ➤ / preview Send button) sends it;
   any text typed first becomes the caption, sent as a single `m.image` with
   `body` = caption and `filename` = original name (no caption ⇒ `body` =
-  filename, `filename` omitted). The first `Esc` discards the staged image
+  filename, `filename` omitted). The read path surfaces `filename` alongside the
+  caption rather than making `body` serve both: with a caption present `body`
+  *is* the caption, so using it as alt text announced a captioned image twice
+  (once as alt, once as the caption drawn beneath it) and labelled a captioned
+  video with the caption instead of the file it plays. Alt text, the video
+  label and the download name all take the filename, falling back to the
+  reply-fallback-stripped body for uploads that carry none. The first `Esc` discards the staged image
   (modal-close semantics — mode, reply, and edit state untouched); staging a
   second image replaces the first, keeping the typed caption. An armed reply
   attaches to the image send and clears on success; a failed send restores the

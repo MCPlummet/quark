@@ -125,6 +125,14 @@ export interface TimelineEvent {
   media_height: number | null;
   /** Media caption (MSC2530) for image messages; absent when the body is just a filename. */
   caption?: string | null;
+  /**
+   * The uploaded file's own name; absent when the sender's client set none.
+   *
+   * The counterpart to `caption`: on a captioned upload `body` holds the caption
+   * and this holds the filename, so the UI has a name to label a download with
+   * and something other than the caption to hand a screen reader.
+   */
+  filename?: string | null;
   /** JSON-serialized EncryptedFile for E2EE media; absent for plain media. */
   media_encryption_info?: string | null;
   /** mxc:// URL for the video thumbnail image (from VideoInfo.thumbnail_source). */
