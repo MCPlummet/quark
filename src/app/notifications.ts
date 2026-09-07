@@ -61,13 +61,15 @@ export interface InAppToastInput {
   senderId: string;
   ownUserId: string | null;
   /**
-   * The room is open *and* its live tail is rendering this message right now.
+   * This message is being painted somewhere the user can see it right now.
    *
-   * Not merely "the room is open": in context view the room stays open while
-   * the user is scrolled into the past, and live events are deliberately not
-   * rendered there, so the toast is the only signal the message arrived.
+   * Not merely "the room is open". In context view the room stays open while
+   * the user is scrolled into the past, and a thread reply is never appended to
+   * the main timeline at all — in both cases the room is in focus while this
+   * particular message is drawn nowhere, so the toast is the only signal it
+   * arrived.
    */
-  isViewingLiveTail: boolean;
+  isRendered: boolean;
   cachedRoom: { muted?: boolean | null } | undefined;
 }
 
@@ -75,23 +77,26 @@ export interface InAppToastInput {
  * Whether an in-app toast should fire.
  *
  * Pure and exported so the precedence is testable without an AppState fixture;
- * `_shouldShowInAppToast` is the thin wrapper that reads the live state.
+ * `handleIncomingMessage` is what reads the live state and calls it.
  *
  * The rules, and why each exists:
  *
  * - **Own messages** are the user's own echo coming back over sync. The OS path
  *   has always dropped these — `notify::evaluate` opens with `input.is_own` —
  *   and the in-app path simply never did (#89).
- * - **The room being read** is already showing the message in its timeline, so
- *   a toast about it is noise stacked on top of the thing it describes (#89).
+ * - **A message already on screen** would be a toast stacked on top of the very
+ *   thing it describes (#89). The test is whether *this message* is painted,
+ *   not whether its room is open — see `isRendered`.
  * - **Muting** is decided by the server's push ruleset, so a room present in
  *   `roomListCache` is decided by its `muted` flag alone: a room muted from
  *   another client has no entry in this device's `mute_rooms`, and used to toast
  *   on every message while the room list drew it as muted (#82). `mute_rooms`
- *   stays as the offline fallback, used only when the room is not cached yet.
+ *   stays as the offline fallback, used only when the room is not cached yet —
+ *   DESIGN.md is explicit that the list answers "did we try to mute this here",
+ *   not "is this room muted", and must not be read as the latter.
  */
 export function shouldShowInAppToast(input: InAppToastInput): boolean {
-  const { config, roomId, senderId, ownUserId, isViewingLiveTail, cachedRoom } = input;
+  const { config, roomId, senderId, ownUserId, isRendered, cachedRoom } = input;
 
   if (!config) return false;
   if (!config.enabled) return false;
@@ -101,7 +106,7 @@ export function shouldShowInAppToast(input: InAppToastInput): boolean {
   // null as a match would silence everything.
   if (ownUserId !== null && senderId === ownUserId) return false;
 
-  if (isViewingLiveTail) return false;
+  if (isRendered) return false;
 
   // `?? undefined` so a payload predating the field falls through to the local
   // list rather than reading null as "not muted".
@@ -288,8 +293,8 @@ export function handleIncomingMessage(msg: {
   senderName: string;
   body: string;
   roomName: string;
-  /** Whether the open room's live tail is rendering this message. */
-  isViewingLiveTail: boolean;
+  /** Whether this message is being painted anywhere the user can see it. */
+  isRendered: boolean;
 }): void {
   if (!_isWindowFocused()) {
     // Window is not focused — the Rust backend handles OS notifications.
@@ -302,7 +307,7 @@ export function handleIncomingMessage(msg: {
     roomId: msg.roomId,
     senderId: msg.senderId,
     ownUserId: AppState.get("ownUserId"),
-    isViewingLiveTail: msg.isViewingLiveTail,
+    isRendered: msg.isRendered,
     cachedRoom,
   });
   if (!show) return;

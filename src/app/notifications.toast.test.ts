@@ -45,7 +45,7 @@ const input = (over: Partial<InAppToastInput> = {}): InAppToastInput => ({
   roomId: ROOM,
   senderId: ALICE,
   ownUserId: ME,
-  isViewingLiveTail: false,
+  isRendered: false,
   cachedRoom: { muted: false },
   ...over,
 });
@@ -68,7 +68,7 @@ describe("shouldShowInAppToast: own-message echo (#89)", () => {
   // A message sent from the user's phone echoes into their desktop session with
   // the same sender — still their own message, still no toast.
   it("stays silent for the user's own message sent from another client", () => {
-    expect(shouldShowInAppToast(input({ senderId: ME, isViewingLiveTail: false }))).toBe(false);
+    expect(shouldShowInAppToast(input({ senderId: ME, isRendered: false }))).toBe(false);
   });
 
   // Before the session resolves ownUserId there is nothing to compare against;
@@ -80,11 +80,11 @@ describe("shouldShowInAppToast: own-message echo (#89)", () => {
 
 describe("shouldShowInAppToast: the room being read (#89)", () => {
   it("stays silent when the message is rendering in the open live tail", () => {
-    expect(shouldShowInAppToast(input({ isViewingLiveTail: true }))).toBe(false);
+    expect(shouldShowInAppToast(input({ isRendered: true }))).toBe(false);
   });
 
   it("toasts for a message in some other room", () => {
-    expect(shouldShowInAppToast(input({ isViewingLiveTail: false }))).toBe(true);
+    expect(shouldShowInAppToast(input({ isRendered: false }))).toBe(true);
   });
 
   /**
@@ -94,7 +94,7 @@ describe("shouldShowInAppToast: the room being read (#89)", () => {
    * the rule is "open AND rendering", not "open".
    */
   it("still toasts in context view, where the live tail is not rendered", () => {
-    expect(shouldShowInAppToast(input({ isViewingLiveTail: false }))).toBe(true);
+    expect(shouldShowInAppToast(input({ isRendered: false }))).toBe(true);
   });
 });
 

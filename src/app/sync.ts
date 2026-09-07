@@ -59,6 +59,19 @@ interface RoomKeysReceivedPayload {
   room_ids: string[];
 }
 
+/**
+ * Server-authoritative unread counts for one room.
+ *
+ * Field names match `RoomInfo`'s deliberately, so folding this into the cached
+ * room entry needs no per-field mapping — the #59 swap came back once already
+ * because two adjacent counters were remapped by hand.
+ */
+interface SyncRoomUnreadCountPayload {
+  room_id: string;
+  unread_count: number;
+  notification_count: number;
+}
+
 // ── Tauri event listener shim ─────────────────────────────────────────────────
 
 type UnlistenFn = () => void;
@@ -146,7 +159,15 @@ export async function startSync(components: AppComponents): Promise<() => void> 
       // The toast still fires below.
       const skipForContextView = payload.room_id === currentRoom && isInContextView();
 
+      // Whether this event is actually being painted somewhere the user can
+      // see it — which is not the same question as "is its room open". A thread
+      // reply is deliberately never appended to the main timeline, so with the
+      // thread panel closed it renders nowhere; suppressing its toast on the
+      // strength of the room being open dropped it entirely.
+      let isRendered = false;
+
       if (isCurrentRoomLive) {
+        isRendered = true;
         // Deduplicate: skip events already in the state cache (e.g. initial sync
         // replay of messages already loaded via getTimeline, or a second client
         // emitting the same event in dev hot-reload scenarios).
@@ -177,6 +198,12 @@ export async function startSync(components: AppComponents): Promise<() => void> 
               downloadSyncMessageImage(payload.event, {
                 updateMessageMedia: (id, url) => timeline.updateInlineThreadMedia(id, url),
               });
+            } else {
+              // The panel is closed, or showing a different thread. The reply
+              // lands in neither the main timeline nor the panel, so the toast
+              // is the only signal that it arrived — the reply-count bump below
+              // is a number on an existing message, easily missed.
+              isRendered = false;
             }
             timeline.incrementThreadReplyCount(payload.event.thread_root);
           } else if (payload.event.is_edit && payload.event.relates_to_event_id) {
@@ -224,10 +251,10 @@ export async function startSync(components: AppComponents): Promise<() => void> 
       // Trigger in-app toast when window is focused (OS notification is handled
       // by the Rust backend when the window is not focused).
       //
-      // `isCurrentRoomLive` is passed rather than a bare "is this the open
-      // room": in context view the room is open but the live tail is not
-      // rendered above, so the toast is the only signal the message arrived and
-      // must keep firing there (#89).
+      // `isRendered` is passed rather than a bare "is this the open room": in
+      // context view, and for a thread reply with the panel closed, the room is
+      // open while this message is not drawn anywhere, so the toast is the only
+      // signal it arrived (#89).
       const roomName =
         AppState.get("roomListCache").find((r) => r.room_id === payload.room_id)
           ?.name ?? payload.room_id;
@@ -237,8 +264,55 @@ export async function startSync(components: AppComponents): Promise<() => void> 
         senderName: resolveDisplayName(payload.event.sender),
         body: payload.event.body,
         roomName,
-        isViewingLiveTail: isCurrentRoomLive,
+        isRendered,
       });
+    }
+  );
+
+  // ── quark://sync/unread_count ─────────────────────────────────────────────
+  //
+  // The backend has emitted this for every synced message all along, and until
+  // now nothing listened: the badge was drawn from a local `unread_count + 1`
+  // guess that only ever went up, and from whatever `get_rooms` last returned.
+  // Two consequences the server's own numbers fix — a mention arriving while
+  // the app is open did not light the mention badge until the next room-list
+  // refresh, and reading a room on another device did not clear this one's.
+  const unlistenUnread = await tauriListen<SyncRoomUnreadCountPayload>(
+    "quark://sync/unread_count",
+    (payload) => {
+      // The open room is exempt. Its badge is cleared locally on open and the
+      // read receipt is sent only then, so the server's count for it climbs for
+      // as long as the user sits reading — honouring it here would draw a badge
+      // on the very room they are looking at. This mirrors the message handler,
+      // which likewise never bumps the badge of the room in focus.
+      if (payload.room_id === AppState.get("currentRoomId")) return;
+
+      const cached = AppState.get("roomListCache");
+      let changed = false;
+      const updated = cached.map((r) => {
+        if (r.room_id !== payload.room_id) return r;
+        if (
+          r.unread_count === payload.unread_count &&
+          r.notification_count === payload.notification_count
+        ) {
+          return r;
+        }
+        changed = true;
+        return {
+          ...r,
+          unread_count: payload.unread_count,
+          notification_count: payload.notification_count,
+        };
+      });
+      if (!changed) return;
+
+      AppState.set("roomListCache", updated);
+      // updateRoomBadge rather than setRooms, so the current space filter survives.
+      roomList.updateRoomBadge(
+        payload.room_id,
+        payload.unread_count,
+        payload.notification_count,
+      );
     }
   );
 
@@ -388,6 +462,7 @@ export async function startSync(components: AppComponents): Promise<() => void> 
 
   _unlisteners = [
     unlistenMessage,
+    unlistenUnread,
     unlistenRooms,
     unlistenTyping,
     unlistenPresence,
