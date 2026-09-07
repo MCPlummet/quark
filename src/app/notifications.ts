@@ -87,13 +87,20 @@ export interface InAppToastInput {
  * - **A message already on screen** would be a toast stacked on top of the very
  *   thing it describes (#89). The test is whether *this message* is painted,
  *   not whether its room is open — see `isRendered`.
- * - **Muting** is decided by the server's push ruleset, so a room present in
- *   `roomListCache` is decided by its `muted` flag alone: a room muted from
- *   another client has no entry in this device's `mute_rooms`, and used to toast
- *   on every message while the room list drew it as muted (#82). `mute_rooms`
- *   stays as the offline fallback, used only when the room is not cached yet —
- *   DESIGN.md is explicit that the list answers "did we try to mute this here",
- *   not "is this room muted", and must not be read as the latter.
+ * - **Muting** is decided by two records, and either one silences the room —
+ *   which is exactly what `notifications::should_notify` does for the OS path,
+ *   so the two agree:
+ *   - `cachedRoom.muted` is the account's push ruleset. It is the mute that
+ *     counts, and a room muted from another client appears there with no local
+ *     entry at all (#82).
+ *   - `mute_rooms` holds only the mutes the homeserver did *not* take. A
+ *     successful mute leaves no entry, so an entry here means "this device tried
+ *     and the write failed", and honouring it is the whole reason the list
+ *     exists. It used to record successful mutes too, which is what forced this
+ *     function to ignore it for any cached room: an entry could equally well be
+ *     one left over from a mute since undone elsewhere. The OS path made the
+ *     opposite choice, and a room muted while the homeserver was unreachable was
+ *     then silent with the window unfocused and toasting with it focused.
  */
 export function shouldShowInAppToast(input: InAppToastInput): boolean {
   const { config, roomId, senderId, ownUserId, isRendered, cachedRoom } = input;
@@ -108,11 +115,11 @@ export function shouldShowInAppToast(input: InAppToastInput): boolean {
 
   if (isRendered) return false;
 
-  // `?? undefined` so a payload predating the field falls through to the local
-  // list rather than reading null as "not muted".
-  const serverMuted = cachedRoom?.muted ?? undefined;
-  if (serverMuted !== undefined) return !serverMuted;
-  return !config.mute_rooms.includes(roomId);
+  if (config.mute_rooms.includes(roomId)) return false;
+  // `?? false` covers a cached entry written before the field existed, and a
+  // room not cached at all: the local list above has already had its say, so an
+  // unknown ruleset state is not itself a reason to stay silent.
+  return !(cachedRoom?.muted ?? false);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
@@ -329,8 +336,17 @@ export function handleIncomingMessage(msg: {
  */
 export async function muteRoom(roomId: string): Promise<MuteOutcome> {
   const outcome = await muteRoomIpc(roomId);
-  if (_config && !_config.mute_rooms.includes(roomId)) {
-    _config = { ..._config, mute_rooms: [..._config.mute_rooms, roomId] };
+  // Mirror exactly what the backend just wrote: the list holds only the mutes
+  // the homeserver did not take, so a synced mute clears any entry rather than
+  // adding one. Diverging from it here would put a mute in this session's cached
+  // config that the persisted config does not have, and the next Settings save
+  // would write the phantom back to disk.
+  if (_config) {
+    const without = _config.mute_rooms.filter((r) => r !== roomId);
+    _config = {
+      ..._config,
+      mute_rooms: outcome.synced ? without : [...without, roomId],
+    };
   }
   warnIfUnsynced(outcome);
   // Returned rather than swallowed: the caller has to know whether the account's

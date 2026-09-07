@@ -2156,7 +2156,52 @@ pub async fn send_gif(
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_store, gif_dimensions, store_exists};
+    use super::{apply_mute_attempt, clear_store, gif_dimensions, store_exists};
+
+    // ── mute_rooms ────────────────────────────────────────────────────────────
+    //
+    // The list holds only the mutes the homeserver did not take. It used to hold
+    // every mute attempted here, which left an entry meaning either "the write
+    // failed, silence this locally" or "this synced long ago and has since been
+    // unmuted from another client" — indistinguishable, so the two readers chose
+    // differently and a room came out muted or not depending on whether the
+    // window had focus.
+
+    #[test]
+    fn a_failed_mute_is_recorded_so_this_device_still_silences_it() {
+        let mut rooms = vec![];
+        apply_mute_attempt(&mut rooms, "!room:example.com", false);
+        assert_eq!(rooms, vec!["!room:example.com".to_string()]);
+    }
+
+    #[test]
+    fn a_synced_mute_records_nothing_because_the_push_rule_is_the_mute() {
+        let mut rooms = vec![];
+        apply_mute_attempt(&mut rooms, "!room:example.com", true);
+        assert!(rooms.is_empty());
+    }
+
+    #[test]
+    fn a_retry_that_syncs_clears_the_earlier_failure() {
+        let mut rooms = vec!["!room:example.com".to_string()];
+        apply_mute_attempt(&mut rooms, "!room:example.com", true);
+        assert!(rooms.is_empty(), "nothing left to be mistaken for a live mute");
+    }
+
+    #[test]
+    fn a_repeated_failure_does_not_duplicate_the_entry() {
+        let mut rooms = vec!["!room:example.com".to_string()];
+        apply_mute_attempt(&mut rooms, "!room:example.com", false);
+        assert_eq!(rooms.len(), 1);
+    }
+
+    #[test]
+    fn other_rooms_are_left_alone() {
+        let mut rooms = vec!["!other:example.com".to_string()];
+        apply_mute_attempt(&mut rooms, "!room:example.com", true);
+        assert_eq!(rooms, vec!["!other:example.com".to_string()]);
+    }
+
 
     /// `store_exists` and `clear_store` must agree on what "the store" is.
     /// These exercise the pair together, since the failure that matters is them
@@ -2663,8 +2708,10 @@ pub async fn set_notification_config(
 /// for every message in a room the user muted, only for the device to discard
 /// it. The rule also syncs the mute to the user's other clients.
 ///
-/// The local list is kept as a record that the rule write was attempted, and is
-/// what `should_notify` consults on this device.
+/// The local list records the rule writes that *failed*, and is what silences
+/// the room on this device when one does. A successful mute is not recorded:
+/// the rule already silences the room everywhere, and an entry that outlived it
+/// could not be told apart from a real failure — see the note on the write.
 ///
 /// Returns whether the rule reached the homeserver. It is deliberately not an
 /// `Err`: the mute *did* take effect locally, so failing the whole call would
@@ -2678,10 +2725,20 @@ pub async fn mute_room(
     room_id: String,
 ) -> Result<crate::notifications::MuteOutcome, String> {
     let rule = set_room_mute(&state, &room_id, true).await;
+    // The list records only the mutes the homeserver did *not* take. DESIGN.md
+    // gives it exactly one job — stopping a failed rule write from making the
+    // mute appear to do nothing on this device — and recording successful mutes
+    // too is what stopped it doing that job: an entry could mean either "the
+    // write failed, honour this locally" or "this synced ages ago and has since
+    // been unmuted from another client", and nothing could tell the two apart.
+    // So the readers had to choose, and they chose differently: the OS gate
+    // honoured every entry while the in-app toast ignored any entry for a room
+    // it had cached, leaving a room muted or not depending on whether the window
+    // had focus. A successful mute now leaves nothing behind to go stale, and
+    // both gates can honour the list unconditionally.
+    let synced = rule.is_ok();
     update_mute_list(&config_state, &paths, |rooms| {
-        if !rooms.contains(&room_id) {
-            rooms.push(room_id.clone());
-        }
+        apply_mute_attempt(rooms, &room_id, synced)
     })?;
     Ok(crate::notifications::mute_outcome(rule, true))
 }
@@ -2747,6 +2804,20 @@ async fn set_room_mute(
         tracing::warn!("Failed to set push rule for {room_id}: {e}");
         e.to_string()
     })
+}
+
+/// Move `mute_rooms` to match the outcome of a mute attempt: an entry when the
+/// rule write failed, no entry when it landed.
+///
+/// Split out of `mute_room` because that needs Tauri state to run and this rule
+/// is the whole of the fix — see the note at the call site for why recording
+/// successful mutes broke the list's one job.
+fn apply_mute_attempt(rooms: &mut Vec<String>, room_id: &str, synced: bool) {
+    if synced {
+        rooms.retain(|r| r != room_id);
+    } else if !rooms.iter().any(|r| r == room_id) {
+        rooms.push(room_id.to_owned());
+    }
 }
 
 /// Mutate the local mute list and persist it. Persisting is the point: without

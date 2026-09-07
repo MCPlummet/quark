@@ -112,21 +112,40 @@ describe("shouldShowInAppToast: mute precedence (#82)", () => {
     expect(shouldShowInAppToast(input({ cachedRoom: { muted: false } }))).toBe(true);
   });
 
-  it("lets the server ruleset override a stale local mute_rooms entry", () => {
-    const stale = config({ mute_rooms: [ROOM] });
-    expect(shouldShowInAppToast(input({ config: stale, cachedRoom: { muted: false } }))).toBe(true);
+  // A stale entry alongside an unmuted ruleset can no longer arise: the backend
+  // records only the mutes the homeserver refused, so a mute that synced (and
+  // was later undone elsewhere) leaves nothing behind. An entry present *with*
+  // an unmuted ruleset therefore means one thing — the rule write failed and
+  // this device is the only thing silencing the room.
+  it("honours a local entry, which now only ever means a failed rule write", () => {
+    const failed = config({ mute_rooms: [ROOM] });
+    expect(shouldShowInAppToast(input({ config: failed, cachedRoom: { muted: false } }))).toBe(false);
   });
 
-  // mute_rooms survives only as the offline fallback: the record of "we tried
-  // to mute this here" for a room the store has not synced yet.
-  it("falls back to mute_rooms when the room is not in the cache at all", () => {
+  /**
+   * The divergence this fixed: `notifications::should_notify` has always
+   * honoured `mute_rooms` unconditionally, while this function ignored it for
+   * any room it had cached — which is nearly all of them. Mute a room while the
+   * homeserver is unreachable and it was silent with the window unfocused and
+   * toasting on every message with the window focused.
+   */
+  it("agrees with the OS path for a room muted while the server was unreachable", () => {
+    const failed = config({ mute_rooms: [ROOM] });
+    const cachedAndUnmutedOnTheServer = { muted: false };
+
+    expect(
+      shouldShowInAppToast(input({ config: failed, cachedRoom: cachedAndUnmutedOnTheServer })),
+    ).toBe(false);
+  });
+
+  it("honours the local list for a room not in the cache at all", () => {
     const local = config({ mute_rooms: [ROOM] });
     expect(shouldShowInAppToast(input({ config: local, cachedRoom: undefined }))).toBe(false);
     expect(shouldShowInAppToast(input({ cachedRoom: undefined }))).toBe(true);
   });
 
   // A payload predating the muted field must not be read as "muted".
-  it("falls back to mute_rooms when the cached room has no muted field", () => {
+  it("does not read a missing muted field as muted", () => {
     const local = config({ mute_rooms: [ROOM] });
     expect(shouldShowInAppToast(input({ config: local, cachedRoom: {} }))).toBe(false);
     expect(shouldShowInAppToast(input({ cachedRoom: {} }))).toBe(true);

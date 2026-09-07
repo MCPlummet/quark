@@ -19,8 +19,8 @@ vi.mock("../ui/NotificationToast.js", () => ({
   showError: vi.fn(),
 }));
 
-import { muteRoom, unmuteRoom } from "./notifications.js";
-import { muteRoomIpc, unmuteRoomIpc } from "../ipc/notifications.js";
+import { muteRoom, unmuteRoom, getConfig } from "./notifications.js";
+import { muteRoomIpc, unmuteRoomIpc, getNotificationConfig } from "../ipc/notifications.js";
 
 const ROOM = "!general:example.com";
 
@@ -65,5 +65,66 @@ describe("muteRoom / unmuteRoom return their outcome (#82)", () => {
     const outcome = await unmuteRoom(ROOM);
 
     expect(outcome.synced).toBe(false);
+  });
+});
+
+/**
+ * `commands::mute_room` records only the mutes the homeserver refused: a
+ * successful mute is already enforced by the push rule everywhere, and an entry
+ * that outlived it could not be told apart from a genuine failure. The cached
+ * config has to mirror that exactly — a mute in this session's config that the
+ * persisted one lacks gets written back to disk by the next Settings save.
+ */
+describe("muteRoom mirrors what the backend writes to mute_rooms", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(getNotificationConfig).mockResolvedValue({
+      enabled: true,
+      show_body: true,
+      show_sender: true,
+      mute_rooms: [],
+      background_sync: false,
+      push_enabled: false,
+      push_gateway_override: null,
+    });
+    // Force a reload so each case starts from the config above.
+    await getConfig();
+  });
+
+  it("records a mute the homeserver refused, so this device still silences it", async () => {
+    vi.mocked(muteRoomIpc).mockResolvedValue({ synced: false, warning: "unreachable" });
+
+    await muteRoom(ROOM);
+
+    expect((await getConfig()).mute_rooms).toContain(ROOM);
+  });
+
+  it("records nothing for a mute that synced — the push rule is the mute", async () => {
+    vi.mocked(muteRoomIpc).mockResolvedValue({ synced: true, warning: null });
+
+    await muteRoom(ROOM);
+
+    expect((await getConfig()).mute_rooms).not.toContain(ROOM);
+  });
+
+  it("clears an earlier failed entry once a retry syncs", async () => {
+    vi.mocked(muteRoomIpc).mockResolvedValue({ synced: false, warning: "unreachable" });
+    await muteRoom(ROOM);
+    expect((await getConfig()).mute_rooms).toContain(ROOM);
+
+    vi.mocked(muteRoomIpc).mockResolvedValue({ synced: true, warning: null });
+    await muteRoom(ROOM);
+
+    expect((await getConfig()).mute_rooms).not.toContain(ROOM);
+  });
+
+  it("drops the entry on unmute", async () => {
+    vi.mocked(muteRoomIpc).mockResolvedValue({ synced: false, warning: "unreachable" });
+    await muteRoom(ROOM);
+
+    vi.mocked(unmuteRoomIpc).mockResolvedValue({ synced: true, warning: null });
+    await unmuteRoom(ROOM);
+
+    expect((await getConfig()).mute_rooms).not.toContain(ROOM);
   });
 });

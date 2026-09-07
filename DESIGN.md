@@ -98,18 +98,30 @@ discard it — the exact cost push exists to remove. So muting a room sets the
 Matrix push rule (`commands.rs::set_room_mute`), which also syncs the mute to the
 user's other clients.
 
-**The push rule is the mute; `mute_rooms` is a cache of the attempt to set it.**
-Once the rule exists it empties `push_actions`, and `notify::evaluate` drops
-anything the push rules didn't select — so the room is already silenced without
-consulting the local list at all. The list earns its place on exactly one path:
-`set_room_mute` is best-effort, and if the rule write fails the local entry is
-what stops a mute appearing to do nothing on this device. That narrow job has
-three consequences worth stating, because treating the list as a general-purpose
-fallback gets each of them wrong:
+**The push rule is the mute; `mute_rooms` records only the attempts that
+failed.** Once the rule exists it empties `push_actions`, and `notify::evaluate`
+drops anything the push rules didn't select — so the room is already silenced
+without consulting the local list at all. The list earns its place on exactly one
+path: `set_room_mute` is best-effort, and if the rule write fails the local entry
+is what stops a mute appearing to do nothing on this device.
+
+It holds *only* those failures. A successful mute is not recorded, and a retry
+that succeeds clears the earlier failure (`commands::apply_mute_attempt`).
+Recording successful mutes too is what stopped the list doing its one job: an
+entry could then mean either "the write failed, silence this here" or "this
+synced long ago and has since been unmuted from another client", the two are
+indistinguishable, and so the two readers chose differently — `should_notify`
+honoured every entry while the in-app toast ignored any entry for a room it had
+cached. A room muted while the homeserver was unreachable came out silent with
+the window unfocused and toasting on every message with it focused. Now an entry
+means one thing, both gates honour it unconditionally, and they agree.
+
+That narrow job has three consequences worth stating, because treating the list
+as a general-purpose fallback gets each of them wrong:
 
 - **Nothing reconciles the two.** Both are written by the same command and never
-  compared afterwards, so a mute set from another client is invisible here and a
-  failed rule write leaves the list claiming a mute the homeserver never got.
+  compared afterwards, so a mute set from another client is invisible in the
+  list — which is why the ruleset, not the list, is what the UI asks.
 - **The list must not be read for display.** It answers "did we try to mute this
   here", not "is this room muted", and those diverge whenever the above happens.
   UI that asks the question must ask the ruleset.
