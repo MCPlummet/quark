@@ -129,14 +129,29 @@ pub async fn upload_media(
         return Ok(MediaSource::Encrypted(Box::new(file)));
     }
 
+    let uri = upload_plain(client, &mime, data).await?;
+    info!(url = %uri, "Media uploaded");
+    Ok(MediaSource::Plain(uri))
+}
+
+/// Upload bytes to the homeserver's media repo, unencrypted.
+///
+/// Shared by the only two callers that do a plain upload — `upload_media`'s
+/// non-encrypted branch and `upload_file` — so the call and its error text live
+/// in one place. Takes an already-parsed mime: `upload_media` needs one for the
+/// encrypted branch as well, and parsing it twice to share this would be a
+/// strange trade.
+async fn upload_plain(
+    client: &Client,
+    mime: &mime::Mime,
+    data: Vec<u8>,
+) -> Result<matrix_sdk::ruma::OwnedMxcUri, String> {
     let response = client
         .media()
-        .upload(&mime, data, None)
+        .upload(mime, data, None)
         .await
         .map_err(|e| format!("Failed to upload media: {e}"))?;
-
-    info!(url = %response.content_uri, "Media uploaded");
-    Ok(MediaSource::Plain(response.content_uri))
+    Ok(response.content_uri)
 }
 
 /// Download media from an mxc:// URL, consulting the disk cache first.
@@ -290,25 +305,15 @@ pub async fn upload_file(
         _ => "application/octet-stream",
     };
 
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(String::from);
-
-    let _ = filename;
-
-    // Deliberately not routed through `upload_media`: this path has no room, so
-    // there is nothing to ask about encryption. It is not a room attachment.
+    // Deliberately not routed through `upload_media`: that one takes a `Room` in
+    // order to ask whether the upload has to be encrypted (#81), and this path
+    // has no room to ask about — it is not a room attachment. Only the plain
+    // upload leg is shared.
     let mime: mime::Mime = mime_type
         .parse()
         .map_err(|e| format!("Invalid MIME type: {e}"))?;
-    let response = client
-        .media()
-        .upload(&mime, data, None)
-        .await
-        .map_err(|e| format!("Failed to upload media: {e}"))?;
+    let mxc_url = upload_plain(client, &mime, data).await?.to_string();
 
-    let mxc_url = response.content_uri.to_string();
     info!(url = %mxc_url, "File uploaded");
     Ok(mxc_url)
 }

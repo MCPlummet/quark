@@ -1296,19 +1296,23 @@ pub async fn open_media_externally(
 }
 
 /// Upload attachment bytes, streaming real byte progress to the frontend when
-/// the caller supplied an `upload_id`.
+/// the caller asked for it.
 ///
-/// The id is minted by the frontend so it can correlate
+/// The upload id is minted by the frontend so it can correlate
 /// [`EVENT_ATTACHMENT_PROGRESS`](crate::matrix::media::EVENT_ATTACHMENT_PROGRESS)
-/// events with the composer row it is already showing. Without an id we take
-/// the plain upload path, which skips the SDK's streaming request body.
+/// events with the composer row it is already showing. Without one we take the
+/// plain upload path, which skips the SDK's streaming request body.
+///
+/// The id and the handle the events are emitted on arrive together because
+/// neither is any use without the other: a caller that reports no progress —
+/// `send_gif` — then has no idle `AppHandle` to thread through for the sake of
+/// a parameter that could never be read.
 async fn upload_attachment(
-    app: &AppHandle,
     client: &Client,
     room_id: &str,
     data: Vec<u8>,
     mime_type: &str,
-    upload_id: Option<String>,
+    progress: Option<(&AppHandle, String)>,
 ) -> Result<matrix_sdk::ruma::events::room::MediaSource, String> {
     use tauri::Emitter;
 
@@ -1321,7 +1325,7 @@ async fn upload_attachment(
         .get_room(&parsed)
         .ok_or_else(|| format!("Room {room_id} not found"))?;
 
-    let Some(upload_id) = upload_id else {
+    let Some((app, upload_id)) = progress else {
         return crate::matrix::media::upload_media(client, &room, data, mime_type).await;
     };
 
@@ -1358,7 +1362,8 @@ pub async fn send_pasted_image(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let source = upload_attachment(&app, &client, &room_id, data, &mime_type, upload_id).await?;
+    let source =
+        upload_attachment(&client, &room_id, data, &mime_type, upload_id.map(|id| (&app, id))).await?;
 
     crate::matrix::timeline::send_image(
         &client,
@@ -1391,7 +1396,8 @@ pub async fn send_file(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let source = upload_attachment(&app, &client, &room_id, data, &mime_type, upload_id).await?;
+    let source =
+        upload_attachment(&client, &room_id, data, &mime_type, upload_id.map(|id| (&app, id))).await?;
 
     crate::matrix::timeline::send_file(
         &client,
@@ -1425,7 +1431,8 @@ pub async fn send_video(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let source = upload_attachment(&app, &client, &room_id, data, &mime_type, upload_id).await?;
+    let source =
+        upload_attachment(&client, &room_id, data, &mime_type, upload_id.map(|id| (&app, id))).await?;
 
     crate::matrix::timeline::send_video(
         &client,
@@ -2098,7 +2105,6 @@ fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 /// it as an `m.image` event. This avoids leaking external URLs to recipients.
 #[tauri::command]
 pub async fn send_gif(
-    app: AppHandle,
     state: State<'_, MatrixState>,
     room_id: String,
     gif_url: String,
@@ -2140,7 +2146,7 @@ pub async fn send_gif(
     // Upload to the homeserver. Encrypted in an encrypted room like any other
     // attachment: a GIF picked from a public search is not public *here* — the
     // fact that this room received it is exactly what E2EE is protecting (#81).
-    let source = upload_attachment(&app, &client, &room_id, bytes, "image/gif", None).await?;
+    let source = upload_attachment(&client, &room_id, bytes, "image/gif", None).await?;
 
     // Send as m.image event. The title is the body, not an MSC2530 caption
     // (no distinct filename), matching how GIF pickers label sends.
