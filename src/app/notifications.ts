@@ -53,39 +53,61 @@ async function _loadConfig(): Promise<NotificationConfig> {
   return _config;
 }
 
+/** Everything the in-app toast decision depends on. */
+export interface InAppToastInput {
+  config: NotificationConfig | null;
+  roomId: string;
+  /** Raw Matrix ID of the sender — not a display name. */
+  senderId: string;
+  ownUserId: string | null;
+  /**
+   * The room is open *and* its live tail is rendering this message right now.
+   *
+   * Not merely "the room is open": in context view the room stays open while
+   * the user is scrolled into the past, and live events are deliberately not
+   * rendered there, so the toast is the only signal the message arrived.
+   */
+  isViewingLiveTail: boolean;
+  cachedRoom: { muted?: boolean | null } | undefined;
+}
+
 /**
- * Whether an in-app toast should fire for `roomId`.
- *
- * The server's push ruleset holds the truth about muting, so a room present in
- * `roomListCache` is decided by its `muted` flag alone — a room muted from
- * another client has no entry in this device's `mute_rooms` and used to toast on
- * every message while the room list drew it as muted (#82).
- *
- * `mute_rooms` stays as the offline fallback, used only when the room is not
- * cached yet (cold start, or one the store has not synced). Deleting it
- * outright was considered and rejected: muting with no connectivity would then
- * do nothing at all, where today it still silences this device.
+ * Whether an in-app toast should fire.
  *
  * Pure and exported so the precedence is testable without an AppState fixture;
  * `_shouldShowInAppToast` is the thin wrapper that reads the live state.
+ *
+ * The rules, and why each exists:
+ *
+ * - **Own messages** are the user's own echo coming back over sync. The OS path
+ *   has always dropped these — `notify::evaluate` opens with `input.is_own` —
+ *   and the in-app path simply never did (#89).
+ * - **The room being read** is already showing the message in its timeline, so
+ *   a toast about it is noise stacked on top of the thing it describes (#89).
+ * - **Muting** is decided by the server's push ruleset, so a room present in
+ *   `roomListCache` is decided by its `muted` flag alone: a room muted from
+ *   another client has no entry in this device's `mute_rooms`, and used to toast
+ *   on every message while the room list drew it as muted (#82). `mute_rooms`
+ *   stays as the offline fallback, used only when the room is not cached yet.
  */
-export function shouldShowInAppToast(
-  config: NotificationConfig | null,
-  roomId: string,
-  cachedRoom: { muted?: boolean | null } | undefined
-): boolean {
+export function shouldShowInAppToast(input: InAppToastInput): boolean {
+  const { config, roomId, senderId, ownUserId, isViewingLiveTail, cachedRoom } = input;
+
   if (!config) return false;
   if (!config.enabled) return false;
+
+  // Guarded on ownUserId being known: before the session resolves it, an
+  // unguarded comparison against null would silence nothing, but treating a
+  // null as a match would silence everything.
+  if (ownUserId !== null && senderId === ownUserId) return false;
+
+  if (isViewingLiveTail) return false;
+
   // `?? undefined` so a payload predating the field falls through to the local
   // list rather than reading null as "not muted".
   const serverMuted = cachedRoom?.muted ?? undefined;
   if (serverMuted !== undefined) return !serverMuted;
   return !config.mute_rooms.includes(roomId);
-}
-
-function _shouldShowInAppToast(roomId: string): boolean {
-  const cached = AppState.get("roomListCache").find((r) => r.room_id === roomId);
-  return shouldShowInAppToast(_config, roomId, cached);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
@@ -258,23 +280,35 @@ async function _syncPushWithNotifications(granted: boolean | null): Promise<void
  * @param body       The message body text.
  * @param roomName   Human-readable room name.
  */
-export function handleIncomingMessage(
-  roomId: string,
-  sender: string,
-  body: string,
-  roomName: string
-): void {
+export function handleIncomingMessage(msg: {
+  roomId: string;
+  /** Raw Matrix ID, used to recognise the user's own echo. */
+  senderId: string;
+  /** Resolved display name, used for the toast text. */
+  senderName: string;
+  body: string;
+  roomName: string;
+  /** Whether the open room's live tail is rendering this message. */
+  isViewingLiveTail: boolean;
+}): void {
   if (!_isWindowFocused()) {
     // Window is not focused — the Rust backend handles OS notifications.
     return;
   }
 
-  if (!_shouldShowInAppToast(roomId)) {
-    return;
-  }
+  const cachedRoom = AppState.get("roomListCache").find((r) => r.room_id === msg.roomId);
+  const show = shouldShowInAppToast({
+    config: _config,
+    roomId: msg.roomId,
+    senderId: msg.senderId,
+    ownUserId: AppState.get("ownUserId"),
+    isViewingLiveTail: msg.isViewingLiveTail,
+    cachedRoom,
+  });
+  if (!show) return;
 
-  const title = _config?.show_sender ? `${sender} in ${roomName}` : "New message";
-  const displayBody = _config?.show_body ? body : "You have a new message";
+  const title = _config?.show_sender ? `${msg.senderName} in ${msg.roomName}` : "New message";
+  const displayBody = _config?.show_body ? msg.body : "You have a new message";
 
   showToast(`${title}: ${displayBody}`, "info", 4000);
 }

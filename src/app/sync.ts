@@ -223,15 +223,22 @@ export async function startSync(components: AppComponents): Promise<() => void> 
 
       // Trigger in-app toast when window is focused (OS notification is handled
       // by the Rust backend when the window is not focused).
+      //
+      // `isCurrentRoomLive` is passed rather than a bare "is this the open
+      // room": in context view the room is open but the live tail is not
+      // rendered above, so the toast is the only signal the message arrived and
+      // must keep firing there (#89).
       const roomName =
         AppState.get("roomListCache").find((r) => r.room_id === payload.room_id)
           ?.name ?? payload.room_id;
-      handleIncomingMessage(
-        payload.room_id,
-        resolveDisplayName(payload.event.sender),
-        payload.event.body,
-        roomName
-      );
+      handleIncomingMessage({
+        roomId: payload.room_id,
+        senderId: payload.event.sender,
+        senderName: resolveDisplayName(payload.event.sender),
+        body: payload.event.body,
+        roomName,
+        isViewingLiveTail: isCurrentRoomLive,
+      });
     }
   );
 
