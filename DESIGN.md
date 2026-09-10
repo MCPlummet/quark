@@ -98,18 +98,30 @@ discard it — the exact cost push exists to remove. So muting a room sets the
 Matrix push rule (`commands.rs::set_room_mute`), which also syncs the mute to the
 user's other clients.
 
-**The push rule is the mute; `mute_rooms` is a cache of the attempt to set it.**
-Once the rule exists it empties `push_actions`, and `notify::evaluate` drops
-anything the push rules didn't select — so the room is already silenced without
-consulting the local list at all. The list earns its place on exactly one path:
-`set_room_mute` is best-effort, and if the rule write fails the local entry is
-what stops a mute appearing to do nothing on this device. That narrow job has
-three consequences worth stating, because treating the list as a general-purpose
-fallback gets each of them wrong:
+**The push rule is the mute; `mute_rooms` records only the attempts that
+failed.** Once the rule exists it empties `push_actions`, and `notify::evaluate`
+drops anything the push rules didn't select — so the room is already silenced
+without consulting the local list at all. The list earns its place on exactly one
+path: `set_room_mute` is best-effort, and if the rule write fails the local entry
+is what stops a mute appearing to do nothing on this device.
+
+It holds *only* those failures. A successful mute is not recorded, and a retry
+that succeeds clears the earlier failure (`commands::apply_mute_attempt`).
+Recording successful mutes too is what stopped the list doing its one job: an
+entry could then mean either "the write failed, silence this here" or "this
+synced long ago and has since been unmuted from another client", the two are
+indistinguishable, and so the two readers chose differently — `should_notify`
+honoured every entry while the in-app toast ignored any entry for a room it had
+cached. A room muted while the homeserver was unreachable came out silent with
+the window unfocused and toasting on every message with it focused. Now an entry
+means one thing, both gates honour it unconditionally, and they agree.
+
+That narrow job has three consequences worth stating, because treating the list
+as a general-purpose fallback gets each of them wrong:
 
 - **Nothing reconciles the two.** Both are written by the same command and never
-  compared afterwards, so a mute set from another client is invisible here and a
-  failed rule write leaves the list claiming a mute the homeserver never got.
+  compared afterwards, so a mute set from another client is invisible in the
+  list — which is why the ruleset, not the list, is what the UI asks.
 - **The list must not be read for display.** It answers "did we try to mute this
   here", not "is this room muted", and those diverge whenever the above happens.
   UI that asks the question must ask the ruleset.
@@ -605,7 +617,18 @@ The room list has a two-column layout inspired by Cinny:
   - Fallback: alphabetical by room name
   - User can pin rooms to top via `:pin` command
 - No room avatars or icons — text only, matching the CLI aesthetic
-- Unread indicators via color (theme-configurable) and optional badge count
+- Unread indicators via color (theme-configurable) and optional badge count.
+  Two counters, and they are not interchangeable: the SDK's *notification* count
+  is every unread message that fired a push rule and drives the unread state,
+  while its *highlight* count is mentions only and drives the numeric badge.
+  Both room-list paths and the live-sync payload map them through one
+  `RoomUnread` conversion (`matrix/rooms.rs`) because reading them the wrong way
+  round is invisible in any room where the two happen to be equal. Counts are
+  server-authoritative: `quark://sync/unread_count` applies them as they change,
+  so a mention lights the badge without waiting for a room-list refresh and a
+  read receipt from another device clears it. The open room is exempt — its
+  badge is cleared locally on open and its read receipt sent only then, so the
+  server's count for it climbs for as long as the user sits reading
 - Muted rooms are marked and excluded from unread highlighting. The flag comes
   from the room's `RoomNotificationMode` (server-side push rules), not the local
   `mute_rooms` list, so a mute set in another client shows up here too — see
@@ -949,7 +972,13 @@ alongside `openExternalUrl` opened every link twice.
   than sending immediately. Enter (or the ➤ / preview Send button) sends it;
   any text typed first becomes the caption, sent as a single `m.image` with
   `body` = caption and `filename` = original name (no caption ⇒ `body` =
-  filename, `filename` omitted). The first `Esc` discards the staged image
+  filename, `filename` omitted). The read path surfaces `filename` alongside the
+  caption rather than making `body` serve both: with a caption present `body`
+  *is* the caption, so using it as alt text announced a captioned image twice
+  (once as alt, once as the caption drawn beneath it) and labelled a captioned
+  video with the caption instead of the file it plays. Alt text, the video
+  label and the download name all take the filename, falling back to the
+  reply-fallback-stripped body for uploads that carry none. The first `Esc` discards the staged image
   (modal-close semantics — mode, reply, and edit state untouched); staging a
   second image replaces the first, keeping the typed caption. An armed reply
   attaches to the image send and clears on success; a failed send restores the
@@ -958,6 +987,14 @@ alongside `openExternalUrl` opened every link twice.
   room switches like text drafts and send to the room current at send time.
   Videos and non-image files still upload immediately. Known limitation: with
   a thread open, images post to the main timeline (no thread relation).
+- **Encrypted attachments.** In an encrypted room the bytes are encrypted
+  before upload and the event references them as an `m.file` source carrying the
+  key, never a plaintext `mxc://`. The room decides this, not the call site:
+  the upload takes the `Room` and asks `is_encrypted()` itself, so no send path
+  can skip the question, and a room whose state cannot be read is treated as
+  encrypted. Applies to images (pasted and picked), files, videos and GIFs.
+  Stickers are exempt — they reference media from an existing MSC2545 pack
+  rather than uploading anything, so that media is already public.
 - **Attachment progress.** Attaching is several phases the user cannot see —
   reading the picked file's bytes, handing them across IPC, then the upload
   itself — and on Android a multi-megabyte pick spends long enough in the first

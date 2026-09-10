@@ -3,8 +3,13 @@ use matrix_sdk::{
     ruma::{
         events::{
             relation::InReplyTo,
-            room::message::{
-                MessageType, OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
+            room::{
+                message::{
+                    FileInfo, FileMessageEventContent, ImageMessageEventContent, MessageType,
+                    OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
+                    VideoInfo, VideoMessageEventContent,
+                },
+                ImageInfo, MediaSource,
             },
             sticker::StickerEventContent,
             AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
@@ -43,6 +48,15 @@ pub struct TimelineEvent {
     /// distinct `filename` is present. `None` when the body is merely the filename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
+    /// The uploaded file's own name, when the sender's client set one.
+    ///
+    /// The counterpart to `caption`: where a captioned upload is present, `body`
+    /// holds the caption and this holds the filename. Surfaced so the UI has
+    /// something to label a download with, and something other than the caption
+    /// to hand a screen reader — before this, `body` had to serve as caption,
+    /// alt text and download name at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
     /// JSON-serialized EncryptedFile for E2EE media; None for plain (unencrypted) media.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_encryption_info: Option<String>,
@@ -355,6 +369,7 @@ fn index_msg_to_event(m: crate::search_index::IndexedMessage) -> TimelineEvent {
         media_width: None,
         media_height: None,
         caption: None,
+        filename: None,
         media_encryption_info: None,
         media_thumbnail_url: None,
         media_thumbnail_encryption_info: None,
@@ -786,6 +801,7 @@ fn convert_sync_sticker(ev: matrix_sdk::ruma::events::OriginalSyncMessageLikeEve
         media_width: w,
         media_height: h,
         caption: None,
+        filename: None,
         media_encryption_info: enc,
         media_thumbnail_url: None,
         media_thumbnail_encryption_info: None,
@@ -815,6 +831,7 @@ fn convert_sync_encrypted(
         media_width: None,
         media_height: None,
         caption: None,
+        filename: None,
         media_encryption_info: None,
         media_thumbnail_url: None,
         media_thumbnail_encryption_info: None,
@@ -838,8 +855,7 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
             std::borrow::Cow::Borrowed(&ev.content)
         };
 
-    let (body, formatted_body, msg_type, media_url, media_mimetype, media_width, media_height, media_encryption_info, media_thumbnail_url, media_thumbnail_encryption_info) =
-        extract_message_content(&effective_content);
+    let content = extract_message_content(&effective_content.msgtype);
 
     let (is_edit, relates_to_event_id, in_reply_to, thread_root) =
         extract_relations(&ev.content);
@@ -854,41 +870,70 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
     TimelineEvent {
         event_id,
         sender,
-        body,
-        formatted_body,
+        body: content.body,
+        formatted_body: content.formatted_body,
         timestamp,
-        msg_type,
+        msg_type: content.msg_type,
         is_edit,
         relates_to_event_id,
         in_reply_to,
         thread_root,
-        media_url,
-        media_mimetype,
-        media_width,
-        media_height,
+        media_url: content.media_url,
+        media_mimetype: content.media_mimetype,
+        media_width: content.media_width,
+        media_height: content.media_height,
         caption,
-        media_encryption_info,
-        media_thumbnail_url,
-        media_thumbnail_encryption_info,
+        filename: content.filename,
+        media_encryption_info: content.media_encryption_info,
+        media_thumbnail_url: content.media_thumbnail_url,
+        media_thumbnail_encryption_info: content.media_thumbnail_encryption_info,
         reactions: vec![],
     }
 }
 
-fn extract_message_content(
-    content: &RoomMessageEventContent,
-) -> (
-    String,
-    Option<String>,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<u64>,
-    Option<u64>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+/// The parts of a message body that `TimelineEvent` carries.
+///
+/// A struct rather than the tuple this used to return. That tuple had reached
+/// ten positional fields, seven of them `Option`, so most arms ended in a run of
+/// bare `None`s whose meaning you had to count commas to recover — and adding
+/// `filename` would have made it eleven.
+#[derive(Default)]
+pub(crate) struct MessageContent {
+    pub(crate) body: String,
+    pub(crate) formatted_body: Option<String>,
+    pub(crate) msg_type: String,
+    /// The uploaded file's own name, and only that — `None` when the sender's
+    /// client set no `filename`.
+    ///
+    /// Deliberately the raw field rather than ruma's `filename()` helper, which
+    /// falls back to `body`. Under MSC2530 a captioned upload puts the caption
+    /// in `body` and the filename here, so the two are different strings and the
+    /// UI needs both: the caption to show, the filename to label the download
+    /// and to describe the image to a screen reader. Where there is no filename
+    /// the frontend falls back to the body it has already stripped of any
+    /// rich-reply quote, which the helper's fallback would not have done.
+    pub(crate) filename: Option<String>,
+    pub(crate) media_url: Option<String>,
+    pub(crate) media_mimetype: Option<String>,
+    pub(crate) media_width: Option<u64>,
+    pub(crate) media_height: Option<u64>,
+    pub(crate) media_encryption_info: Option<String>,
+    pub(crate) media_thumbnail_url: Option<String>,
+    pub(crate) media_thumbnail_encryption_info: Option<String>,
+}
+
+/// Takes the msgtype rather than the whole content, because both callers have
+/// already resolved which msgtype applies: for an edit that is `m.new_content`,
+/// not the `* fallback` sitting at the top level.
+pub(crate) fn extract_message_content(msgtype: &MessageType) -> MessageContent {
     use matrix_sdk::ruma::events::room::MediaSource;
+
+    fn source_url(source: &MediaSource) -> String {
+        match source {
+            MediaSource::Plain(uri) => uri.to_string(),
+            MediaSource::Encrypted(file) => file.url.to_string(),
+        }
+    }
 
     fn enc_info(source: &MediaSource) -> Option<String> {
         if let MediaSource::Encrypted(file) = source {
@@ -898,96 +943,94 @@ fn extract_message_content(
         }
     }
 
-    match &content.msgtype {
-        MessageType::Text(text) => (
-            text.body.clone(),
-            text.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
-            "m.text".to_string(),
-            None, None, None, None, None, None, None,
-        ),
+    match msgtype {
+        MessageType::Text(text) => MessageContent {
+            body: text.body.clone(),
+            formatted_body: text.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
+            msg_type: "m.text".to_string(),
+            ..Default::default()
+        },
         MessageType::Image(image) => {
-            let url = match &image.source {
-                MediaSource::Plain(uri) => Some(uri.to_string()),
-                MediaSource::Encrypted(file) => Some(file.url.to_string()),
-            };
-            let enc = enc_info(&image.source);
-            let (w, h, mime) = if let Some(info) = &image.info {
+            let (w, h, mime) = image.info.as_ref().map_or((None, None, None), |info| {
                 (
                     info.width.map(|v| v.into()),
                     info.height.map(|v| v.into()),
                     info.mimetype.clone(),
                 )
-            } else {
-                (None, None, None)
-            };
-            (image.body.clone(), None, "m.image".to_string(), url, mime, w, h, enc, None, None)
+            });
+            MessageContent {
+                body: image.body.clone(),
+                msg_type: "m.image".to_string(),
+                filename: image.filename.clone(),
+                media_url: Some(source_url(&image.source)),
+                media_mimetype: mime,
+                media_width: w,
+                media_height: h,
+                media_encryption_info: enc_info(&image.source),
+                ..Default::default()
+            }
         }
         MessageType::Video(video) => {
-            let url = match &video.source {
-                MediaSource::Plain(uri) => Some(uri.to_string()),
-                MediaSource::Encrypted(file) => Some(file.url.to_string()),
-            };
-            let enc = enc_info(&video.source);
-            let (w, h, mime, thumb_url, thumb_enc) = if let Some(info) = &video.info {
-                let thumb_url = info.thumbnail_source.as_ref().map(|src| match src {
-                    MediaSource::Plain(uri) => uri.to_string(),
-                    MediaSource::Encrypted(file) => file.url.to_string(),
+            let (w, h, mime, thumb_url, thumb_enc) =
+                video.info.as_ref().map_or((None, None, None, None, None), |info| {
+                    (
+                        info.width.map(|v| v.into()),
+                        info.height.map(|v| v.into()),
+                        info.mimetype.clone(),
+                        info.thumbnail_source.as_ref().map(source_url),
+                        info.thumbnail_source.as_ref().and_then(enc_info),
+                    )
                 });
-                let thumb_enc = info.thumbnail_source.as_ref().and_then(|src| {
-                    if let MediaSource::Encrypted(file) = src {
-                        serde_json::to_string(file.as_ref()).ok()
-                    } else {
-                        None
-                    }
-                });
-                (
-                    info.width.map(|v| v.into()),
-                    info.height.map(|v| v.into()),
-                    info.mimetype.clone(),
-                    thumb_url,
-                    thumb_enc,
-                )
-            } else {
-                (None, None, None, None, None)
-            };
-            (video.body.clone(), None, "m.video".to_string(), url, mime, w, h, enc, thumb_url, thumb_enc)
+            MessageContent {
+                body: video.body.clone(),
+                msg_type: "m.video".to_string(),
+                filename: video.filename.clone(),
+                media_url: Some(source_url(&video.source)),
+                media_mimetype: mime,
+                media_width: w,
+                media_height: h,
+                media_encryption_info: enc_info(&video.source),
+                media_thumbnail_url: thumb_url,
+                media_thumbnail_encryption_info: thumb_enc,
+                ..Default::default()
+            }
         }
-        MessageType::Audio(audio) => {
-            let url = match &audio.source {
-                MediaSource::Plain(uri) => Some(uri.to_string()),
-                MediaSource::Encrypted(file) => Some(file.url.to_string()),
-            };
-            let enc = enc_info(&audio.source);
-            (audio.body.clone(), None, "m.audio".to_string(), url, None, None, None, enc, None, None)
-        }
-        MessageType::File(file_msg) => {
-            let url = match &file_msg.source {
-                MediaSource::Plain(uri) => Some(uri.to_string()),
-                MediaSource::Encrypted(f) => Some(f.url.to_string()),
-            };
-            let enc = enc_info(&file_msg.source);
-            (file_msg.body.clone(), None, "m.file".to_string(), url, None, None, None, enc, None, None)
-        }
-        MessageType::Emote(emote) => (
-            emote.body.clone(),
-            emote.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
-            "m.emote".to_string(),
-            None, None, None, None, None, None, None,
-        ),
-        MessageType::Notice(notice) => (
-            notice.body.clone(),
-            notice.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
-            "m.notice".to_string(),
-            None, None, None, None, None, None, None,
-        ),
-        _ => (
-            "[unsupported message type]".to_string(),
-            None,
-            "m.unknown".to_string(),
-            None, None, None, None, None, None, None,
-        ),
+        MessageType::Audio(audio) => MessageContent {
+            body: audio.body.clone(),
+            msg_type: "m.audio".to_string(),
+            filename: audio.filename.clone(),
+            media_url: Some(source_url(&audio.source)),
+            media_encryption_info: enc_info(&audio.source),
+            ..Default::default()
+        },
+        MessageType::File(file_msg) => MessageContent {
+            body: file_msg.body.clone(),
+            msg_type: "m.file".to_string(),
+            filename: file_msg.filename.clone(),
+            media_url: Some(source_url(&file_msg.source)),
+            media_encryption_info: enc_info(&file_msg.source),
+            ..Default::default()
+        },
+        MessageType::Emote(emote) => MessageContent {
+            body: emote.body.clone(),
+            formatted_body: emote.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
+            msg_type: "m.emote".to_string(),
+            ..Default::default()
+        },
+        MessageType::Notice(notice) => MessageContent {
+            body: notice.body.clone(),
+            formatted_body: notice.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
+            msg_type: "m.notice".to_string(),
+            ..Default::default()
+        },
+        _ => MessageContent {
+            body: "[unsupported message type]".to_string(),
+            msg_type: "m.unknown".to_string(),
+            ..Default::default()
+        },
     }
 }
+
 
 fn extract_relations(
     content: &RoomMessageEventContent,
@@ -1076,7 +1119,21 @@ fn build_edit_content(
     };
 
     use matrix_sdk::ruma::events::room::message::ReplacementMetadata;
-    new_content.make_replacement(ReplacementMetadata::new(event_id.to_owned(), None), None)
+    let mut content =
+        new_content.make_replacement(ReplacementMetadata::new(event_id.to_owned(), None), None);
+
+    // ruma's `make_replacement_body` inserts an empty `FormattedBody` for every
+    // Text message before applying the `* ` fallback prefix, so a plain edit
+    // comes back claiming `format: org.matrix.custom.html` with a body of just
+    // `"* "`. Consumers that prefer the formatted fallback render the edit as a
+    // lone asterisk (#73). Drop it again when the edit had no HTML of its own.
+    if new_formatted_body.is_none() {
+        if let MessageType::Text(text) = &mut content.msgtype {
+            text.formatted = None;
+        }
+    }
+
+    content
 }
 
 /// Edit an existing message.
@@ -1117,35 +1174,19 @@ fn build_image_body(filename: &str, caption: Option<&str>) -> (String, Option<St
     }
 }
 
-/// Send an image (m.image) event to a room, with an optional MSC2530 caption,
-/// optionally as a reply.
-pub async fn send_image(
-    client: &Client,
-    room_id: &str,
+/// Build the `m.image` content for a media source.
+///
+/// Split out of `send_image` so the source can be asserted on without a live
+/// client: an encrypted source has to reach the event as `file` (key material
+/// included) with no plaintext `url` beside it (#81).
+fn build_image_content(
     filename: &str,
     caption: Option<&str>,
-    mxc_url: &str,
+    source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
     height: Option<u64>,
-    in_reply_to: Option<&str>,
-) -> Result<String, String> {
-    use matrix_sdk::ruma::{
-        events::room::{
-            message::ImageMessageEventContent,
-            ImageInfo, MediaSource,
-        },
-        MxcUri,
-    };
-
-    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
-    let room = client
-        .get_room(&room_id)
-        .ok_or_else(|| format!("Room {} not found", room_id))?;
-
-    let mxc_uri = <&MxcUri>::try_from(mxc_url).map_err(|e| format!("Invalid mxc URI: {e}"))?;
-    let source = MediaSource::Plain(mxc_uri.to_owned());
-
+) -> ImageMessageEventContent {
     let mut img_info = ImageInfo::default();
     img_info.mimetype = Some(mime_type.to_string());
     img_info.width = width.and_then(|w| UInt::try_from(w).ok());
@@ -1155,6 +1196,34 @@ pub async fn send_image(
     let mut img_content = ImageMessageEventContent::new(body, source);
     img_content.info = Some(Box::new(img_info));
     img_content.filename = filename_field;
+    img_content
+}
+
+/// Send an image (m.image) event to a room, with an optional MSC2530 caption,
+/// optionally as a reply.
+///
+/// Takes an already-uploaded `MediaSource` rather than an mxc URL: in an
+/// encrypted room the upload produces key material that a bare URL cannot
+/// carry, and dropping it is what left attachments readable by anyone who could
+/// reach the media endpoint (#81).
+pub async fn send_image(
+    client: &Client,
+    room_id: &str,
+    filename: &str,
+    caption: Option<&str>,
+    source: MediaSource,
+    mime_type: &str,
+    width: Option<u64>,
+    height: Option<u64>,
+    in_reply_to: Option<&str>,
+) -> Result<String, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {} not found", room_id))?;
+
+    let img_content =
+        build_image_content(filename, caption, source, mime_type, width, height);
 
     let mut msg_content = RoomMessageEventContent::new(MessageType::Image(img_content));
 
@@ -1176,37 +1245,37 @@ pub async fn send_image(
     Ok(event_id)
 }
 
-/// Send a generic file (m.file) event to a room.
-pub async fn send_file(
-    client: &Client,
-    room_id: &str,
+/// Build the `m.file` content for a media source. See `build_image_content`.
+fn build_file_content(
     body: &str,
-    mxc_url: &str,
+    source: MediaSource,
     mime_type: &str,
     file_size: Option<u64>,
-) -> Result<String, String> {
-    use matrix_sdk::ruma::{
-        events::room::{
-            message::{FileMessageEventContent, FileInfo},
-            MediaSource,
-        },
-        MxcUri,
-    };
-
-    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
-    let room = client
-        .get_room(&room_id)
-        .ok_or_else(|| format!("Room {} not found", room_id))?;
-
-    let mxc_uri = <&MxcUri>::try_from(mxc_url).map_err(|e| format!("Invalid mxc URI: {e}"))?;
-    let source = MediaSource::Plain(mxc_uri.to_owned());
-
+) -> FileMessageEventContent {
     let mut file_info = FileInfo::default();
     file_info.mimetype = Some(mime_type.to_string());
     file_info.size = file_size.and_then(|s| UInt::try_from(s).ok());
 
     let mut file_content = FileMessageEventContent::new(body.to_string(), source);
     file_content.info = Some(Box::new(file_info));
+    file_content
+}
+
+/// Send a generic file (m.file) event to a room.
+pub async fn send_file(
+    client: &Client,
+    room_id: &str,
+    body: &str,
+    source: MediaSource,
+    mime_type: &str,
+    file_size: Option<u64>,
+) -> Result<String, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {} not found", room_id))?;
+
+    let file_content = build_file_content(body, source, mime_type, file_size);
 
     let msg_content = RoomMessageEventContent::new(MessageType::File(file_content));
 
@@ -1220,34 +1289,17 @@ pub async fn send_file(
     Ok(event_id)
 }
 
-/// Send a video (m.video) event to a room.
-pub async fn send_video(
-    client: &Client,
-    room_id: &str,
+/// Build the `m.video` content for a media source. See `build_image_content`.
+fn build_video_content(
     body: &str,
-    mxc_url: &str,
+    source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
     height: Option<u64>,
     duration_ms: Option<u64>,
     file_size: Option<u64>,
-) -> Result<String, String> {
-    use matrix_sdk::ruma::{
-        events::room::{
-            message::{VideoMessageEventContent, VideoInfo},
-            MediaSource,
-        },
-        MxcUri,
-    };
+) -> VideoMessageEventContent {
     use std::time::Duration;
-
-    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
-    let room = client
-        .get_room(&room_id)
-        .ok_or_else(|| format!("Room {} not found", room_id))?;
-
-    let mxc_uri = <&MxcUri>::try_from(mxc_url).map_err(|e| format!("Invalid mxc URI: {e}"))?;
-    let source = MediaSource::Plain(mxc_uri.to_owned());
 
     let mut video_info = VideoInfo::default();
     video_info.mimetype = Some(mime_type.to_string());
@@ -1258,6 +1310,29 @@ pub async fn send_video(
 
     let mut video_content = VideoMessageEventContent::new(body.to_string(), source);
     video_content.info = Some(Box::new(video_info));
+    video_content
+}
+
+/// Send a video (m.video) event to a room.
+pub async fn send_video(
+    client: &Client,
+    room_id: &str,
+    body: &str,
+    source: MediaSource,
+    mime_type: &str,
+    width: Option<u64>,
+    height: Option<u64>,
+    duration_ms: Option<u64>,
+    file_size: Option<u64>,
+) -> Result<String, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {} not found", room_id))?;
+
+    let video_content = build_video_content(
+        body, source, mime_type, width, height, duration_ms, file_size,
+    );
 
     let msg_content = RoomMessageEventContent::new(MessageType::Video(video_content));
 
@@ -1391,6 +1466,65 @@ mod tests {
     use super::*;
     use serde_json;
 
+    // ── Filename extraction ───────────────────────────────────────────────────
+
+    /// An MSC2530 captioned upload: `body` is the caption, `filename` the name.
+    fn captioned_image(caption: &str, filename: &str) -> MessageType {
+        use matrix_sdk::ruma::events::room::{message::ImageMessageEventContent, MediaSource};
+        let mut image = ImageMessageEventContent::new(
+            caption.to_owned(),
+            MediaSource::Plain("mxc://example.com/abc".into()),
+        );
+        image.filename = Some(filename.to_owned());
+        MessageType::Image(image)
+    }
+
+    #[test]
+    fn a_captioned_image_keeps_its_filename_separate_from_its_caption() {
+        // Without this the UI has one string for three jobs: the caption to
+        // show, the alt text to announce, and the name to save the file under.
+        // A captioned image was announced as its own caption, twice over, and a
+        // captioned video's affordance was labelled with the caption instead of
+        // the file it plays.
+        let parts = extract_message_content(&captioned_image("look at this cat", "cat.png"));
+
+        assert_eq!(parts.body, "look at this cat");
+        assert_eq!(parts.filename.as_deref(), Some("cat.png"));
+    }
+
+    #[test]
+    fn an_uncaptioned_image_reports_no_filename_and_leaves_it_to_the_body() {
+        // The pre-caption wire format: the body *is* the filename and the field
+        // is absent. Deliberately not ruma's `filename()` helper, which would
+        // paper over this by returning the body — including any rich-reply quote
+        // the body still carries, which the frontend strips before falling back.
+        use matrix_sdk::ruma::events::room::{message::ImageMessageEventContent, MediaSource};
+        let image = MessageType::Image(ImageMessageEventContent::new(
+            "cat.png".to_owned(),
+            MediaSource::Plain("mxc://example.com/abc".into()),
+        ));
+
+        let parts = extract_message_content(&image);
+
+        assert_eq!(parts.body, "cat.png");
+        assert_eq!(parts.filename, None);
+    }
+
+    #[test]
+    fn a_video_carries_its_filename_too() {
+        use matrix_sdk::ruma::events::room::{message::VideoMessageEventContent, MediaSource};
+        let mut video = VideoMessageEventContent::new(
+            "my holiday".to_owned(),
+            MediaSource::Plain("mxc://example.com/vid".into()),
+        );
+        video.filename = Some("clip.mp4".to_owned());
+
+        let parts = extract_message_content(&MessageType::Video(video));
+
+        assert_eq!(parts.body, "my holiday");
+        assert_eq!(parts.filename.as_deref(), Some("clip.mp4"));
+    }
+
     fn make_text_event(event_id: &str, sender: &str, body: &str) -> TimelineEvent {
         TimelineEvent {
             event_id: event_id.to_string(),
@@ -1408,6 +1542,7 @@ mod tests {
             media_width: None,
             media_height: None,
             caption: None,
+            filename: None,
             media_encryption_info: None,
             media_thumbnail_url: None,
             media_thumbnail_encryption_info: None,
@@ -1751,6 +1886,125 @@ mod tests {
         assert!(hit_in_range(cutoff, None));
     }
 
+    // ── Encrypted media (#81) ─────────────────────────────────────────────
+    //
+    // In an encrypted room Quark encrypted the *event* but uploaded the
+    // attachment in the clear, behind a plain mxc:// URL anyone who could reach
+    // the homeserver's media endpoint could fetch. The send paths never asked
+    // whether the room was encrypted — `is_encrypted` appeared nowhere in
+    // timeline.rs, media.rs or stickers.rs — and hand-built MediaSource::Plain
+    // unconditionally.
+    //
+    // The asymmetry is what made it easy to miss: the *read* path handles both
+    // variants, so encrypted media from other clients decrypts fine and an
+    // encrypted room looks completely normal in Quark, including Quark's own
+    // plaintext uploads rendering back perfectly.
+
+    /// An `EncryptedFile` shaped like the SDK's, for building content in tests.
+    fn test_encrypted_file() -> matrix_sdk::ruma::events::room::EncryptedFile {
+        serde_json::from_value(serde_json::json!({
+            "url": "mxc://example.org/ciphertext",
+            "key": {
+                "kty": "oct",
+                "key_ops": ["encrypt", "decrypt"],
+                "alg": "A256CTR",
+                "k": "aWQpLKGYcHNhbXBsZWtleWZvcnRlc3Rpbmcxc-8",
+                "ext": true
+            },
+            "iv": "bGlicmFyeQAAAAAAAAAAAA",
+            "hashes": { "sha256": "fdSLu/YkRx3Wyh3KQabP3rd6+SFiKg5lsJZQHtkSAYA" },
+            "v": "v2"
+        }))
+        .expect("valid EncryptedFile fixture")
+    }
+
+    #[test]
+    fn test_image_content_from_encrypted_source_has_no_plaintext_url() {
+        let content = super::build_image_content(
+            "cat.png",
+            None,
+            MediaSource::Encrypted(Box::new(test_encrypted_file())),
+            "image/png",
+            Some(800),
+            Some(600),
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert!(
+            json.get("url").is_none(),
+            "an encrypted image must not carry a plaintext url: {json}"
+        );
+        assert!(
+            json.get("file").is_some(),
+            "an encrypted image carries its key material under `file`: {json}"
+        );
+    }
+
+    #[test]
+    fn test_image_content_from_plain_source_still_carries_a_url() {
+        let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
+        let content = super::build_image_content(
+            "cat.png",
+            None,
+            MediaSource::Plain(uri.to_owned()),
+            "image/png",
+            None,
+            None,
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert_eq!(json["url"], "mxc://example.org/plain");
+        assert!(json.get("file").is_none());
+    }
+
+    #[test]
+    fn test_file_content_from_encrypted_source_has_no_plaintext_url() {
+        let content = super::build_file_content(
+            "notes.pdf",
+            MediaSource::Encrypted(Box::new(test_encrypted_file())),
+            "application/pdf",
+            Some(1024),
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert!(json.get("url").is_none(), "encrypted file leaked a url: {json}");
+        assert!(json.get("file").is_some());
+    }
+
+    #[test]
+    fn test_video_content_from_encrypted_source_has_no_plaintext_url() {
+        let content = super::build_video_content(
+            "clip.mp4",
+            MediaSource::Encrypted(Box::new(test_encrypted_file())),
+            "video/mp4",
+            Some(640),
+            Some(480),
+            Some(3000),
+            Some(2048),
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert!(json.get("url").is_none(), "encrypted video leaked a url: {json}");
+        assert!(json.get("file").is_some());
+    }
+
+    /// The caption mapping must survive being routed through an encrypted source.
+    #[test]
+    fn test_encrypted_image_keeps_its_msc2530_caption() {
+        let content = super::build_image_content(
+            "cat.png",
+            Some("look at this"),
+            MediaSource::Encrypted(Box::new(test_encrypted_file())),
+            "image/png",
+            None,
+            None,
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert_eq!(json["body"], "look at this");
+        assert_eq!(json["filename"], "cat.png");
+    }
+
     #[test]
     fn test_build_image_body_msc2530_mapping() {
         use super::build_image_body;
@@ -1799,6 +2053,59 @@ mod tests {
             panic!("expected a text fallback");
         };
         assert_eq!(fallback.body, "* fixed text");
+    }
+
+    /// A plain-text edit must not ship an HTML fallback (#73).
+    ///
+    /// ruma's `make_replacement_body` inserts an empty `FormattedBody` for
+    /// `Text` *before* applying the `* ` prefix, so an edit built from
+    /// `text_plain` comes out carrying `format: org.matrix.custom.html` and
+    /// `formatted_body: "* "`. Any consumer that prefers the formatted fallback
+    /// — bridges, non-edit-aware clients, search indexers — then renders the
+    /// edited message as a lone asterisk.
+    #[test]
+    fn test_build_edit_content_plain_edit_has_no_html_fallback() {
+        let event_id = EventId::parse("$original:example.org").unwrap();
+        let content = super::build_edit_content(&event_id, "fixed text", None);
+
+        let MessageType::Text(fallback) = &content.msgtype else {
+            panic!("expected a text fallback");
+        };
+        assert_eq!(fallback.body, "* fixed text");
+        assert!(
+            fallback.formatted.is_none(),
+            "a plain edit must not carry an HTML fallback, got {:?}",
+            fallback.formatted.as_ref().map(|f| &f.body)
+        );
+
+        // The replacement content itself stays plain too.
+        let Some(Relation::Replacement(r)) = &content.relates_to else {
+            panic!("edit content must carry an m.replace relation");
+        };
+        let MessageType::Text(new_text) = &r.new_content.msgtype else {
+            panic!("expected a text m.new_content");
+        };
+        assert!(
+            new_text.formatted.is_none(),
+            "m.new_content must not gain an HTML body either"
+        );
+    }
+
+    /// The fix for #73 must not strip the fallback off a genuinely formatted edit.
+    #[test]
+    fn test_build_edit_content_formatted_edit_keeps_its_html_fallback() {
+        let event_id = EventId::parse("$original:example.org").unwrap();
+        let content =
+            super::build_edit_content(&event_id, "bold text", Some("<b>bold text</b>"));
+
+        let MessageType::Text(fallback) = &content.msgtype else {
+            panic!("expected a text fallback");
+        };
+        assert_eq!(
+            fallback.formatted.as_ref().map(|f| f.body.as_str()),
+            Some("* <b>bold text</b>"),
+            "a formatted edit keeps its prefixed HTML fallback"
+        );
     }
 
     /// A formatted edit must keep its HTML in `m.new_content`.

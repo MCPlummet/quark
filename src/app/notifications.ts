@@ -17,6 +17,7 @@ import { getPlatform } from "../ipc/index.js";
 import { invoke } from "../ipc/invoke.js";
 import { isTauri } from "../ipc/mock.js";
 import { showToast } from "../ui/NotificationToast.js";
+import { AppState } from "./state.js";
 import type { MuteOutcome, NotificationConfig } from "../ipc/notifications.js";
 
 // Re-export the type so consumers only need to import from this module.
@@ -52,12 +53,73 @@ async function _loadConfig(): Promise<NotificationConfig> {
   return _config;
 }
 
-/** Return true if notifications are enabled and the room is not muted. */
-function _shouldShowInAppToast(roomId: string): boolean {
-  if (!_config) return false;
-  if (!_config.enabled) return false;
-  if (_config.mute_rooms.includes(roomId)) return false;
-  return true;
+/** Everything the in-app toast decision depends on. */
+export interface InAppToastInput {
+  config: NotificationConfig | null;
+  roomId: string;
+  /** Raw Matrix ID of the sender — not a display name. */
+  senderId: string;
+  ownUserId: string | null;
+  /**
+   * This message is being painted somewhere the user can see it right now.
+   *
+   * Not merely "the room is open". In context view the room stays open while
+   * the user is scrolled into the past, and a thread reply is never appended to
+   * the main timeline at all — in both cases the room is in focus while this
+   * particular message is drawn nowhere, so the toast is the only signal it
+   * arrived.
+   */
+  isRendered: boolean;
+  cachedRoom: { muted?: boolean | null } | undefined;
+}
+
+/**
+ * Whether an in-app toast should fire.
+ *
+ * Pure and exported so the precedence is testable without an AppState fixture;
+ * `handleIncomingMessage` is what reads the live state and calls it.
+ *
+ * The rules, and why each exists:
+ *
+ * - **Own messages** are the user's own echo coming back over sync. The OS path
+ *   has always dropped these — `notify::evaluate` opens with `input.is_own` —
+ *   and the in-app path simply never did (#89).
+ * - **A message already on screen** would be a toast stacked on top of the very
+ *   thing it describes (#89). The test is whether *this message* is painted,
+ *   not whether its room is open — see `isRendered`.
+ * - **Muting** is decided by two records, and either one silences the room —
+ *   which is exactly what `notifications::should_notify` does for the OS path,
+ *   so the two agree:
+ *   - `cachedRoom.muted` is the account's push ruleset. It is the mute that
+ *     counts, and a room muted from another client appears there with no local
+ *     entry at all (#82).
+ *   - `mute_rooms` holds only the mutes the homeserver did *not* take. A
+ *     successful mute leaves no entry, so an entry here means "this device tried
+ *     and the write failed", and honouring it is the whole reason the list
+ *     exists. It used to record successful mutes too, which is what forced this
+ *     function to ignore it for any cached room: an entry could equally well be
+ *     one left over from a mute since undone elsewhere. The OS path made the
+ *     opposite choice, and a room muted while the homeserver was unreachable was
+ *     then silent with the window unfocused and toasting with it focused.
+ */
+export function shouldShowInAppToast(input: InAppToastInput): boolean {
+  const { config, roomId, senderId, ownUserId, isRendered, cachedRoom } = input;
+
+  if (!config) return false;
+  if (!config.enabled) return false;
+
+  // Guarded on ownUserId being known: before the session resolves it, an
+  // unguarded comparison against null would silence nothing, but treating a
+  // null as a match would silence everything.
+  if (ownUserId !== null && senderId === ownUserId) return false;
+
+  if (isRendered) return false;
+
+  if (config.mute_rooms.includes(roomId)) return false;
+  // `?? false` covers a cached entry written before the field existed, and a
+  // room not cached at all: the local list above has already had its say, so an
+  // unknown ruleset state is not itself a reason to stay silent.
+  return !(cachedRoom?.muted ?? false);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────────
@@ -230,23 +292,35 @@ async function _syncPushWithNotifications(granted: boolean | null): Promise<void
  * @param body       The message body text.
  * @param roomName   Human-readable room name.
  */
-export function handleIncomingMessage(
-  roomId: string,
-  sender: string,
-  body: string,
-  roomName: string
-): void {
+export function handleIncomingMessage(msg: {
+  roomId: string;
+  /** Raw Matrix ID, used to recognise the user's own echo. */
+  senderId: string;
+  /** Resolved display name, used for the toast text. */
+  senderName: string;
+  body: string;
+  roomName: string;
+  /** Whether this message is being painted anywhere the user can see it. */
+  isRendered: boolean;
+}): void {
   if (!_isWindowFocused()) {
     // Window is not focused — the Rust backend handles OS notifications.
     return;
   }
 
-  if (!_shouldShowInAppToast(roomId)) {
-    return;
-  }
+  const cachedRoom = AppState.get("roomListCache").find((r) => r.room_id === msg.roomId);
+  const show = shouldShowInAppToast({
+    config: _config,
+    roomId: msg.roomId,
+    senderId: msg.senderId,
+    ownUserId: AppState.get("ownUserId"),
+    isRendered: msg.isRendered,
+    cachedRoom,
+  });
+  if (!show) return;
 
-  const title = _config?.show_sender ? `${sender} in ${roomName}` : "New message";
-  const displayBody = _config?.show_body ? body : "You have a new message";
+  const title = _config?.show_sender ? `${msg.senderName} in ${msg.roomName}` : "New message";
+  const displayBody = _config?.show_body ? msg.body : "You have a new message";
 
   showToast(`${title}: ${displayBody}`, "info", 4000);
 }
@@ -260,12 +334,25 @@ export function handleIncomingMessage(
  * push it means the homeserver keeps waking the phone for a muted room, so it
  * is surfaced to the user instead.
  */
-export async function muteRoom(roomId: string): Promise<void> {
+export async function muteRoom(roomId: string): Promise<MuteOutcome> {
   const outcome = await muteRoomIpc(roomId);
-  if (_config && !_config.mute_rooms.includes(roomId)) {
-    _config = { ..._config, mute_rooms: [..._config.mute_rooms, roomId] };
+  // Mirror exactly what the backend just wrote: the list holds only the mutes
+  // the homeserver did not take, so a synced mute clears any entry rather than
+  // adding one. Diverging from it here would put a mute in this session's cached
+  // config that the persisted config does not have, and the next Settings save
+  // would write the phantom back to disk.
+  if (_config) {
+    const without = _config.mute_rooms.filter((r) => r !== roomId);
+    _config = {
+      ..._config,
+      mute_rooms: outcome.synced ? without : [...without, roomId],
+    };
   }
   warnIfUnsynced(outcome);
+  // Returned rather than swallowed: the caller has to know whether the account's
+  // ruleset actually changed before it patches any cached state on the strength
+  // of it (#82).
+  return outcome;
 }
 
 /**
@@ -276,7 +363,7 @@ export async function muteRoom(roomId: string): Promise<void> {
  * that outlives the unmute leaves the room silent on every client while this
  * one shows it as unmuted.
  */
-export async function unmuteRoom(roomId: string): Promise<void> {
+export async function unmuteRoom(roomId: string): Promise<MuteOutcome> {
   const outcome = await unmuteRoomIpc(roomId);
   if (_config) {
     _config = {
@@ -285,6 +372,7 @@ export async function unmuteRoom(roomId: string): Promise<void> {
     };
   }
   warnIfUnsynced(outcome);
+  return outcome;
 }
 
 /** Show the backend's explanation when a mute change didn't reach the server. */

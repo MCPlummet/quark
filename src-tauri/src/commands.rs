@@ -1296,28 +1296,41 @@ pub async fn open_media_externally(
 }
 
 /// Upload attachment bytes, streaming real byte progress to the frontend when
-/// the caller supplied an `upload_id`.
+/// the caller asked for it.
 ///
-/// The id is minted by the frontend so it can correlate
+/// The upload id is minted by the frontend so it can correlate
 /// [`EVENT_ATTACHMENT_PROGRESS`](crate::matrix::media::EVENT_ATTACHMENT_PROGRESS)
-/// events with the composer row it is already showing. Without an id we take
-/// the plain upload path, which skips the SDK's streaming request body.
+/// events with the composer row it is already showing. Without one we take the
+/// plain upload path, which skips the SDK's streaming request body.
+///
+/// The id and the handle the events are emitted on arrive together because
+/// neither is any use without the other: a caller that reports no progress —
+/// `send_gif` — then has no idle `AppHandle` to thread through for the sake of
+/// a parameter that could never be read.
 async fn upload_attachment(
-    app: &AppHandle,
     client: &Client,
+    room_id: &str,
     data: Vec<u8>,
     mime_type: &str,
-    filename: &str,
-    upload_id: Option<String>,
-) -> Result<String, String> {
+    progress: Option<(&AppHandle, String)>,
+) -> Result<matrix_sdk::ruma::events::room::MediaSource, String> {
     use tauri::Emitter;
 
-    let Some(upload_id) = upload_id else {
-        return crate::matrix::media::upload_media(client, data, mime_type, Some(filename)).await;
+    // The room decides whether the bytes are encrypted before they leave, so it
+    // is resolved here rather than at each call site — no send path can skip the
+    // question (#81).
+    let parsed = matrix_sdk::ruma::RoomId::parse(room_id)
+        .map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&parsed)
+        .ok_or_else(|| format!("Room {room_id} not found"))?;
+
+    let Some((app, upload_id)) = progress else {
+        return crate::matrix::media::upload_media(client, &room, data, mime_type).await;
     };
 
     let app = app.clone();
-    crate::matrix::media::upload_media_with_progress(client, data, mime_type, move |transferred, total| {
+    crate::matrix::media::upload_media_with_progress(client, &room, data, mime_type, move |transferred, total| {
         let _ = app.emit(
             crate::matrix::media::EVENT_ATTACHMENT_PROGRESS,
             crate::matrix::media::AttachmentProgress {
@@ -1349,14 +1362,15 @@ pub async fn send_pasted_image(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
+    let source =
+        upload_attachment(&client, &room_id, data, &mime_type, upload_id.map(|id| (&app, id))).await?;
 
     crate::matrix::timeline::send_image(
         &client,
         &room_id,
         &filename,
         caption.as_deref(),
-        &mxc_url,
+        source,
         &mime_type,
         None,
         None,
@@ -1382,13 +1396,14 @@ pub async fn send_file(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
+    let source =
+        upload_attachment(&client, &room_id, data, &mime_type, upload_id.map(|id| (&app, id))).await?;
 
     crate::matrix::timeline::send_file(
         &client,
         &room_id,
         &filename,
-        &mxc_url,
+        source,
         &mime_type,
         file_size,
     )
@@ -1416,13 +1431,14 @@ pub async fn send_video(
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
 
-    let mxc_url = upload_attachment(&app, &client, data, &mime_type, &filename, upload_id).await?;
+    let source =
+        upload_attachment(&client, &room_id, data, &mime_type, upload_id.map(|id| (&app, id))).await?;
 
     crate::matrix::timeline::send_video(
         &client,
         &room_id,
         &filename,
-        &mxc_url,
+        source,
         &mime_type,
         width,
         height,
@@ -2127,24 +2143,65 @@ pub async fn send_gif(
         None => (None, None),
     };
 
-    // Upload to the homeserver and get an mxc:// URL.
-    let mxc_url = crate::matrix::media::upload_media(
-        &client,
-        bytes,
-        "image/gif",
-        Some(&format!("{title}.gif")),
-    )
-    .await?;
+    // Upload to the homeserver. Encrypted in an encrypted room like any other
+    // attachment: a GIF picked from a public search is not public *here* — the
+    // fact that this room received it is exactly what E2EE is protecting (#81).
+    let source = upload_attachment(&client, &room_id, bytes, "image/gif", None).await?;
 
     // Send as m.image event. The title is the body, not an MSC2530 caption
     // (no distinct filename), matching how GIF pickers label sends.
-    crate::matrix::timeline::send_image(&client, &room_id, &title, None, &mxc_url, "image/gif", w, h, None)
+    crate::matrix::timeline::send_image(&client, &room_id, &title, None, source, "image/gif", w, h, None)
         .await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_store, gif_dimensions, store_exists};
+    use super::{apply_mute_attempt, clear_store, gif_dimensions, store_exists};
+
+    // ── mute_rooms ────────────────────────────────────────────────────────────
+    //
+    // The list holds only the mutes the homeserver did not take. It used to hold
+    // every mute attempted here, which left an entry meaning either "the write
+    // failed, silence this locally" or "this synced long ago and has since been
+    // unmuted from another client" — indistinguishable, so the two readers chose
+    // differently and a room came out muted or not depending on whether the
+    // window had focus.
+
+    #[test]
+    fn a_failed_mute_is_recorded_so_this_device_still_silences_it() {
+        let mut rooms = vec![];
+        apply_mute_attempt(&mut rooms, "!room:example.com", false);
+        assert_eq!(rooms, vec!["!room:example.com".to_string()]);
+    }
+
+    #[test]
+    fn a_synced_mute_records_nothing_because_the_push_rule_is_the_mute() {
+        let mut rooms = vec![];
+        apply_mute_attempt(&mut rooms, "!room:example.com", true);
+        assert!(rooms.is_empty());
+    }
+
+    #[test]
+    fn a_retry_that_syncs_clears_the_earlier_failure() {
+        let mut rooms = vec!["!room:example.com".to_string()];
+        apply_mute_attempt(&mut rooms, "!room:example.com", true);
+        assert!(rooms.is_empty(), "nothing left to be mistaken for a live mute");
+    }
+
+    #[test]
+    fn a_repeated_failure_does_not_duplicate_the_entry() {
+        let mut rooms = vec!["!room:example.com".to_string()];
+        apply_mute_attempt(&mut rooms, "!room:example.com", false);
+        assert_eq!(rooms.len(), 1);
+    }
+
+    #[test]
+    fn other_rooms_are_left_alone() {
+        let mut rooms = vec!["!other:example.com".to_string()];
+        apply_mute_attempt(&mut rooms, "!room:example.com", true);
+        assert_eq!(rooms, vec!["!other:example.com".to_string()]);
+    }
+
 
     /// `store_exists` and `clear_store` must agree on what "the store" is.
     /// These exercise the pair together, since the failure that matters is them
@@ -2651,8 +2708,10 @@ pub async fn set_notification_config(
 /// for every message in a room the user muted, only for the device to discard
 /// it. The rule also syncs the mute to the user's other clients.
 ///
-/// The local list is kept as a record that the rule write was attempted, and is
-/// what `should_notify` consults on this device.
+/// The local list records the rule writes that *failed*, and is what silences
+/// the room on this device when one does. A successful mute is not recorded:
+/// the rule already silences the room everywhere, and an entry that outlived it
+/// could not be told apart from a real failure — see the note on the write.
 ///
 /// Returns whether the rule reached the homeserver. It is deliberately not an
 /// `Err`: the mute *did* take effect locally, so failing the whole call would
@@ -2666,10 +2725,20 @@ pub async fn mute_room(
     room_id: String,
 ) -> Result<crate::notifications::MuteOutcome, String> {
     let rule = set_room_mute(&state, &room_id, true).await;
+    // The list records only the mutes the homeserver did *not* take. DESIGN.md
+    // gives it exactly one job — stopping a failed rule write from making the
+    // mute appear to do nothing on this device — and recording successful mutes
+    // too is what stopped it doing that job: an entry could mean either "the
+    // write failed, honour this locally" or "this synced ages ago and has since
+    // been unmuted from another client", and nothing could tell the two apart.
+    // So the readers had to choose, and they chose differently: the OS gate
+    // honoured every entry while the in-app toast ignored any entry for a room
+    // it had cached, leaving a room muted or not depending on whether the window
+    // had focus. A successful mute now leaves nothing behind to go stale, and
+    // both gates can honour the list unconditionally.
+    let synced = rule.is_ok();
     update_mute_list(&config_state, &paths, |rooms| {
-        if !rooms.contains(&room_id) {
-            rooms.push(room_id.clone());
-        }
+        apply_mute_attempt(rooms, &room_id, synced)
     })?;
     Ok(crate::notifications::mute_outcome(rule, true))
 }
@@ -2735,6 +2804,20 @@ async fn set_room_mute(
         tracing::warn!("Failed to set push rule for {room_id}: {e}");
         e.to_string()
     })
+}
+
+/// Move `mute_rooms` to match the outcome of a mute attempt: an entry when the
+/// rule write failed, no entry when it landed.
+///
+/// Split out of `mute_room` because that needs Tauri state to run and this rule
+/// is the whole of the fix — see the note at the call site for why recording
+/// successful mutes broke the list's one job.
+fn apply_mute_attempt(rooms: &mut Vec<String>, room_id: &str, synced: bool) {
+    if synced {
+        rooms.retain(|r| r != room_id);
+    } else if !rooms.iter().any(|r| r == room_id) {
+        rooms.push(room_id.to_owned());
+    }
 }
 
 /// Mutate the local mute list and persist it. Persisting is the point: without

@@ -155,6 +155,33 @@ describe("sync live-tail messages use the shared mapper", () => {
     expect(msg.caption).toBeUndefined();
   });
 
+  // #48: the private sync mapper that #44 replaced set `mediaAlt: e.body`; the
+  // shared one it consolidated onto did not, so both the live tail and the
+  // room-load path fell back to a generic alt="image" / "video" label and screen
+  // readers lost the filename or caption entirely.
+  it("carries mediaAlt so screen readers get the filename, not a generic label", () => {
+    const msg = deliverToTimeline(imageEvent(null));
+    expect(msg.mediaAlt).toBe("cat.png");
+  });
+
+  // A captioned upload carries the caption in `body` and the name in `filename`.
+  // Using the body meant a captioned image was announced as its caption while
+  // the caption was also drawn beneath it — the same string read out twice —
+  // and a captioned video's affordance was labelled with the caption rather
+  // than the file it plays.
+  it("uses the filename as mediaAlt on a captioned image, not the caption", () => {
+    const msg = deliverToTimeline(
+      imageEvent("look at this cat", { filename: "cat.png" }),
+    );
+    expect(msg.mediaAlt).toBe("cat.png");
+    expect(msg.caption).toBe("look at this cat");
+  });
+
+  it("falls back to the body when the upload carries no filename", () => {
+    const msg = deliverToTimeline(imageEvent("look at this cat"));
+    expect(msg.mediaAlt).toBe("look at this cat");
+  });
+
   it("carries the image dimensions so the live tail can pre-size the image", () => {
     const msg = deliverToTimeline(imageEvent("look at this cat"));
     expect(msg.mediaWidth).toBe(800);

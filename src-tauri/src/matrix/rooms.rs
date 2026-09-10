@@ -37,6 +37,36 @@ pub struct RoomInfo {
     pub muted: bool,
 }
 
+/// The SDK's two unread counters, mapped onto the names the UI uses.
+///
+/// Worth a type rather than two bare `u64`s at each call site, because the two
+/// vocabularies do not line up and both readings are plausible. Quark's
+/// `unread_count` is the SDK's *notification* count — everything unread that
+/// fired a push rule, drawn as the room's unread state — while Quark's
+/// `notification_count` is the SDK's *highlight* count, the mentions the room
+/// list draws as a numeric badge.
+///
+/// Getting that backwards is #59, and it has now been got backwards twice —
+/// once in the live-sync payload, once in `get_rooms` — precisely because two
+/// adjacent integers at the call site look interchangeable. Named fields on one
+/// conversion make the swap unspellable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoomUnread {
+    /// Every unread message that fired a rule. Drawn as the unread state.
+    pub unread_count: u64,
+    /// Mentions only. Drawn as the numeric badge.
+    pub notification_count: u64,
+}
+
+impl From<matrix_sdk::sync::UnreadNotificationsCount> for RoomUnread {
+    fn from(counts: matrix_sdk::sync::UnreadNotificationsCount) -> Self {
+        Self {
+            unread_count: counts.notification_count,
+            notification_count: counts.highlight_count,
+        }
+    }
+}
+
 /// Live record of each room's most-recent message timestamp (ms since epoch),
 /// fed by the sync event handlers in `events.rs`. `get_rooms` reads from here
 /// instead of probing `/messages` per room — `Room::messages()` is always a
@@ -299,7 +329,7 @@ pub async fn get_home_data(
                 None => probe_last_message(&room).await,
             };
 
-            let unread_count = room.unread_notification_counts().notification_count;
+            let unread_count = RoomUnread::from(room.unread_notification_counts()).unread_count;
             let last_activity_ts = match (recency_ts, last.as_ref()) {
                 (0, Some(info)) => Some(info.ts),
                 (0, None) => None,
@@ -412,9 +442,7 @@ pub async fn get_rooms(client: &Client, recency: &RecencyState) -> Result<Vec<Ro
             let is_encrypted = room.is_encrypted().await.unwrap_or(false);
             let member_count = room.joined_members_count();
 
-            let unread = room.unread_notification_counts();
-            let notification_count = unread.notification_count;
-            let unread_count = unread.highlight_count;
+            let unread = RoomUnread::from(room.unread_notification_counts());
 
             // Fallback probe: runs at most once per room ever — the result is
             // written back to the recency store below. Message-like events
@@ -429,8 +457,8 @@ pub async fn get_rooms(client: &Client, recency: &RecencyState) -> Result<Vec<Ro
                 name,
                 topic,
                 avatar_url,
-                unread_count,
-                notification_count,
+                unread_count: unread.unread_count,
+                notification_count: unread.notification_count,
                 is_direct,
                 is_encrypted,
                 member_count,
@@ -1718,6 +1746,34 @@ mod tests {
             (2, 500, "!middling:x".to_string()),
         ]);
         assert_eq!(picked.as_deref(), Some("!live:x"));
+    }
+
+    // #59: the room list drew a room with N ordinary unread messages as an
+    // "N mentions" badge, because `get_rooms` read the SDK's two counters the
+    // wrong way round. Both readings are plausible from the field names, so the
+    // mapping is pinned here rather than trusted at each call site.
+    #[test]
+    fn unread_is_the_sdk_notification_count_and_the_badge_is_the_highlight_count() {
+        let unread = RoomUnread::from(matrix_sdk::sync::UnreadNotificationsCount {
+            notification_count: 7,
+            highlight_count: 2,
+        });
+
+        assert_eq!(unread.unread_count, 7);
+        assert_eq!(unread.notification_count, 2);
+    }
+
+    #[test]
+    fn unread_without_mentions_leaves_the_badge_empty() {
+        // The case the swap made visible: ordinary traffic, nobody mentioned.
+        // Swapped, this room drew a red "5 mentions" badge and no unread dot.
+        let unread = RoomUnread::from(matrix_sdk::sync::UnreadNotificationsCount {
+            notification_count: 5,
+            highlight_count: 0,
+        });
+
+        assert_eq!(unread.unread_count, 5);
+        assert_eq!(unread.notification_count, 0);
     }
 
     #[test]

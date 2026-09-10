@@ -847,7 +847,11 @@ async function applyRcDirectives(rc: ParsedRc): Promise<void> {
     } else if (directive.type === "let" && directive.name === "mapleader") {
       keymapManager.setLeaderKey(directive.value);
     } else if (directive.type === "colorscheme") {
-      void loadTheme(directive.name);
+      // Silent: this is the rc file being applied at startup, not the user
+      // asking for a theme. It is also the second of two startup paths that can
+      // name one — config.toml's `general.theme` is the other — so announcing
+      // here toasted the same theme twice on every launch.
+      void loadTheme(directive.name, { announce: false });
     }
   }
   if (rc.errors.length > 0) {

@@ -158,11 +158,34 @@ pub struct SyncVerificationRequest {
 }
 
 /// Emitted when unread counts change for a room.
+///
+/// The two count fields are named exactly as `RoomInfo` names them, so the
+/// frontend listener can fold this into its cached room entry without a
+/// per-field mapping — one less place for the #59 swap to come back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRoomUnreadCount {
     pub room_id: String,
     pub unread_count: u64,
-    pub highlight_count: u64,
+    pub notification_count: u64,
+}
+
+/// Build the live-sync unread payload for a room.
+///
+/// The SDK-to-UI mapping itself lives in `RoomUnread`, shared with the room-list
+/// fetch path (`matrix/rooms.rs`): the two have to agree on which SDK count is
+/// "unread", and for a long time they did not (#59). A swap is invisible in
+/// every room where the two counts happen to be equal, so it is pinned by tests
+/// on both sides of the one conversion rather than at each call site.
+fn unread_payload(
+    room_id: String,
+    counts: matrix_sdk::sync::UnreadNotificationsCount,
+) -> SyncRoomUnreadCount {
+    let unread = crate::matrix::rooms::RoomUnread::from(counts);
+    SyncRoomUnreadCount {
+        room_id,
+        unread_count: unread.unread_count,
+        notification_count: unread.notification_count,
+    }
 }
 
 /// Emitted when a message is redacted in a room.
@@ -366,12 +389,7 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
                     }
 
                     // Also emit updated unread counts for the room.
-                    let unread = room.unread_notification_counts();
-                    let unread_payload = SyncRoomUnreadCount {
-                        room_id,
-                        unread_count: unread.highlight_count,
-                        highlight_count: unread.notification_count,
-                    };
+                    let unread_payload = unread_payload(room_id, room.unread_notification_counts());
                     if let Err(e) = app.emit(EVENT_UNREAD_COUNT, &unread_payload) {
                         error!("Failed to emit {}: {}", EVENT_UNREAD_COUNT, e);
                     }
@@ -592,23 +610,12 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Option<TimelineEvent> {
-    use matrix_sdk::ruma::events::room::{
-        message::{MessageType, Relation},
-        MediaSource,
-    };
+    use matrix_sdk::ruma::events::room::message::{MessageType, Relation};
 
     let event_id = ev.event_id.to_string();
     let sender = ev.sender.to_string();
     let timestamp: u64 = ev.origin_server_ts.get().into();
     let content = &ev.content;
-
-    let enc_info = |source: &MediaSource| -> Option<String> {
-        if let MediaSource::Encrypted(file) = source {
-            serde_json::to_string(file.as_ref()).ok()
-        } else {
-            None
-        }
-    };
 
     // For replacement (edit) events use m.new_content so we get the actual updated
     // body instead of the "* fallback" body stored in the top-level msgtype.
@@ -618,99 +625,12 @@ pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Op
         &content.msgtype
     };
 
-    let (body, formatted_body, msg_type, media_url, media_mimetype, media_width, media_height, media_encryption_info) =
-        match effective_msgtype {
-            MessageType::Text(text) => (
-                text.body.clone(),
-                text.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
-                "m.text".to_string(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ),
-            MessageType::Image(image) => {
-                let url = match &image.source {
-                    MediaSource::Plain(uri) => Some(uri.to_string()),
-                    MediaSource::Encrypted(file) => Some(file.url.to_string()),
-                };
-                let enc = enc_info(&image.source);
-                let (w, h, mime) = if let Some(info) = &image.info {
-                    (
-                        info.width.map(|v| v.into()),
-                        info.height.map(|v| v.into()),
-                        info.mimetype.clone(),
-                    )
-                } else {
-                    (None, None, None)
-                };
-                (image.body.clone(), None, "m.image".to_string(), url, mime, w, h, enc)
-            }
-            MessageType::Video(video) => {
-                let url = match &video.source {
-                    MediaSource::Plain(uri) => Some(uri.to_string()),
-                    MediaSource::Encrypted(file) => Some(file.url.to_string()),
-                };
-                let enc = enc_info(&video.source);
-                let (w, h, mime) = if let Some(info) = &video.info {
-                    (
-                        info.width.map(|v| v.into()),
-                        info.height.map(|v| v.into()),
-                        info.mimetype.clone(),
-                    )
-                } else {
-                    (None, None, None)
-                };
-                (video.body.clone(), None, "m.video".to_string(), url, mime, w, h, enc)
-            }
-            MessageType::Audio(audio) => {
-                let url = match &audio.source {
-                    MediaSource::Plain(uri) => Some(uri.to_string()),
-                    MediaSource::Encrypted(file) => Some(file.url.to_string()),
-                };
-                let enc = enc_info(&audio.source);
-                (audio.body.clone(), None, "m.audio".to_string(), url, None, None, None, enc)
-            }
-            MessageType::File(file) => {
-                let url = match &file.source {
-                    MediaSource::Plain(uri) => Some(uri.to_string()),
-                    MediaSource::Encrypted(f) => Some(f.url.to_string()),
-                };
-                let enc = enc_info(&file.source);
-                (file.body.clone(), None, "m.file".to_string(), url, None, None, None, enc)
-            }
-            MessageType::Emote(emote) => (
-                emote.body.clone(),
-                emote.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
-                "m.emote".to_string(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ),
-            MessageType::Notice(notice) => (
-                notice.body.clone(),
-                notice.formatted.as_ref().map(|f| crate::matrix::html::sanitize(&f.body)),
-                "m.notice".to_string(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ),
-            _ => (
-                "[unsupported message type]".to_string(),
-                None,
-                "m.unknown".to_string(),
-                None,
-                None,
-                None,
-                None,
-                None,
-            ),
-        };
+    // Shared with the room-load path rather than re-derived here. The two
+    // used to carry near-identical copies of this match, and they had already
+    // drifted: this one never read `VideoInfo.thumbnail_source`, so a video
+    // arriving over live sync showed no thumbnail until the room was reloaded.
+    // That is the same divergence #41 and #48 were, one layer down.
+    let parts = crate::matrix::timeline::extract_message_content(effective_msgtype);
 
     let (is_edit, relates_to_event_id, in_reply_to, thread_root) = {
         let mut is_edit = false;
@@ -749,22 +669,23 @@ pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Op
     Some(TimelineEvent {
         event_id,
         sender,
-        body,
-        formatted_body,
+        body: parts.body,
+        formatted_body: parts.formatted_body,
         timestamp,
-        msg_type,
+        msg_type: parts.msg_type,
         is_edit,
         relates_to_event_id,
         in_reply_to,
         thread_root,
-        media_url,
-        media_mimetype,
-        media_width,
-        media_height,
+        media_url: parts.media_url,
+        media_mimetype: parts.media_mimetype,
+        media_width: parts.media_width,
+        media_height: parts.media_height,
         caption,
-        media_encryption_info,
-        media_thumbnail_url: None,
-        media_thumbnail_encryption_info: None,
+        filename: parts.filename,
+        media_encryption_info: parts.media_encryption_info,
+        media_thumbnail_url: parts.media_thumbnail_url,
+        media_thumbnail_encryption_info: parts.media_thumbnail_encryption_info,
         reactions: vec![],
     })
 }
@@ -811,6 +732,7 @@ mod tests {
             media_width: None,
             media_height: None,
             caption: None,
+            filename: None,
             media_encryption_info: None,
             media_thumbnail_url: None,
             media_thumbnail_encryption_info: None,
@@ -935,13 +857,13 @@ mod tests {
         let payload = SyncRoomUnreadCount {
             room_id: "!room:example.com".to_string(),
             unread_count: 5,
-            highlight_count: 2,
+            notification_count: 2,
         };
         let json = serde_json::to_string(&payload).expect("serialize");
         let back: SyncRoomUnreadCount = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.room_id, "!room:example.com");
         assert_eq!(back.unread_count, 5);
-        assert_eq!(back.highlight_count, 2);
+        assert_eq!(back.notification_count, 2);
     }
 
     #[test]
@@ -949,12 +871,12 @@ mod tests {
         let payload = SyncRoomUnreadCount {
             room_id: "!room:example.com".to_string(),
             unread_count: 0,
-            highlight_count: 0,
+            notification_count: 0,
         };
         let json = serde_json::to_string(&payload).expect("serialize");
         let back: SyncRoomUnreadCount = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.unread_count, 0);
-        assert_eq!(back.highlight_count, 0);
+        assert_eq!(back.notification_count, 0);
     }
 
     // ── Event name constants ──────────────────────────────────────────────────
@@ -993,5 +915,41 @@ mod tests {
         // Evicted → treated as new again (notifies). Acceptable: the cap only
         // bounds memory; a duplicate this far back in history is implausible.
         assert!(claim_notification(first), "evicted ID should be claimable again");
+    }
+
+    // ── Unread counts ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_unread_payload_uses_notification_count_for_unread() {
+        // The room-list fetch path (matrix/rooms.rs) reports the *notification*
+        // count as the unread count. The live-sync payload has to agree, or the
+        // two disagree the moment a sync update lands (#59).
+        let counts = matrix_sdk::sync::UnreadNotificationsCount {
+            notification_count: 7,
+            highlight_count: 2,
+        };
+
+        let payload = unread_payload("!room:example.com".to_owned(), counts);
+
+        assert_eq!(payload.unread_count, 7, "unread is the SDK notification count");
+        assert_eq!(payload.notification_count, 2, "the badge count is the SDK highlight count");
+    }
+
+    #[test]
+    fn test_unread_payload_keeps_the_two_counts_distinct() {
+        // A swap is invisible whenever the counts happen to be equal, so pin the
+        // asymmetric case: every message highlights, none of them do.
+        let all_highlights = matrix_sdk::sync::UnreadNotificationsCount {
+            notification_count: 3,
+            highlight_count: 3,
+        };
+        let no_highlights = matrix_sdk::sync::UnreadNotificationsCount {
+            notification_count: 3,
+            highlight_count: 0,
+        };
+
+        assert_eq!(unread_payload("!a:x".to_owned(), all_highlights).notification_count, 3);
+        assert_eq!(unread_payload("!a:x".to_owned(), no_highlights).notification_count, 0);
+        assert_eq!(unread_payload("!a:x".to_owned(), no_highlights).unread_count, 3);
     }
 }

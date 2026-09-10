@@ -1,7 +1,7 @@
 use matrix_sdk::{
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     ruma::{events::room::MediaSource, MxcUri, UInt},
-    Client,
+    Client, Room,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -84,26 +84,74 @@ pub fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
     from_base64(s)
 }
 
-/// Upload a file to the homeserver and return its mxc:// URL.
+/// Decide encryption from a room's encryption state, `None` when it could not
+/// be read.
+///
+/// The two ways to be wrong are not symmetric: encrypting in a plaintext room
+/// is merely unnecessary, while uploading in the clear to an encrypted room
+/// publishes the file to anyone who can reach the media endpoint (#81). So an
+/// unreadable state encrypts.
+///
+/// Split from `room_needs_encryption` only so that direction can be pinned by a
+/// test — `Room` needs a live client, this does not.
+fn encrypt_for_room_state(is_encrypted: Option<bool>) -> bool {
+    is_encrypted.unwrap_or(true)
+}
+
+/// Whether attachments sent to `room` must be encrypted before upload.
+async fn room_needs_encryption(room: &Room) -> bool {
+    encrypt_for_room_state(room.is_encrypted().await.ok())
+}
+
+/// Upload a file to the homeserver and return the source to reference it by.
+///
+/// Returns a `MediaSource` rather than an mxc URL because an encrypted upload
+/// produces key material that has to travel into the event beside the URL, and
+/// a bare `String` cannot carry it. Taking the `Room` rather than a bool means
+/// no caller can forget to ask (#81).
 pub async fn upload_media(
     client: &Client,
+    room: &Room,
     data: Vec<u8>,
     mime_type: &str,
-    _filename: Option<&str>,
-) -> Result<String, String> {
+) -> Result<MediaSource, String> {
     let mime: mime::Mime = mime_type
         .parse()
         .map_err(|e| format!("Invalid MIME type: {e}"))?;
 
+    if room_needs_encryption(room).await {
+        let mut cursor = std::io::Cursor::new(data);
+        let file = client
+            .upload_encrypted_file(&mime, &mut cursor)
+            .await
+            .map_err(|e| format!("Failed to upload encrypted media: {e}"))?;
+        info!(url = %file.url, "Media uploaded (encrypted)");
+        return Ok(MediaSource::Encrypted(Box::new(file)));
+    }
+
+    let uri = upload_plain(client, &mime, data).await?;
+    info!(url = %uri, "Media uploaded");
+    Ok(MediaSource::Plain(uri))
+}
+
+/// Upload bytes to the homeserver's media repo, unencrypted.
+///
+/// Shared by the only two callers that do a plain upload — `upload_media`'s
+/// non-encrypted branch and `upload_file` — so the call and its error text live
+/// in one place. Takes an already-parsed mime: `upload_media` needs one for the
+/// encrypted branch as well, and parsing it twice to share this would be a
+/// strange trade.
+async fn upload_plain(
+    client: &Client,
+    mime: &mime::Mime,
+    data: Vec<u8>,
+) -> Result<matrix_sdk::ruma::OwnedMxcUri, String> {
     let response = client
         .media()
-        .upload(&mime, data, None)
+        .upload(mime, data, None)
         .await
         .map_err(|e| format!("Failed to upload media: {e}"))?;
-
-    let mxc_url = response.content_uri.to_string();
-    info!(url = %mxc_url, "Media uploaded");
-    Ok(mxc_url)
+    Ok(response.content_uri)
 }
 
 /// Download media from an mxc:// URL, consulting the disk cache first.
@@ -257,12 +305,17 @@ pub async fn upload_file(
         _ => "application/octet-stream",
     };
 
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(String::from);
+    // Deliberately not routed through `upload_media`: that one takes a `Room` in
+    // order to ask whether the upload has to be encrypted (#81), and this path
+    // has no room to ask about — it is not a room attachment. Only the plain
+    // upload leg is shared.
+    let mime: mime::Mime = mime_type
+        .parse()
+        .map_err(|e| format!("Invalid MIME type: {e}"))?;
+    let mxc_url = upload_plain(client, &mime, data).await?.to_string();
 
-    upload_media(client, data, mime_type, filename.as_deref()).await
+    info!(url = %mxc_url, "File uploaded");
+    Ok(mxc_url)
 }
 
 // ── Attachment upload progress ───────────────────────────────────────────────
@@ -300,10 +353,11 @@ const PROGRESS_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// resolves.
 pub async fn upload_media_with_progress<F>(
     client: &Client,
+    room: &Room,
     data: Vec<u8>,
     mime_type: &str,
     on_progress: F,
-) -> Result<String, String>
+) -> Result<MediaSource, String>
 where
     F: Fn(u64, u64) + Send + 'static,
 {
@@ -311,10 +365,52 @@ where
         .parse()
         .map_err(|e| format!("Invalid MIME type: {e}"))?;
 
-    let request = client.media().upload(&mime, data, None);
-    let mut progress = request.subscribe_to_send_progress();
+    // Both upload builders expose the same `subscribe_to_send_progress`, so the
+    // encrypted leg reports real bytes exactly as the plain one does — the
+    // progress row (#63) does not care which path ran. What it measures on the
+    // encrypted leg is the ciphertext, which is what actually goes over the wire.
+    if room_needs_encryption(room).await {
+        let mut cursor = std::io::Cursor::new(data);
+        let request = client.upload_encrypted_file(&mime, &mut cursor);
+        let progress = request.subscribe_to_send_progress();
+        let pump = spawn_progress_pump(progress, on_progress);
 
-    let pump = tokio::spawn(async move {
+        let result = request.await;
+        pump.abort();
+
+        let file = result.map_err(|e| format!("Failed to upload encrypted media: {e}"))?;
+        info!(url = %file.url, "Media uploaded (encrypted, with progress)");
+        return Ok(MediaSource::Encrypted(Box::new(file)));
+    }
+
+    let request = client.media().upload(&mime, data, None);
+    let progress = request.subscribe_to_send_progress();
+    let pump = spawn_progress_pump(progress, on_progress);
+
+    let response = request.await;
+    pump.abort();
+
+    let response = response.map_err(|e| format!("Failed to upload media: {e}"))?;
+
+    info!(url = %response.content_uri, "Media uploaded (with progress)");
+    Ok(MediaSource::Plain(response.content_uri))
+}
+
+/// Drain a send-progress subscriber onto `on_progress`, paced by
+/// `PROGRESS_MIN_INTERVAL`.
+///
+/// The observable only advances while the upload future is polled, so this runs
+/// on a side task that the caller aborts once the upload resolves.
+fn spawn_progress_pump<S, F>(mut progress: S, on_progress: F) -> tokio::task::JoinHandle<()>
+where
+    // Generic over the stream rather than naming eyeball's `Subscriber`: it
+    // reaches us only through matrix-sdk, and both upload builders hand back a
+    // different concrete type.
+    S: futures_util::Stream<Item = matrix_sdk::TransmissionProgress> + Unpin + Send + 'static,
+    F: Fn(u64, u64) + Send + 'static,
+{
+    use futures_util::StreamExt;
+    tokio::spawn(async move {
         let mut last_percent = u64::MAX;
         let mut last_emit: Option<std::time::Instant> = None;
         while let Some(p) = progress.next().await {
@@ -328,14 +424,31 @@ where
                 on_progress(transferred, total);
             }
         }
-    });
+    })
+}
 
-    let response = request.await;
-    pump.abort();
+#[cfg(test)]
+mod tests {
+    use super::encrypt_for_room_state;
 
-    let response = response.map_err(|e| format!("Failed to upload media: {e}"))?;
+    /// The fail-safe direction is the whole point, so it is pinned rather than
+    /// left to a bare `unwrap_or` someone could later "simplify" the other way.
+    ///
+    /// The two ways to be wrong are not symmetric: encrypting in a plaintext
+    /// room costs nothing a reader would notice, while uploading in the clear
+    /// to an encrypted room publishes the file to anyone who can reach the
+    /// media endpoint (#81).
+    #[test]
+    fn test_unreadable_room_state_is_treated_as_encrypted() {
+        assert!(
+            encrypt_for_room_state(None),
+            "a room whose encryption state cannot be read must be encrypted"
+        );
+    }
 
-    let mxc_url = response.content_uri.to_string();
-    info!(url = %mxc_url, "Media uploaded (with progress)");
-    Ok(mxc_url)
+    #[test]
+    fn test_encrypted_room_encrypts_and_plaintext_room_does_not() {
+        assert!(encrypt_for_room_state(Some(true)));
+        assert!(!encrypt_for_room_state(Some(false)));
+    }
 }

@@ -323,6 +323,40 @@ describe("timelineEventToMessage", () => {
     expect(timelineEventToMessage(makeEvent({ sender: "@bob:x" })).senderName).toBe("Bob");
   });
 
+  // `mediaAlt` is read out by screen readers and used as the video label and
+  // the download name, so it must not carry the quoted message a rich-reply
+  // fallback prepends to the body. Every other body-derived field on the same
+  // object is built from the stripped text.
+  it("keeps the reply fallback out of mediaAlt on an uncaptioned image", () => {
+    const img = makeEvent({
+      event_id: "$img",
+      msg_type: "m.image",
+      body: "> <@alice:example.com> original text\n\ncat.png",
+      media_url: "mxc://example.com/abc",
+      in_reply_to: "$parent",
+    });
+
+    const msg = timelineEventToMessage(img, [img]);
+
+    expect(msg.mediaAlt).toBe("cat.png");
+  });
+
+  it("prefers the sender's filename over the body for mediaAlt", () => {
+    const img = makeEvent({
+      event_id: "$img",
+      msg_type: "m.image",
+      body: "look at this cat",
+      filename: "cat.png",
+      caption: "look at this cat",
+      media_url: "mxc://example.com/abc",
+    });
+
+    const msg = timelineEventToMessage(img, [img]);
+
+    expect(msg.mediaAlt).toBe("cat.png");
+    expect(msg.caption).toBe("look at this cat");
+  });
+
   it("builds a reply preview from the referenced parent and strips the fallback", () => {
     const parent = makeEvent({ event_id: "$parent", sender: "@alice:x", body: "the original" });
     _memberDisplayName.set("@alice:x", "Alice");

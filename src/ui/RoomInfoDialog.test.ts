@@ -47,8 +47,10 @@ describe("RoomInfoDialog mute state", () => {
 
   beforeEach(() => {
     mocks.getConfig.mockReset();
-    mocks.muteRoom.mockReset().mockResolvedValue(undefined);
-    mocks.unmuteRoom.mockReset().mockResolvedValue(undefined);
+    // muteRoom/unmuteRoom resolve with the backend's MuteOutcome — they resolve
+    // on a *failed* rule write too, which is the whole point of the flag (#82).
+    mocks.muteRoom.mockReset().mockResolvedValue({ synced: true, warning: null });
+    mocks.unmuteRoom.mockReset().mockResolvedValue({ synced: true, warning: null });
     mocks.getConfig.mockResolvedValue({
       enabled: true,
       show_body: true,
@@ -106,5 +108,29 @@ describe("RoomInfoDialog mute state", () => {
     muteButton(d).click();
     await vi.waitFor(() => expect(mocks.unmuteRoom).toHaveBeenCalledWith("!r:x"));
     expect(AppState.get("roomListCache")[0].muted).toBe(false);
+  });
+
+  // With the homeserver unreachable the rule write fails but the promise still
+  // resolves. Patching the cache on that left the room list and a reopened
+  // dialog both reporting a mute the account's ruleset never got — until the
+  // next get_rooms silently flipped it back (#82).
+  it("leaves the cached room alone when the mute never reached the server", async () => {
+    mocks.muteRoom.mockResolvedValue({
+      synced: false,
+      warning: "Homeserver unreachable; muted on this device only",
+    });
+    await d.show();
+    muteButton(d).click();
+    await vi.waitFor(() => expect(mocks.muteRoom).toHaveBeenCalledWith("!r:x"));
+    expect(AppState.get("roomListCache")[0].muted).toBe(false);
+  });
+
+  it("leaves the cached room alone when the unmute never reached the server", async () => {
+    mocks.unmuteRoom.mockResolvedValue({ synced: false, warning: "Homeserver unreachable" });
+    AppState.set("roomListCache", [makeRoom({ muted: true })]);
+    await d.show();
+    muteButton(d).click();
+    await vi.waitFor(() => expect(mocks.unmuteRoom).toHaveBeenCalledWith("!r:x"));
+    expect(AppState.get("roomListCache")[0].muted).toBe(true);
   });
 });

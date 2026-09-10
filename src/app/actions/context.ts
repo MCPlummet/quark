@@ -400,6 +400,14 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
     htmlBody: displayHtml,
     type: msgType,
     mediaUrl,
+    // The file's name, which is what alt text, a video's label and a download
+    // name all actually want. `body` is only the filename on an uncaptioned
+    // upload; with a caption it *is* the caption, so using it here announced a
+    // captioned image as its caption — twice, since the caption is also drawn
+    // beneath it — and labelled a captioned video with the caption rather than
+    // the file it plays. Falls back to the stripped body, not the raw one, so a
+    // rich-reply quote in the body does not become the alt text (#48).
+    mediaAlt: e.filename ?? displayBody,
     mediaMimeType: e.media_mimetype ?? undefined,
     mediaWidth: e.media_width ?? undefined,
     mediaHeight: e.media_height ?? undefined,
@@ -429,9 +437,9 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
  * arriving into an open thread renders exactly like one loaded with the thread.
  *
  * Carries the MSC2530 caption through like {@link timelineEventToMessage} does
- * (#42). Note that with a caption present the event `body` *is* the caption and
- * the filename lives in a separate field, so `mediaAlt` doubles as the caption
- * text — the dedicated `caption` field is what the renderer draws beneath the
+ * (#42). `mediaAlt` is the file's own name where the sender supplied one, so a
+ * captioned upload is not announced as its caption twice over — the dedicated
+ * `caption` field is what the renderer draws beneath the
  * media.
  */
 export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageData {
@@ -450,7 +458,7 @@ export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageDat
     htmlBody: e.formatted_body ?? undefined,
     type: _messageTypeOf(e),
     mediaUrl,
-    mediaAlt: e.body,
+    mediaAlt: e.filename ?? e.body,
     caption: e.caption ?? undefined,
     mediaMimeType: e.media_mimetype ?? undefined,
     mediaEncryptionInfo: e.media_encryption_info ?? undefined,

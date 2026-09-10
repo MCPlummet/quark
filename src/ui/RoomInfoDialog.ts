@@ -86,19 +86,21 @@ export class RoomInfoDialog extends DialogBase {
     muteBtn.textContent = isMuted ? "[unmute]" : "[mute]";
     muteBtn.addEventListener("click", async () => {
       try {
-        if (isMuted) {
-          await unmuteRoom(roomId);
-        } else {
-          await muteRoom(roomId);
-        }
+        const outcome = isMuted ? await unmuteRoom(roomId) : await muteRoom(roomId);
         // Patch the cached RoomInfo so reopening the dialog before the next
-        // room-list refresh doesn't show the state we just changed away from.
-        AppState.set(
-          "roomListCache",
-          AppState.get("roomListCache").map((r) =>
-            r.room_id === roomId ? { ...r, muted: !isMuted } : r
-          )
-        );
+        // room-list refresh doesn't show the state we just changed away from —
+        // but only once the account's ruleset actually changed. These resolve on
+        // a failed rule write too, and patching regardless reported a mute the
+        // server never got until the next get_rooms flipped it back (#82). The
+        // warning toast is raised by muteRoom/unmuteRoom themselves.
+        if (outcome.synced) {
+          AppState.set(
+            "roomListCache",
+            AppState.get("roomListCache").map((r) =>
+              r.room_id === roomId ? { ...r, muted: !isMuted } : r
+            )
+          );
+        }
         this.hide();
       } catch {
         muteBtn.textContent = "[error]";
