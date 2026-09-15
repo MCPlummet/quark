@@ -145,6 +145,64 @@ describe("Timeline", () => {
       const caption = timeline.getElement().querySelector(".message__image-caption");
       expect(caption).not.toBeNull();
       expect(caption?.textContent).toBe("a wild sunset");
+      // The caption is still a message body, not a class of its own — the
+      // stylesheet's `.message__body` rules are what give it its type.
+      expect(caption?.classList.contains("message__body")).toBe(true);
+    });
+
+    // #84's render half: the caption was drawn with `textContent`, so a custom
+    // emoji in it came out as the literal `:shortcode:` — including one Quark
+    // had just sent itself.
+    it("renders a formatted caption as HTML, stashing custom emoji for download", () => {
+      timeline.setMessages([
+        makeMsg({
+          type: "image",
+          mediaUrl: "https://x.com/img.png",
+          caption: ":party: nice",
+          captionHtml: '<img data-mx-emoticon src="mxc://e/1" alt=":party:"> nice',
+        }),
+      ]);
+
+      const img = timeline
+        .getElement()
+        .querySelector<HTMLImageElement>(".message__image-caption img[data-mx-emoticon]");
+      expect(img).not.toBeNull();
+      // The mxc:// src is unloadable, so it moves to data-mxc until the app
+      // layer swaps in a data: URL.
+      expect(img?.dataset.mxc).toBe("mxc://e/1");
+      expect(img?.hasAttribute("src")).toBe(false);
+    });
+
+    // The resolver queries the whole list element, so a caption's emoji is
+    // picked up by the same pass that handles message bodies — but only if the
+    // caption went through the stash.
+    it("offers a caption's custom emoji to the inline-emoji resolver", () => {
+      timeline.setMessages([
+        makeMsg({
+          type: "image",
+          mediaUrl: "https://x.com/img.png",
+          caption: ":party:",
+          captionHtml: '<img data-mx-emoticon src="mxc://e/1" alt=":party:">',
+        }),
+      ]);
+
+      expect(timeline.getPendingInlineEmojiUrls()).toContain("mxc://e/1");
+
+      timeline.resolveInlineEmoji("mxc://e/1", "data:image/png;base64,AA");
+      const img = timeline
+        .getElement()
+        .querySelector<HTMLImageElement>(".message__image-caption img[data-mx-emoticon]");
+      expect(img?.getAttribute("src")).toBe("data:image/png;base64,AA");
+    });
+
+    it("falls back to plain text for a caption with no formatted body", () => {
+      timeline.setMessages([
+        makeMsg({ type: "image", mediaUrl: "https://x.com/img.png", caption: "<b>not html</b>" }),
+      ]);
+
+      const caption = timeline.getElement().querySelector(".message__image-caption");
+      expect(caption?.querySelector("b")).toBeNull();
+      expect(caption?.textContent).toBe("<b>not html</b>");
     });
   });
 
