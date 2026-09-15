@@ -126,6 +126,12 @@ export interface TimelineEvent {
   /** Media caption (MSC2530) for image messages; absent when the body is just a filename. */
   caption?: string | null;
   /**
+   * The caption's HTML form, when it has one — where inline custom emoji live.
+   * Rendered rather than the plain caption when present, or `:shortcode:` is
+   * what the reader sees (#84).
+   */
+  caption_formatted?: string | null;
+  /**
    * The uploaded file's own name; absent when the sender's client set none.
    *
    * The counterpart to `caption`: on a captioned upload `body` holds the caption

@@ -28,7 +28,9 @@ import type { AttachmentProgressHandle } from "../../ui/AttachmentProgress.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
-import { getComponents } from "./context.js";
+import type { MessageTarget } from "../../ipc/media.js";
+
+import { getComponents, prepareOutgoingBody } from "./context.js";
 import { openQuickReactPicker } from "./reactions.js";
 import { startReply, cancelReply } from "./messages.js";
 import { openThread } from "./threads.js";
@@ -217,80 +219,165 @@ async function runAttachment(
 }
 
 /**
+ * Where an attachment is going: the room, plus whatever the composer currently
+ * has armed.
+ *
+ * Derived in one place because four entry points need it — the staged image, a
+ * picked file, a pasted file and a GIF — and the media path read none of it
+ * before #78. `messages.ts` had routed text to the open thread since threads
+ * landed; media simply never asked, so an image sent with a thread open
+ * uploaded fine, reported success, and appeared in the main timeline.
+ *
+ * Returns `null` when there is no room to send to, which is the one condition
+ * every caller has to bail on.
+ */
+export function currentAttachmentTarget(): (MessageTarget & { roomId: string }) | null {
+  const roomId = AppState.get("currentRoomId");
+  if (!roomId) return null;
+  return {
+    roomId,
+    replyToEventId: AppState.get("replyToEventId") ?? undefined,
+    threadRootEventId: AppState.get("threadRootEventId") ?? undefined,
+  };
+}
+
+/**
+ * A caption prepared for the wire: shortcodes resolved to glyphs in the plain
+ * body, custom emoji to `<img data-mx-emoticon>` in the formatted one.
+ */
+interface PreparedCaption {
+  caption?: string;
+  formattedCaption?: string;
+}
+
+/**
+ * The MIME type to upload a blob under.
+ *
+ * A blob the webview could not type carries `""`, which reaches
+ * `mime_type.parse()` in `media.rs` as an empty string and fails the whole
+ * upload. Files dropped or pasted from a file manager produce this routinely.
+ */
+function uploadMimeType(blob: Blob): string {
+  return blob.type || "application/octet-stream";
+}
+
+/**
+ * A file extension for a pasted image with no name of its own.
+ *
+ * The subtype is not an extension: `image/svg+xml` would name the file
+ * `.svg+xml`, and an untyped blob would name it after nothing at all.
+ */
+function imageExtension(mimeType: string): string {
+  const subtype = mimeType.split("/")[1]?.split("+")[0]?.split(";")[0];
+  return subtype && /^[a-z0-9]+$/i.test(subtype) ? subtype : "png";
+}
+
+/**
+ * Send one file as the right event type: video as `m.video` so it renders as a
+ * playable embed, everything else as `m.file`.
+ *
+ * The routing lives here rather than at each entry point because the picker and
+ * the paste handler make the same decision, and only one of them used to make
+ * it at all (#83).
+ */
+export async function sendAttachment(
+  file: Blob,
+  filename: string,
+  target: MessageTarget & { roomId: string },
+): Promise<boolean> {
+  const { roomId, replyToEventId, threadRootEventId } = target;
+  const isVideo = file.type.startsWith("video/");
+
+  return runAttachment(file, filename, roomId, async (dataBase64, uploadId) => {
+    const send = {
+      roomId,
+      dataBase64,
+      mimeType: uploadMimeType(file),
+      filename,
+      replyToEventId,
+      threadRootEventId,
+      uploadId,
+    };
+    if (isVideo) {
+      // Probe dimensions/duration up front so the timeline can reserve the
+      // right aspect ratio before the video is downloaded.
+      const meta = await probeVideoMetadata(file);
+      return sendVideo({
+        ...send,
+        width: meta?.width,
+        height: meta?.height,
+        durationMs: meta?.durationMs,
+        fileSize: file.size,
+      });
+    }
+    return sendFile({ ...send, fileSize: file.size });
+  });
+}
+
+/**
  * Send a staged image (pasted or picked) as an m.image event, with an optional
- * MSC2530 caption. If a reply is armed it sends as that reply and clears the
- * reply state on success. On failure the staged image (and caption) are
- * restored to the composer so nothing the user prepared is lost.
+ * MSC2530 caption. The caption goes out through the same emoji expansion as a
+ * typed message (#84) — it is composed in the same field, with the same
+ * autocomplete popup, so `:party:` has to mean the same thing in both.
+ *
+ * A reply or an open thread routes the image the same way it routes text (#78).
+ * On failure the staged image and the caption *as typed* are restored to the
+ * composer, so nothing the user prepared is lost and the shortcode they wrote
+ * is the shortcode they get back.
  */
 export async function sendPendingImage(
   blob: Blob,
   filename: string | null,
   caption?: string,
 ): Promise<void> {
-  const roomId = AppState.get("currentRoomId");
-  if (!roomId) return;
+  const target = currentAttachmentTarget();
+  if (!target) return;
 
-  const ext = blob.type.split("/")[1] ?? "png";
-  const name = filename ?? `pasted-image-${Date.now()}.${ext}`;
-  const cap = caption?.trim() || undefined;
-  const replyToEventId = AppState.get("replyToEventId") ?? undefined;
+  const name = filename ?? `pasted-image-${Date.now()}.${imageExtension(blob.type)}`;
+  const raw = caption?.trim() || undefined;
+  const prepared: PreparedCaption = {};
+  if (raw) {
+    const { body, formattedBody } = prepareOutgoingBody(raw);
+    prepared.caption = body;
+    prepared.formattedCaption = formattedBody;
+  }
 
   const restore = () => {
     const { input } = getComponents();
     input.showImagePreview(blob, filename ?? undefined);
     // Don't clobber anything typed since the send started.
-    if (cap && input.getValue().trim().length === 0) input.setValue(cap);
+    if (raw && input.getValue().trim().length === 0) input.setValue(raw);
   };
 
-  const sent = await runAttachment(blob, name, roomId, (dataBase64, uploadId) =>
-    sendPastedImage(roomId, dataBase64, blob.type, name, cap, replyToEventId, uploadId),
+  const sent = await runAttachment(blob, name, target.roomId, (dataBase64, uploadId) =>
+    sendPastedImage({
+      roomId: target.roomId,
+      dataBase64,
+      mimeType: uploadMimeType(blob),
+      filename: name,
+      replyToEventId: target.replyToEventId,
+      threadRootEventId: target.threadRootEventId,
+      uploadId,
+      ...prepared,
+    }),
   );
 
   if (sent) {
-    if (replyToEventId) cancelReply();
+    if (target.replyToEventId) cancelReply();
   } else {
     restore();
   }
 }
 
 /**
- * Handle a non-image file selected from the file picker: videos are sent as
- * m.video, everything else as m.file. (Picked images stage in the composer
- * preview instead — see the onFilePick wiring in keyboard.ts.)
+ * Handle a non-image file from the picker or a paste: routed straight to
+ * {@link sendAttachment}. (Images stage in the composer preview instead — see
+ * the onFilePick wiring in keyboard.ts.)
  */
 export async function handleFilePick(file: File): Promise<void> {
-  const roomId = AppState.get("currentRoomId");
-  if (!roomId) return;
-
-  const isVideo = file.type.startsWith("video/");
-
-  await runAttachment(file, file.name, roomId, async (dataBase64, uploadId) => {
-    if (isVideo) {
-      // Send as m.video (not m.file) so it renders as a playable embed. Probe
-      // dimensions/duration up front so the timeline can reserve the right
-      // aspect ratio before the video is downloaded.
-      const meta = await probeVideoMetadata(file);
-      return sendVideo(
-        roomId,
-        dataBase64,
-        file.type,
-        file.name,
-        meta?.width,
-        meta?.height,
-        meta?.durationMs,
-        file.size,
-        uploadId,
-      );
-    }
-    return sendFile(
-      roomId,
-      dataBase64,
-      file.type || "application/octet-stream",
-      file.name,
-      file.size,
-      uploadId,
-    );
-  });
+  const target = currentAttachmentTarget();
+  if (!target) return;
+  await sendAttachment(file, file.name, target);
 }
 
 /**
@@ -400,7 +487,7 @@ export function setupMessageActionHandlers(): void {
  * read (unsupported codec, etc.) so the send still goes through without info.
  */
 function probeVideoMetadata(
-  file: File,
+  file: Blob,
 ): Promise<{ width: number; height: number; durationMs: number } | undefined> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);

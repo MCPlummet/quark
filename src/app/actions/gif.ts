@@ -78,6 +78,15 @@ export function openEmojiPicker(initialTab: "emoji" | "sticker" = "emoji"): void
       const packId = sepIdx >= 0 ? sticker.id.slice(0, sepIdx) : sticker.id;
       const shortcode = sepIdx >= 0 ? sticker.id.slice(sepIdx + 2) : sticker.name;
 
+      // With a thread open the sticker belongs in the panel, and the optimistic
+      // row below can only be appended to the main timeline. Rather than build a
+      // second optimistic surface, stand down and let the sync echo render it —
+      // `sync.ts` already routes a thread-related event into the open panel with
+      // its media. Suppressing that echo (as the optimistic path must) is what
+      // would make the sticker vanish entirely.
+      const threadRootEventId = AppState.get("threadRootEventId") ?? undefined;
+      const replyToEventId = AppState.get("replyToEventId") ?? undefined;
+
       // Optimistic update — show the sticker immediately
       const { timeline } = getComponents();
       const ownUserId = AppState.get("ownUserId");
@@ -97,9 +106,9 @@ export function openEmojiPicker(initialTab: "emoji" | "sticker" = "emoji"): void
         mediaUrl: sticker.url,
         mediaAlt: sticker.name,
       };
-      timeline.appendMessage(optimisticMsg);
+      if (!threadRootEventId) timeline.appendMessage(optimisticMsg);
       // Resolve the sticker image if it's an mxc:// URL
-      if (sticker.url.startsWith("mxc://")) {
+      if (!threadRootEventId && sticker.url.startsWith("mxc://")) {
         const cached = _emojiImageCache.get(sticker.url);
         if (cached) {
           timeline.updateMessageMedia(optimisticId, cached);
@@ -115,10 +124,21 @@ export function openEmojiPicker(initialTab: "emoji" | "sticker" = "emoji"): void
       }
 
       try {
-        const eventId = await ipcSendSticker(roomId, shortcode, sticker.url, sticker.name, packId, sticker.packName ?? null);
-        // Promote optimistic message and suppress the sync echo
-        timeline.confirmMessage(optimisticId, eventId);
-        _ownSentEventIds.add(eventId);
+        const eventId = await ipcSendSticker(
+          roomId,
+          shortcode,
+          sticker.url,
+          sticker.name,
+          packId,
+          sticker.packName ?? null,
+          { replyToEventId, threadRootEventId },
+        );
+        // Promote optimistic message and suppress the sync echo — only when
+        // there was one to promote.
+        if (!threadRootEventId) {
+          timeline.confirmMessage(optimisticId, eventId);
+          _ownSentEventIds.add(eventId);
+        }
       } catch (err) {
         showError(`Failed to send sticker: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -303,7 +323,13 @@ export function openGifPicker(): void {
     }
     gifPicker.setStatus("Uploading GIF…");
     try {
-      await ipcSendGif(roomId, gif.url, gif.title, gif.width, gif.height);
+      // Same routing as any other attachment: a GIF picked with a thread open
+      // belongs in that thread, not the main timeline (#78). The GIF path has no
+      // optimistic row, so the sync echo renders it wherever it belongs.
+      await ipcSendGif(roomId, gif.url, gif.title, gif.width, gif.height, {
+        replyToEventId: AppState.get("replyToEventId") ?? undefined,
+        threadRootEventId: AppState.get("threadRootEventId") ?? undefined,
+      });
       showSuccess("GIF sent");
     } catch (err) {
       showError(

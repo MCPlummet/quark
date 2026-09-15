@@ -2,6 +2,7 @@
 
 import { invoke } from "./invoke.js";
 import type { GifResult } from "./types.js";
+import type { MessageTarget } from "./media.js";
 
 export type { GifResult };
 
@@ -44,6 +45,15 @@ export async function sendGif(
   title: string,
   width: number,
   height: number,
+  target: MessageTarget = {},
 ): Promise<string> {
-  return invoke<string>("send_gif", { roomId, gifUrl, title, width, height });
+  return invoke<string>("send_gif", {
+    roomId,
+    gifUrl,
+    title,
+    width,
+    height,
+    replyToEventId: target.replyToEventId ?? null,
+    threadRootEventId: target.threadRootEventId ?? null,
+  });
 }
