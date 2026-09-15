@@ -610,7 +610,7 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Option<TimelineEvent> {
-    use matrix_sdk::ruma::events::room::message::{MessageType, Relation};
+    use matrix_sdk::ruma::events::room::message::Relation;
 
     let event_id = ev.event_id.to_string();
     let sender = ev.sender.to_string();
@@ -659,12 +659,8 @@ pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Op
         (is_edit, relates_to, reply_to, t_root)
     };
 
-    // Media captions (MSC2530): only present when a distinct filename is set, so
-    // a bare-filename body is not surfaced as a caption.
-    let caption = match effective_msgtype {
-        MessageType::Image(image) => image.caption().map(|c| c.to_owned()),
-        _ => None,
-    };
+    let (caption, caption_formatted) =
+        crate::matrix::timeline::extract_caption(effective_msgtype);
 
     Some(TimelineEvent {
         event_id,
@@ -682,6 +678,7 @@ pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Op
         media_width: parts.media_width,
         media_height: parts.media_height,
         caption,
+        caption_formatted,
         filename: parts.filename,
         media_encryption_info: parts.media_encryption_info,
         media_thumbnail_url: parts.media_thumbnail_url,
@@ -732,6 +729,7 @@ mod tests {
             media_width: None,
             media_height: None,
             caption: None,
+            caption_formatted: None,
             filename: None,
             media_encryption_info: None,
             media_thumbnail_url: None,

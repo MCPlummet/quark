@@ -10,10 +10,11 @@ use crate::{
         emoji::EmojiPack,
         media::MediaDownload,
         reactions::ReactionGroup,
+        relations::SendTarget,
         rooms::{CreateRoomOptions, PinnedEventInfo, PublicRoomInfo, ReadReceiptInfo, RoomInfo, RoomMemberInfo},
         spaces::SpaceChild,
         threads::ThreadRoot,
-        timeline::{TimelineEvent, TimelinePage},
+        timeline::{Caption, TimelineEvent, TimelinePage},
     },
     media_cache::CacheStats,
     notifications::NotificationConfig,
@@ -1344,9 +1345,10 @@ async fn upload_attachment(
 }
 
 /// Upload image data (base64-encoded) and send it as an m.image event, with an
-/// optional MSC2530 caption, optionally as a reply. Used for clipboard paste
-/// and picked images from the frontend.
+/// optional MSC2530 caption, optionally into a thread and/or as a reply. Used
+/// for clipboard paste and picked images from the frontend.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_pasted_image(
     app: AppHandle,
     state: State<'_, MatrixState>,
@@ -1355,7 +1357,9 @@ pub async fn send_pasted_image(
     mime_type: String,
     filename: String,
     caption: Option<String>,
+    formatted_caption: Option<String>,
     reply_to_event_id: Option<String>,
+    thread_root_event_id: Option<String>,
     upload_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
@@ -1369,12 +1373,15 @@ pub async fn send_pasted_image(
         &client,
         &room_id,
         &filename,
-        caption.as_deref(),
+        Caption { body: caption.as_deref(), formatted: formatted_caption.as_deref() },
         source,
         &mime_type,
         None,
         None,
-        reply_to_event_id.as_deref(),
+        SendTarget {
+            thread_root: thread_root_event_id.as_deref(),
+            in_reply_to: reply_to_event_id.as_deref(),
+        },
     )
     .await
 }
@@ -1382,6 +1389,7 @@ pub async fn send_pasted_image(
 /// Upload file data (base64-encoded) and send it as an m.file event.
 /// Used for the file picker attach flow.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_file(
     app: AppHandle,
     state: State<'_, MatrixState>,
@@ -1390,6 +1398,8 @@ pub async fn send_file(
     mime_type: String,
     filename: String,
     file_size: Option<u64>,
+    reply_to_event_id: Option<String>,
+    thread_root_event_id: Option<String>,
     upload_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
@@ -1406,6 +1416,10 @@ pub async fn send_file(
         source,
         &mime_type,
         file_size,
+        SendTarget {
+            thread_root: thread_root_event_id.as_deref(),
+            in_reply_to: reply_to_event_id.as_deref(),
+        },
     )
     .await
 }
@@ -1414,6 +1428,7 @@ pub async fn send_file(
 /// Used for the file picker attach flow when a video file is chosen, so it
 /// renders as a playable embed rather than a generic file attachment.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_video(
     app: AppHandle,
     state: State<'_, MatrixState>,
@@ -1425,6 +1440,8 @@ pub async fn send_video(
     height: Option<u64>,
     duration_ms: Option<u64>,
     file_size: Option<u64>,
+    reply_to_event_id: Option<String>,
+    thread_root_event_id: Option<String>,
     upload_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
@@ -1444,11 +1461,16 @@ pub async fn send_video(
         height,
         duration_ms,
         file_size,
+        SendTarget {
+            thread_root: thread_root_event_id.as_deref(),
+            in_reply_to: reply_to_event_id.as_deref(),
+        },
     )
     .await
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_sticker(
     state: State<'_, MatrixState>,
     room_id: String,
@@ -1457,6 +1479,8 @@ pub async fn send_sticker(
     body: Option<String>,
     pack_id: String,
     pack_name: Option<String>,
+    reply_to_event_id: Option<String>,
+    thread_root_event_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
     let sticker = crate::matrix::stickers::StickerInfo {
@@ -1466,7 +1490,16 @@ pub async fn send_sticker(
         pack_id,
         pack_name,
     };
-    crate::matrix::stickers::send_sticker(&client, &room_id, &sticker).await
+    crate::matrix::stickers::send_sticker(
+        &client,
+        &room_id,
+        &sticker,
+        SendTarget {
+            thread_root: thread_root_event_id.as_deref(),
+            in_reply_to: reply_to_event_id.as_deref(),
+        },
+    )
+    .await
 }
 
 // ─── URL Preview Commands ─────────────────────────────────────────────────────
@@ -2104,6 +2137,7 @@ fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 /// Download a GIF from an external URL, upload it to the homeserver, and send
 /// it as an `m.image` event. This avoids leaking external URLs to recipients.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_gif(
     state: State<'_, MatrixState>,
     room_id: String,
@@ -2111,6 +2145,8 @@ pub async fn send_gif(
     title: String,
     width: u32,
     height: u32,
+    reply_to_event_id: Option<String>,
+    thread_root_event_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
 
@@ -2150,8 +2186,21 @@ pub async fn send_gif(
 
     // Send as m.image event. The title is the body, not an MSC2530 caption
     // (no distinct filename), matching how GIF pickers label sends.
-    crate::matrix::timeline::send_image(&client, &room_id, &title, None, source, "image/gif", w, h, None)
-        .await
+    crate::matrix::timeline::send_image(
+        &client,
+        &room_id,
+        &title,
+        Caption::none(),
+        source,
+        "image/gif",
+        w,
+        h,
+        SendTarget {
+            thread_root: thread_root_event_id.as_deref(),
+            in_reply_to: reply_to_event_id.as_deref(),
+        },
+    )
+    .await
 }
 
 #[cfg(test)]

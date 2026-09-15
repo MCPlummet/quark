@@ -204,13 +204,12 @@ pub async fn send_thread_reply(
         RoomMessageEventContent::text_plain(body)
     };
 
-    use matrix_sdk::ruma::events::relation::Thread as ThreadRelation;
-    // Add thread relation to the content
+    // Shared with every other sender rather than built here — the media senders
+    // needed the same decision for #78, and a second copy of it is how they
+    // would drift.
     let mut thread_content = content;
-    thread_content.relates_to = Some(Relation::Thread(ThreadRelation::plain(
-        root_id.clone(),
-        root_id.clone(),
-    )));
+    thread_content.relates_to =
+        crate::matrix::relations::build_relation(Some(root_id.as_str()), None)?;
 
     let response = room
         .send(thread_content)
