@@ -108,6 +108,19 @@ export interface TimelineForwardPage {
 }
 
 /** Serializable timeline event — matches matrix::timeline::TimelineEvent */
+/**
+ * Where a message is going: the thread it belongs to and the event it replies
+ * to. Mirrors the backend's `matrix::relations::SendTarget`, which turns the
+ * pair into one `m.relates_to` — a threaded reply is a thread relation carrying
+ * the replied-to event, not a reply beside it.
+ */
+export interface MessageTarget {
+  /** Event this replies to, if a reply is armed. */
+  replyToEventId?: string;
+  /** Root of the thread this belongs to, if a thread is open (#78). */
+  threadRootEventId?: string;
+}
+
 export interface TimelineEvent {
   event_id: string;
   sender: string;

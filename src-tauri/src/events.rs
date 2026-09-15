@@ -632,32 +632,11 @@ pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Op
     // That is the same divergence #41 and #48 were, one layer down.
     let parts = crate::matrix::timeline::extract_message_content(effective_msgtype);
 
-    let (is_edit, relates_to_event_id, in_reply_to, thread_root) = {
-        let mut is_edit = false;
-        let mut relates_to = None;
-        let mut reply_to = None;
-        let mut t_root = None;
-
-        if let Some(relation) = &content.relates_to {
-            match relation {
-                Relation::Replacement(r) => {
-                    is_edit = true;
-                    relates_to = Some(r.event_id.to_string());
-                }
-                Relation::Reply { in_reply_to: r } => {
-                    reply_to = Some(r.event_id.to_string());
-                }
-                Relation::Thread(thread) => {
-                    t_root = Some(thread.event_id.to_string());
-                    if let Some(r) = &thread.in_reply_to {
-                        reply_to = Some(r.event_id.to_string());
-                    }
-                }
-                _ => {}
-            }
-        }
-        (is_edit, relates_to, reply_to, t_root)
-    };
+    // Shared with the room-load path for the same reason `extract_message_content`
+    // is — this was a second copy of the same match, and the two had already
+    // drifted once.
+    let (is_edit, relates_to_event_id, in_reply_to, thread_root) =
+        crate::matrix::timeline::extract_relations(content.relates_to.as_ref());
 
     let (caption, caption_formatted) =
         crate::matrix::timeline::extract_caption(effective_msgtype);

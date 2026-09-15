@@ -793,6 +793,11 @@ fn convert_sync_sticker(ev: matrix_sdk::ruma::events::OriginalSyncMessageLikeEve
     let mime = ev.content.info.mimetype.clone();
     let w: Option<u64> = ev.content.info.width.map(|v| v.into());
     let h: Option<u64> = ev.content.info.height.map(|v| v.into());
+    // Stickers carry a relation like any other message. Hardcoding these to
+    // `None` meant a sticker sent into a thread came back from sync looking
+    // like a main-timeline message, and the frontend put it there (#78).
+    let (is_edit, relates_to_event_id, in_reply_to, thread_root) =
+        extract_relations(ev.content.relates_to.as_ref());
     TimelineEvent {
         event_id,
         sender,
@@ -800,10 +805,10 @@ fn convert_sync_sticker(ev: matrix_sdk::ruma::events::OriginalSyncMessageLikeEve
         formatted_body: None,
         timestamp,
         msg_type: "m.sticker".to_string(),
-        is_edit: false,
-        relates_to_event_id: None,
-        in_reply_to: None,
-        thread_root: None,
+        is_edit,
+        relates_to_event_id,
+        in_reply_to,
+        thread_root,
         media_url: url,
         media_mimetype: mime,
         media_width: w,
@@ -868,7 +873,7 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
     let content = extract_message_content(&effective_content.msgtype);
 
     let (is_edit, relates_to_event_id, in_reply_to, thread_root) =
-        extract_relations(&ev.content);
+        extract_relations(ev.content.relates_to.as_ref());
 
     let (caption, caption_formatted) = extract_caption(&effective_content.msgtype);
 
@@ -906,11 +911,18 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
 /// Shared by the room-load and live-sync converters for the same reason
 /// [`extract_message_content`] is: they carried near-identical copies of this
 /// match, and copies drift.
+///
+/// The formatted half is sanitized, like every other `formatted_body` the
+/// backend lifts out of an event. A caption is as attacker-controlled as a
+/// message body — any member of any joined room can set one — and it lands in
+/// the same `innerHTML` sink.
 pub(crate) fn extract_caption(msgtype: &MessageType) -> (Option<String>, Option<String>) {
     match msgtype {
         MessageType::Image(image) => (
             image.caption().map(|c| c.to_owned()),
-            image.formatted_caption().map(|f| f.body.clone()),
+            image
+                .formatted_caption()
+                .map(|f| crate::matrix::html::sanitize(&f.body)),
         ),
         _ => (None, None),
     }
@@ -1057,15 +1069,15 @@ pub(crate) fn extract_message_content(msgtype: &MessageType) -> MessageContent {
 }
 
 
-fn extract_relations(
-    content: &RoomMessageEventContent,
+pub(crate) fn extract_relations<C>(
+    relates_to: Option<&Relation<C>>,
 ) -> (bool, Option<String>, Option<String>, Option<String>) {
     let mut is_edit = false;
     let mut relates_to_event_id = None;
     let mut in_reply_to = None;
     let mut thread_root = None;
 
-    if let Some(relation) = &content.relates_to {
+    if let Some(relation) = relates_to {
         match relation {
             Relation::Replacement(replacement) => {
                 is_edit = true;
@@ -2289,6 +2301,40 @@ mod tests {
             te.caption_formatted.as_deref().expect("formatted caption").contains("data-mx-emoticon"),
             "the custom emoji has to reach the UI, or it renders as a shortcode"
         );
+    }
+
+    /// A caption is `formatted_body` like any other, so it goes through the same
+    /// allowlist. Without this the one path that skipped `sanitize` was reachable
+    /// by any member of any joined room, and lands in an `innerHTML`.
+    #[test]
+    fn test_convert_sync_caption_html_is_sanitized() {
+        let json = serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$img5:example.com",
+            "sender": "@mallory:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "msgtype": "m.image",
+                "body": "hi",
+                "format": "org.matrix.custom.html",
+                "formatted_body":
+                    "<script>alert(1)</script><img src=\"https://tracker.example/p.gif\" onerror=\"x\">hi",
+                "filename": "cat.png",
+                "url": "mxc://example.com/abc123",
+                "info": { "mimetype": "image/png" }
+            }
+        });
+        let ev: OriginalSyncRoomMessageEvent =
+            serde_json::from_value(json).expect("deserialize image event");
+        let te = convert_sync_room_message(ev);
+
+        let html = te.caption_formatted.expect("formatted caption");
+        assert!(!html.contains("<script"), "script survived sanitization: {html}");
+        assert!(!html.contains("onerror"), "event handler survived sanitization: {html}");
+        // The remote `<img src="https://…">` deliberately survives: the Matrix
+        // spec allows it in `formatted_body`, so the allowlist permits it in
+        // every message body already. A caption is not a special case of that.
+        assert!(html.contains("tracker.example"));
     }
 
     /// A formatted body beside a *filename* body is not a caption, and ruma's

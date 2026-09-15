@@ -2,7 +2,7 @@
 
 import { invoke } from "./invoke.js";
 import type { GifResult } from "./types.js";
-import type { MessageTarget } from "./media.js";
+import type { MessageTarget } from "./types.js";
 
 export type { GifResult };
 

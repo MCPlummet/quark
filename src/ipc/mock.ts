@@ -467,8 +467,19 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       } as TimelineEvent);
       return "$mock-video-event-id";
     }
-    case "send_sticker":
+    case "send_sticker": {
+      // Pushed to the timeline like every other send: a mock that returns an id
+      // and nothing else cannot show browser dev mode where a sticker lands,
+      // which is the whole question #78 was about.
+      MOCK_TIMELINE.push({
+        ...mockEvent("@you:matrix.org", (args?.body as string) ?? "sticker", 0),
+        msg_type: "m.sticker",
+        media_url: (args?.url as string) ?? "",
+        media_mimetype: "image/png",
+        ...mockRelation(args),
+      } as TimelineEvent);
       return "$mock-sticker-event-id";
+    }
     case "get_own_profile":
       return { user_id: "@you:matrix.org", display_name: "You", avatar_url: null };
     case "set_presence_status":

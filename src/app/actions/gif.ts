@@ -29,6 +29,7 @@ import {
   _emojiImageCache,
   _shortcodeToMxc,
 } from "./context.js";
+import { cancelReply } from "./messages.js";
 
 // ── Emoji picker state ────────────────────────────────────────────────────────
 
@@ -133,6 +134,7 @@ export function openEmojiPicker(initialTab: "emoji" | "sticker" = "emoji"): void
           sticker.packName ?? null,
           { replyToEventId, threadRootEventId },
         );
+        if (replyToEventId) cancelReply();
         // Promote optimistic message and suppress the sync echo — only when
         // there was one to promote.
         if (!threadRootEventId) {
@@ -326,10 +328,14 @@ export function openGifPicker(): void {
       // Same routing as any other attachment: a GIF picked with a thread open
       // belongs in that thread, not the main timeline (#78). The GIF path has no
       // optimistic row, so the sync echo renders it wherever it belongs.
+      const replyToEventId = AppState.get("replyToEventId") ?? undefined;
       await ipcSendGif(roomId, gif.url, gif.title, gif.width, gif.height, {
-        replyToEventId: AppState.get("replyToEventId") ?? undefined,
+        replyToEventId,
         threadRootEventId: AppState.get("threadRootEventId") ?? undefined,
       });
+      // The GIF consumed the armed reply, so disarm it — otherwise the banner
+      // stays up and the next typed message replies to the same event.
+      if (replyToEventId) cancelReply();
       showSuccess("GIF sent");
     } catch (err) {
       showError(

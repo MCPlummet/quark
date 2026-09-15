@@ -996,7 +996,8 @@ alongside `openExternalUrl` opened every link twice.
   (`m.thread` carrying the replied-to event), not a reply alongside a thread —
   `m.relates_to` holds one relation, so the two cannot both be set. Attachments
   sent into a thread have no optimistic row: they appear when the echo arrives,
-  which is what routes them into the panel with their media.
+  which is what routes them into the panel with their media. An armed reply is
+  consumed by the attachment and cleared, as it is for a text message.
 - **Pasting.** Anything on the clipboard that is a file pastes into the
   composer, not just images: an image stages in the preview, a video sends as
   `m.video`, everything else as `m.file` — the same routing the attach button
@@ -1143,7 +1144,7 @@ Themes reload on file save (watched via `notify` crate / filesystem events passe
 
 ### Theme precedence
 
-Three places can name a theme. They are applied in this order, and the later one wins:
+Two places name a theme at startup. They are applied in this order, and the later one wins:
 
 1. **`quarkrc`'s `colorscheme <name>`** — the theme to start in.
 2. **`config.toml`'s `[general] theme`** — the active theme. This is what Settings → Themes writes, and what `colorscheme` yields to: a theme picked in the UI has to survive a relaunch, and the UI does not edit `quarkrc`.

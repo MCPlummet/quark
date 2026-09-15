@@ -28,7 +28,7 @@ import type { AttachmentProgressHandle } from "../../ui/AttachmentProgress.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
-import type { MessageTarget } from "../../ipc/media.js";
+import type { MessageTarget } from "../../ipc/types.js";
 
 import { getComponents, prepareOutgoingBody } from "./context.js";
 import { openQuickReactPicker } from "./reactions.js";
@@ -288,7 +288,7 @@ export async function sendAttachment(
   const { roomId, replyToEventId, threadRootEventId } = target;
   const isVideo = file.type.startsWith("video/");
 
-  return runAttachment(file, filename, roomId, async (dataBase64, uploadId) => {
+  const sent = await runAttachment(file, filename, roomId, async (dataBase64, uploadId) => {
     const send = {
       roomId,
       dataBase64,
@@ -312,6 +312,13 @@ export async function sendAttachment(
     }
     return sendFile({ ...send, fileSize: file.size });
   });
+
+  // Consuming the armed reply means disarming it. Before these paths carried
+  // the reply at all, leaving the banner up was merely untidy; now the
+  // attachment really is a reply, so a banner left standing makes every message
+  // after it one too.
+  if (sent && replyToEventId) cancelReply();
+  return sent;
 }
 
 /**

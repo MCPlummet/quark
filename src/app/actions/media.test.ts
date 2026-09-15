@@ -380,6 +380,27 @@ describe("attachments follow the open thread (#78)", () => {
     expect(send.replyToEventId).toBe("$parent");
   });
 
+  // Before these paths carried the reply at all, leaving the banner up was
+  // merely untidy. Now the attachment really is a reply, so a banner left
+  // standing makes every message after it one too.
+  it("disarms the reply once a picked file has consumed it", async () => {
+    AppState.set("replyToEventId", "$parent");
+
+    await handleFilePick(new File(["hi"], "notes.txt", { type: "text/plain" }));
+
+    expect(sendFile.mock.calls[0][0].replyToEventId).toBe("$parent");
+    expect(cancelReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the reply armed when the attachment fails", async () => {
+    AppState.set("replyToEventId", "$parent");
+    sendFile.mockRejectedValueOnce(new Error("boom"));
+
+    await handleFilePick(new File(["hi"], "notes.txt", { type: "text/plain" }));
+
+    expect(cancelReply).not.toHaveBeenCalled();
+  });
+
   it("leaves the thread root off when no thread is open", async () => {
     await sendPendingImage(blob(), "cat.png");
 

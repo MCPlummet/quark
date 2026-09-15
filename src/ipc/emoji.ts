@@ -2,7 +2,7 @@
 
 import { invoke } from "./invoke.js";
 import type { EmojiPack, EmojiEntry } from "./types.js";
-import type { MessageTarget } from "./media.js";
+import type { MessageTarget } from "./types.js";
 
 export type { EmojiPack, EmojiEntry };
 

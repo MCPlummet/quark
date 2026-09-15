@@ -18,6 +18,19 @@ const MODE_CSS_CLASS: Record<string, string> = {
   Visual: "input-bar__mode--visual",
 };
 
+/**
+ * What the compose field held either side of a default paste, so the async
+ * clipboard fallback can undo one — see {@link Input._undoDefaultPaste}.
+ */
+interface PasteUndo {
+  /** The value before the paste. */
+  value: string;
+  /** The caret before the paste. */
+  caret: number | null;
+  /** The value immediately after the paste; `null` until it has landed. */
+  pasted: string | null;
+}
+
 export class Input {
   private _el: HTMLElement;
   private _modeEl: HTMLElement;
@@ -175,7 +188,7 @@ export class Input {
       // flavour ended up typed into the composer at the same moment the image
       // staged.
       if (typeof navigator !== "undefined" && navigator.clipboard?.read) {
-        const before = { value: this._fieldEl.value, caret: this._fieldEl.selectionStart };
+        const before = this._snapshotForUndo();
         void navigator.clipboard.read().then((clipItems) => {
           for (const ci of clipItems) {
             for (const type of ci.types) {
@@ -330,36 +343,76 @@ export class Input {
     this._sendBtnEl.style.display = visible ? "" : "none";
   }
 
-  /** Register a callback invoked when the user picks a file via the attach button. */
   /**
    * Route one pasted file: an image stages in the composer preview, anything
    * else goes to the file-pick handler, which already knows how to send a video
    * as `m.video` and everything else as `m.file`.
+   *
+   * Deliberately not delegating the whole decision to `_onFilePick`, which the
+   * picker's handler also owns: that one switches to Insert mode and focuses the
+   * field, which is right for a button press and redundant for a paste the user
+   * is already typing into.
+   *
+   * A clipboard image carries a real `File` with a name where the source had
+   * one, so it is passed through — a named file pasted and the same file
+   * attached should not upload under different names.
    */
   private _stageOrSend(file: File): void {
     if (file.type.startsWith("image/")) {
-      this.showImagePreview(file);
+      this.showImagePreview(file, file.name || undefined);
       return;
     }
     this._onFilePick?.(file);
   }
 
   /**
+   * Record what the field held before a default paste, and what it holds
+   * immediately after — the two values {@link _undoDefaultPaste} needs.
+   *
+   * `pasted` is captured on the next task rather than now: the default paste
+   * has not run yet when the `paste` listener is on the stack, so this is the
+   * earliest point at which the inserted text is visible.
+   */
+  private _snapshotForUndo(): PasteUndo {
+    const undo: PasteUndo = {
+      value: this._fieldEl.value,
+      caret: this._fieldEl.selectionStart,
+      pasted: null,
+    };
+    setTimeout(() => {
+      undo.pasted = this._fieldEl.value;
+    }, 0);
+    return undo;
+  }
+
+  /**
    * Put the compose field back the way it was before a default paste ran.
    *
    * Only for the async clipboard fallback, which cannot call
-   * `preventDefault()` in time. A no-op when the paste inserted nothing, so a
-   * clipboard holding only an image never disturbs what the user had typed.
+   * `preventDefault()` in time.
+   *
+   * It restores only if the field still holds exactly what the paste left
+   * there. `navigator.clipboard.read()` can sit behind a permission prompt, so
+   * that window is not always a microtask — and restoring a stale snapshot
+   * wholesale would silently delete everything the user typed while waiting.
+   * Better to leave the pasted text in place than to take their sentence with
+   * it.
    */
-  private _undoDefaultPaste(before: { value: string; caret: number | null }): void {
-    if (this._fieldEl.value === before.value) return;
-    this._fieldEl.value = before.value;
-    if (before.caret !== null) {
-      this._fieldEl.selectionStart = this._fieldEl.selectionEnd = before.caret;
+  private _undoDefaultPaste(undo: PasteUndo): void {
+    if (undo.pasted === null) return; // the default paste has not landed yet
+    if (this._fieldEl.value !== undo.pasted) return; // the user has typed since
+    if (undo.pasted === undo.value) return; // nothing was inserted
+    this._fieldEl.value = undo.value;
+    if (undo.caret !== null) {
+      this._fieldEl.selectionStart = this._fieldEl.selectionEnd = undo.caret;
     }
     this._autoGrow();
   }
 
+  /**
+   * Register the handler for a file the user attached — from the attach button,
+   * or pasted into the composer (see {@link _stageOrSend}).
+   */
   onFilePick(handler: (file: File) => void): void {
     this._onFilePick = handler;
   }

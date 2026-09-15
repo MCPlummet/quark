@@ -202,6 +202,117 @@ describe("Input", () => {
       expect(input.hasPendingImage()).toBe(true);
     });
 
+    // #83: every branch filtered on `image/`, so a PDF fell through to the
+    // browser's default text paste and vanished — even though the attach button
+    // beside it has sent those as m.file all along.
+    it("routes a pasted non-image file to the file-pick handler", () => {
+      const picked: File[] = [];
+      input.onFilePick((f) => picked.push(f));
+      const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
+
+      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      Object.defineProperty(evt, "clipboardData", {
+        value: { items: [{ type: "application/pdf", getAsFile: () => pdf }], files: [] },
+      });
+      field()?.dispatchEvent(evt);
+
+      expect(picked).toHaveLength(1);
+      expect(picked[0].name).toBe("notes.pdf");
+      expect(input.hasPendingImage()).toBe(false);
+    });
+
+    it("keeps a pasted image file's own name instead of inventing one", () => {
+      const png = new File(["x"], "screenshot.png", { type: "image/png" });
+      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      Object.defineProperty(evt, "clipboardData", {
+        value: { items: [{ type: "image/png", getAsFile: () => png }], files: [] },
+      });
+      field()?.dispatchEvent(evt);
+
+      expect(input.takePendingImage()?.filename).toBe("screenshot.png");
+    });
+
+    // The async clipboard fallback (Linux/WebKitGTK) cannot call
+    // `preventDefault()` — whether there is an image to paste is not known
+    // until the read resolves. So the clipboard's *text* flavour gets typed
+    // into the composer at the same moment the image stages, and has to be
+    // taken back out.
+    describe("async clipboard fallback", () => {
+      /** Drive a paste with no synchronous file, holding the clipboard read open. */
+      function pasteWithClipboardImage() {
+        let resolveRead!: (items: unknown[]) => void;
+        const read = vi.fn(() => new Promise((res) => { resolveRead = res as typeof resolveRead; }));
+        Object.defineProperty(navigator, "clipboard", {
+          value: { read },
+          configurable: true,
+        });
+
+        const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+        Object.defineProperty(evt, "clipboardData", { value: { items: [], files: [] } });
+        field()?.dispatchEvent(evt);
+
+        const deliverImage = async () => {
+          resolveRead([
+            {
+              types: ["image/png"],
+              getType: async () => new Blob(["x"], { type: "image/png" }),
+            },
+          ]);
+          // The read, then getType, then the staging — three hops.
+          await new Promise((r) => setTimeout(r, 0));
+          await new Promise((r) => setTimeout(r, 0));
+        };
+        return { deliverImage };
+      }
+
+      /** Let the post-paste snapshot (a `setTimeout(…, 0)`) land. */
+      const settle = () => new Promise((r) => setTimeout(r, 0));
+
+      it("removes the text the default paste inserted once an image arrives", async () => {
+        const f = field()!;
+        f.value = "hello";
+        f.selectionStart = f.selectionEnd = 5;
+
+        const { deliverImage } = pasteWithClipboardImage();
+        f.value = "hello https://example.org/img.png"; // the default paste
+        await settle();
+        await deliverImage();
+
+        expect(f.value).toBe("hello");
+        expect(input.hasPendingImage()).toBe(true);
+      });
+
+      // `clipboard.read()` can sit behind a permission prompt, so the window is
+      // not always a microtask. Restoring a stale snapshot wholesale would take
+      // the user's sentence with it.
+      it("leaves the field alone if the user typed while the read was pending", async () => {
+        const f = field()!;
+        f.value = "hello";
+
+        const { deliverImage } = pasteWithClipboardImage();
+        f.value = "hello https://example.org/img.png";
+        await settle();
+        f.value = "hello https://example.org/img.png and more"; // user kept typing
+        await deliverImage();
+
+        expect(f.value).toBe("hello https://example.org/img.png and more");
+        // The image still stages — only the undo stands down.
+        expect(input.hasPendingImage()).toBe(true);
+      });
+
+      it("disturbs nothing when the paste inserted no text", async () => {
+        const f = field()!;
+        f.value = "hello";
+
+        const { deliverImage } = pasteWithClipboardImage();
+        await settle();
+        await deliverImage();
+
+        expect(f.value).toBe("hello");
+        expect(input.hasPendingImage()).toBe(true);
+      });
+    });
+
     it("the preview Send button routes through the send-click handler", () => {
       const onSend = vi.fn();
       input.onSendClick(onSend);
