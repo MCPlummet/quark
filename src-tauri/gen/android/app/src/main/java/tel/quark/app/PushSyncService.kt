@@ -131,6 +131,12 @@ class PushSyncService : Service() {
    * The notification Android requires a foreground service to show. On the
    * lowest-importance channel and short-lived, so in practice it appears
    * briefly in the shade and disappears with the service.
+   *
+   * It still needs a content intent. This row is posted on every push and sits
+   * in the shade beside the real message notification; without one, tapping it
+   * closed the shade and did nothing — deterministically, and looking exactly
+   * like the intermittent dead tap of #87 to anyone not sorting the two rows
+   * apart. Opening the app is the least surprising thing it can do.
    */
   private fun buildPlaceholder(): android.app.Notification =
     NotificationCompat.Builder(this, CHANNEL_ID)
@@ -138,5 +144,6 @@ class PushSyncService : Service() {
       .setContentTitle("Checking for new messages")
       .setPriority(NotificationCompat.PRIORITY_MIN)
       .setShowWhen(false)
+      .setContentIntent(PushNotifier.launchIntent(this))
       .build()
 }
