@@ -4,7 +4,7 @@ import { createReactionBar, type ReactionGroup } from "./Reactions.js";
 import { attachResizeHandle } from "./ResizeHandle.js";
 import { guardViewportPan } from "../app/mobile.js";
 import { appendLinkifiedText } from "../app/links.js";
-import { appendCaption, renderFormattedBody } from "./message_body.js";
+import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
 
 export interface ThreadMessageData {
   id: string;
@@ -291,6 +291,11 @@ export class ThreadView {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
       });
       row.appendChild(aff);
+      appendCaption(row, "thread-view__message-body", msg.caption, msg.captionHtml);
+    } else if (type === "file") {
+      row.appendChild(
+        buildFileAffordance(msg.mediaUrl, msg.mediaAlt ?? msg.body, msg.mediaMimeType, msg.mediaEncryptionInfo),
+      );
       appendCaption(row, "thread-view__message-body", msg.caption, msg.captionHtml);
     } else {
       const body = document.createElement("div");

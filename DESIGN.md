@@ -994,14 +994,24 @@ alongside `openExternalUrl` opened every link twice.
   sent with a thread open carries that thread's relation, exactly as a text
   reply does. A reply armed *inside* a thread produces one threaded reply
   (`m.thread` carrying the replied-to event), not a reply alongside a thread —
-  `m.relates_to` holds one relation, so the two cannot both be set. Attachments
+  `m.relates_to` holds one relation, so the two cannot both be set. A reply
+  armed *outside* the open thread is not carried: opening a thread disarms the
+  reply (the thread banner replaces the reply banner, so one left armed is armed
+  invisibly), and an attachment only folds in a reply to the thread's root or to
+  one of its replies. Files sent into a thread render in the panel as the same
+  click-to-open affordance the main timeline gives them. Attachments
   sent into a thread have no optimistic row: they appear when the echo arrives,
   which is what routes them into the panel with their media. An armed reply is
   consumed by the attachment and cleared, as it is for a text message.
 - **Pasting.** Anything on the clipboard that is a file pastes into the
   composer, not just images: an image stages in the preview, a video sends as
   `m.video`, everything else as `m.file` — the same routing the attach button
-  uses. Drag-and-drop is not implemented.
+  uses. Where the webview exposes a pasted image only through the async
+  Clipboard API (Linux/WebKitGTK), the default text paste has already run by the
+  time the image arrives; the text it inserted is taken back out only when it
+  reads as the image's stand-in (a lone URL, path or image filename). Prose that
+  merely shares the clipboard with an image stays, and becomes the caption.
+  Drag-and-drop is not implemented.
 - **Encrypted attachments.** In an encrypted room the bytes are encrypted
   before upload and the event references them as an `m.file` source carrying the
   key, never a plaintext `mxc://`. The room decides this, not the call site:

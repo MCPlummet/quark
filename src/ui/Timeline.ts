@@ -4,7 +4,7 @@ import { createReactionBar, updateReactionBar, type ReactionGroup } from "./Reac
 import { invoke } from "../ipc/invoke.js";
 import type { SearchResult } from "../ipc/types.js";
 import { type ThreadMessageData } from "./ThreadView.js";
-import { appendCaption, renderFormattedBody } from "./message_body.js";
+import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { hashColor } from "./avatarColors.js";
 import { isMobile, viewportPan } from "../app/mobile.js";
@@ -397,50 +397,6 @@ function buildVideoAffordance(
 
   const activate = () => {
     el.dispatchEvent(new CustomEvent("quark:open-video", {
-      bubbles: true,
-      detail: { mxcUrl, filename, mimeType, encryptionInfo },
-    }));
-  };
-  el.addEventListener("click", activate);
-  el.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
-  });
-
-  return el;
-}
-
-function buildFileAffordance(
-  mxcUrl?: string,
-  filename?: string,
-  mimeType?: string,
-  encryptionInfo?: string,
-): HTMLElement {
-  const el = document.createElement("div");
-  el.className = "message__file-affordance";
-  el.setAttribute("role", "button");
-  el.setAttribute("tabindex", "0");
-  el.title = "Click to open file";
-
-  const icon = document.createElement("span");
-  icon.className = "message__file-affordance-icon";
-  icon.textContent = "📎";
-  icon.setAttribute("aria-hidden", "true");
-  el.appendChild(icon);
-
-  const label = document.createElement("span");
-  label.className = "message__file-affordance-label";
-  label.textContent = filename || "file";
-  el.appendChild(label);
-
-  if (mimeType) {
-    const type = document.createElement("span");
-    type.className = "message__file-affordance-type";
-    type.textContent = mimeType.split("/")[1]?.toUpperCase() ?? mimeType;
-    el.appendChild(type);
-  }
-
-  const activate = () => {
-    el.dispatchEvent(new CustomEvent("quark:open-file", {
       bubbles: true,
       detail: { mxcUrl, filename, mimeType, encryptionInfo },
     }));
@@ -2010,6 +1966,14 @@ export class Timeline {
     } else if (type === "video") {
       const aff = buildVideoAffordance(msg.mediaUrl, msg.mediaAlt, msg.mediaMimeType, msg.mediaEncryptionInfo, msg.mediaThumbnailUrl, msg.mediaThumbnailEncryptionInfo);
       row.appendChild(aff);
+      appendCaption(row, "thread-inline__message-body", msg.caption, msg.captionHtml);
+    } else if (type === "file") {
+      // mediaAlt over body for the same reason the main timeline prefers it: on
+      // a captioned upload the body is the caption, which would name the saved
+      // file after it.
+      row.appendChild(
+        buildFileAffordance(msg.mediaUrl, msg.mediaAlt ?? msg.body, msg.mediaMimeType, msg.mediaEncryptionInfo),
+      );
       appendCaption(row, "thread-inline__message-body", msg.caption, msg.captionHtml);
     } else {
       const body = document.createElement("div");

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { AppComponents } from "../../ui/App.js";
+import type { TimelineEvent } from "../../ipc/types.js";
 
 // Mock the IPC surface so no real invoke happens; capture the send call.
 // Typed with the real signature so `.mock.calls[n]` destructures cleanly under
@@ -94,7 +95,12 @@ beforeEach(() => {
   setComponents({
     input: { showImagePreview, getValue, setValue, startAttachmentProgress },
   } as unknown as AppComponents);
-  AppState.patch({ currentRoomId: "!room:x", replyToEventId: null, threadRootEventId: null });
+  AppState.patch({
+    currentRoomId: "!room:x",
+    replyToEventId: null,
+    threadRootEventId: null,
+    currentTimeline: [],
+  });
   // Module-global, so a room's custom emoji would otherwise leak between tests.
   _shortcodeToMxc.clear();
 });
@@ -338,6 +344,26 @@ function stubVideoProbe(): () => void {
   };
 }
 
+/** A timeline event that is only ever looked up by id and thread root. */
+function threadEvent(eventId: string, threadRoot: string | null): TimelineEvent {
+  return {
+    event_id: eventId,
+    sender: "@bob:x",
+    body: "hi",
+    formatted_body: null,
+    timestamp: 1000,
+    msg_type: "m.text",
+    is_edit: false,
+    relates_to_event_id: null,
+    in_reply_to: null,
+    thread_root: threadRoot,
+    media_url: null,
+    media_mimetype: null,
+    media_width: null,
+    media_height: null,
+  };
+}
+
 describe("attachments follow the open thread (#78)", () => {
   it("sends a staged image into the open thread", async () => {
     AppState.set("threadRootEventId", "$root");
@@ -371,13 +397,64 @@ describe("attachments follow the open thread (#78)", () => {
   // A reply armed inside a thread is still a thread event — the backend folds
   // the two into one relation, but it can only do that if it gets both.
   it("carries a reply and a thread root together", async () => {
-    AppState.patch({ threadRootEventId: "$root", replyToEventId: "$parent" });
+    AppState.patch({
+      threadRootEventId: "$root",
+      replyToEventId: "$parent",
+      currentTimeline: [threadEvent("$parent", "$root")],
+    });
 
     await sendPendingImage(blob(), "cat.png");
 
     const [send] = sendPastedImage.mock.calls[0];
     expect(send.threadRootEventId).toBe("$root");
     expect(send.replyToEventId).toBe("$parent");
+  });
+
+  it("carries a reply to the thread root itself", async () => {
+    AppState.patch({ threadRootEventId: "$root", replyToEventId: "$root" });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.threadRootEventId).toBe("$root");
+    expect(send.replyToEventId).toBe("$root");
+  });
+
+  // The two can be armed at once without the composer showing it: openThread()
+  // puts the thread banner where the reply banner was, so a reply armed on the
+  // main timeline survives the swap invisibly. Folding it in would send a
+  // threaded reply pointing at an event the thread doesn't contain.
+  it("drops a reply armed outside the open thread", async () => {
+    AppState.patch({
+      threadRootEventId: "$root",
+      replyToEventId: "$elsewhere",
+      currentTimeline: [threadEvent("$elsewhere", null)],
+    });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.threadRootEventId).toBe("$root");
+    expect(send.replyToEventId).toBeUndefined();
+  });
+
+  // The thread's own replies load separately from `currentTimeline`, so an
+  // unknown parent proves nothing either way — and only one of the two readings
+  // can misattribute the reply.
+  it("drops a reply whose parent is not in the loaded timeline", async () => {
+    AppState.patch({ threadRootEventId: "$root", replyToEventId: "$unknown" });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(sendPastedImage.mock.calls[0][0].replyToEventId).toBeUndefined();
+  });
+
+  it("keeps a reply armed with no thread open", async () => {
+    AppState.set("replyToEventId", "$parent");
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(sendPastedImage.mock.calls[0][0].replyToEventId).toBe("$parent");
   });
 
   // Before these paths carried the reply at all, leaving the banner up was

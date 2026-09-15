@@ -31,6 +31,45 @@ interface PasteUndo {
   pasted: string | null;
 }
 
+/**
+ * The text a paste inserted, as the difference between the field before and
+ * after. Derived rather than read from the clipboard: the async fallback exists
+ * precisely because the `paste` event's own `clipboardData` can't be trusted to
+ * hold it.
+ */
+function insertedText(before: string, after: string): string {
+  let start = 0;
+  while (start < before.length && before[start] === after[start]) start++;
+  let end = 0;
+  while (
+    end < after.length - start &&
+    end < before.length - start &&
+    before[before.length - 1 - end] === after[after.length - 1 - end]
+  ) end++;
+  return after.slice(start, after.length - end);
+}
+
+/**
+ * Whether inserted text reads as a clipboard image's text stand-in rather than
+ * as prose the user meant to paste.
+ *
+ * A stand-in is what a source puts on the clipboard *because* the payload is an
+ * image: the URL it was dragged from, or the path of the file. Both are a single
+ * token. Prose is not — and where the two can't be told apart, keeping the text
+ * is the recoverable mistake.
+ */
+function looksLikeImageFallbackText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/\s/.test(trimmed)) return false; // prose, or a multi-line selection
+  return (
+    /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ||               // http:, file:, data:, blob:…
+    /^[/~]/.test(trimmed) ||                              // /home/u/pic.png, ~/pic.png
+    /^[a-z]:[\\/]/i.test(trimmed) ||                      // C:\Users\…\pic.png
+    /\.(png|jpe?g|gif|webp|bmp|avif|heic|tiff?|svg)$/i.test(trimmed) // a bare filename
+  );
+}
+
 export class Input {
   private _el: HTMLElement;
   private _modeEl: HTMLElement;
@@ -397,11 +436,22 @@ export class Input {
    * wholesale would silently delete everything the user typed while waiting.
    * Better to leave the pasted text in place than to take their sentence with
    * it.
+   *
+   * The same caution applies to the text itself: an image on the clipboard does
+   * not mean the text beside it was a stand-in for it. A rich selection copied
+   * out of a browser or a spreadsheet carries `text/plain` *and* `image/png`,
+   * and taking the text back out there deletes a paste the user asked for. So
+   * the undo is limited to text that reads as the image's fallback — see
+   * {@link looksLikeImageFallbackText}. Anything else stays, and becomes the
+   * staged image's caption (#84), which is visible and removable either way.
    */
   private _undoDefaultPaste(undo: PasteUndo): void {
     if (undo.pasted === null) return; // the default paste has not landed yet
     if (this._fieldEl.value !== undo.pasted) return; // the user has typed since
     if (undo.pasted === undo.value) return; // nothing was inserted
+    // …and only when what landed was the image's own stand-in, not text the
+    // user meant to paste alongside it.
+    if (!looksLikeImageFallbackText(insertedText(undo.value, undo.pasted))) return;
     this._fieldEl.value = undo.value;
     if (undo.caret !== null) {
       this._fieldEl.selectionStart = this._fieldEl.selectionEnd = undo.caret;

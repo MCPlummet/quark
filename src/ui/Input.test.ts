@@ -300,6 +300,49 @@ describe("Input", () => {
         expect(input.hasPendingImage()).toBe(true);
       });
 
+      // An image on the clipboard does not make the text beside it a stand-in
+      // for the image. A rich selection copied out of a browser or a spreadsheet
+      // carries text/plain *and* image/png, and the undo used to fire on the
+      // image alone — deleting a paste the user had asked for.
+      it("keeps pasted prose that merely shares the clipboard with an image", async () => {
+        const f = field()!;
+        f.value = "";
+
+        const { deliverImage } = pasteWithClipboardImage();
+        f.value = "Q1 revenue was up 12%";
+        await settle();
+        await deliverImage();
+
+        expect(f.value).toBe("Q1 revenue was up 12%");
+        // The image still stages — only the undo stands down.
+        expect(input.hasPendingImage()).toBe(true);
+      });
+
+      it("keeps a pasted single word", async () => {
+        const f = field()!;
+        f.value = "";
+
+        const { deliverImage } = pasteWithClipboardImage();
+        f.value = "changelog";
+        await settle();
+        await deliverImage();
+
+        expect(f.value).toBe("changelog");
+      });
+
+      it("removes a pasted file path, which is a stand-in like a URL", async () => {
+        const f = field()!;
+        f.value = "";
+
+        const { deliverImage } = pasteWithClipboardImage();
+        f.value = "/home/u/Pictures/shot.png";
+        await settle();
+        await deliverImage();
+
+        expect(f.value).toBe("");
+        expect(input.hasPendingImage()).toBe(true);
+      });
+
       it("disturbs nothing when the paste inserted no text", async () => {
         const f = field()!;
         f.value = "hello";

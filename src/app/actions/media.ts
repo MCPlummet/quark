@@ -234,11 +234,46 @@ async function runAttachment(
 export function currentAttachmentTarget(): (MessageTarget & { roomId: string }) | null {
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return null;
+  const threadRootEventId = AppState.get("threadRootEventId") ?? undefined;
+  const replyToEventId = AppState.get("replyToEventId") ?? undefined;
   return {
     roomId,
-    replyToEventId: AppState.get("replyToEventId") ?? undefined,
-    threadRootEventId: AppState.get("threadRootEventId") ?? undefined,
+    replyToEventId: replyBelongsToThread(replyToEventId, threadRootEventId)
+      ? replyToEventId
+      : undefined,
+    threadRootEventId,
   };
+}
+
+/**
+ * Whether an armed reply may ride along with the open thread's relation.
+ *
+ * With no thread open, any reply does. With one open, only a reply to that
+ * thread's root or to one of its replies does — the backend folds the pair into
+ * a single `ThreadRelation::reply(root, parent)`, and a parent from outside the
+ * thread makes that relation point at an event the thread does not contain.
+ *
+ * Nothing forced the question before #78, because media carried no relation at
+ * all. Now it does, and the two can be armed at once without the composer
+ * showing it: `openThread` replaces the reply banner with the thread banner
+ * (`ReplyPreview.showThread`), so an armed reply survives the swap invisibly.
+ * The text path answers this by dropping the reply outright (`sendMessage`
+ * hands off to `sendThreadReply`); media keeps the ones that are genuinely
+ * in-thread and drops the rest.
+ *
+ * A parent that isn't in `currentTimeline` is treated as out of thread: the
+ * thread's own replies are loaded separately, so absence is no proof either
+ * way, and the safe reading is the one that can't misattribute the reply.
+ */
+function replyBelongsToThread(
+  replyToEventId: string | undefined,
+  threadRootEventId: string | undefined,
+): boolean {
+  if (!replyToEventId) return false;
+  if (!threadRootEventId) return true;
+  if (replyToEventId === threadRootEventId) return true;
+  const parent = AppState.get("currentTimeline").find((e) => e.event_id === replyToEventId);
+  return parent?.thread_root === threadRootEventId;
 }
 
 /**

@@ -198,6 +198,12 @@ export async function startSync(components: AppComponents): Promise<() => void> 
               downloadSyncMessageImage(payload.event, {
                 updateMessageMedia: (id, url) => timeline.updateInlineThreadMedia(id, url),
               });
+              // Inline custom emoji in the reply (or its caption) need the same
+              // treatment as the main-timeline append below — the panel renders
+              // into the timeline's list, so one resolver covers both.
+              if (payload.event.formatted_body || payload.event.caption_formatted) {
+                resolveInlineEmojiForTimeline(timeline);
+              }
             } else {
               // The panel is closed, or showing a different thread. The reply
               // lands in neither the main timeline nor the panel, so the toast

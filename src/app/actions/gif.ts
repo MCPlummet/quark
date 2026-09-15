@@ -30,6 +30,7 @@ import {
   _shortcodeToMxc,
 } from "./context.js";
 import { cancelReply } from "./messages.js";
+import { currentAttachmentTarget } from "./media.js";
 
 // ── Emoji picker state ────────────────────────────────────────────────────────
 
@@ -70,11 +71,12 @@ export function openEmojiPicker(initialTab: "emoji" | "sticker" = "emoji"): void
     });
 
     emojiPicker.onStickerSelect(async (sticker) => {
-      const roomId = AppState.get("currentRoomId");
-      if (!roomId) {
+      const target = currentAttachmentTarget();
+      if (!target) {
         showError("No room selected");
         return;
       }
+      const roomId = target.roomId;
       const sepIdx = sticker.id.lastIndexOf("::");
       const packId = sepIdx >= 0 ? sticker.id.slice(0, sepIdx) : sticker.id;
       const shortcode = sepIdx >= 0 ? sticker.id.slice(sepIdx + 2) : sticker.name;
@@ -85,8 +87,10 @@ export function openEmojiPicker(initialTab: "emoji" | "sticker" = "emoji"): void
       // `sync.ts` already routes a thread-related event into the open panel with
       // its media. Suppressing that echo (as the optimistic path must) is what
       // would make the sticker vanish entirely.
-      const threadRootEventId = AppState.get("threadRootEventId") ?? undefined;
-      const replyToEventId = AppState.get("replyToEventId") ?? undefined;
+      // Read through the shared attachment target rather than off AppState, so
+      // a reply armed outside the open thread is dropped here the same way it is
+      // for an image or a file — the relation a sticker sends is the same one.
+      const { threadRootEventId, replyToEventId } = target;
 
       // Optimistic update — show the sticker immediately
       const { timeline } = getComponents();
@@ -328,10 +332,10 @@ export function openGifPicker(): void {
       // Same routing as any other attachment: a GIF picked with a thread open
       // belongs in that thread, not the main timeline (#78). The GIF path has no
       // optimistic row, so the sync echo renders it wherever it belongs.
-      const replyToEventId = AppState.get("replyToEventId") ?? undefined;
+      const { replyToEventId, threadRootEventId } = currentAttachmentTarget() ?? {};
       await ipcSendGif(roomId, gif.url, gif.title, gif.width, gif.height, {
         replyToEventId,
-        threadRootEventId: AppState.get("threadRootEventId") ?? undefined,
+        threadRootEventId,
       });
       // The GIF consumed the armed reply, so disarm it — otherwise the banner
       // stays up and the next typed message replies to the same event.

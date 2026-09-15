@@ -51,8 +51,11 @@ export function setupSpoilers(container: HTMLElement): void {
  * The stash is the point: a custom-emoji `<img>` arrives with an `mxc://` src no
  * browser can load, so the URL moves to `data-mxc` and the src goes away until
  * `_downloadInlineEmoji` swaps in a `data:` URL. `getPendingInlineEmojiUrls`
- * queries the whole list element, so anything rendered through here is picked up
- * for free.
+ * queries the whole list element, so anything rendered *into it* is covered —
+ * but only once something runs the resolver. Every path that renders bodies has
+ * to call it: the thread panel renders into the list and still went without,
+ * which left its custom emoji blank until an unrelated sync event in the room
+ * happened to resolve them.
  */
 export function renderFormattedBody(el: HTMLElement, html: string): void {
   // In production this must be sanitized server-side or with DOMPurify; for the
@@ -100,4 +103,60 @@ export function appendCaption(
     el.textContent = caption;
   }
   row.appendChild(el);
+}
+
+/**
+ * Build the click-to-open affordance for an `m.file` message.
+ *
+ * Lives here for the same reason the caption does: every surface that renders a
+ * message renders files too. It stayed in Timeline while only the main timeline
+ * could receive one, and when #78 let a file be sent into a thread both thread
+ * renderers fell through to their text branch and drew the filename as an inert
+ * line — no icon, no way to open it, before and after a reload.
+ *
+ * Opening is left to whoever handles the `quark:open-file` event it bubbles
+ * (`media.ts` listens on `document`), so this stays free of IPC.
+ */
+export function buildFileAffordance(
+  mxcUrl?: string,
+  filename?: string,
+  mimeType?: string,
+  encryptionInfo?: string,
+): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "message__file-affordance";
+  el.setAttribute("role", "button");
+  el.setAttribute("tabindex", "0");
+  el.title = "Click to open file";
+
+  const icon = document.createElement("span");
+  icon.className = "message__file-affordance-icon";
+  icon.textContent = "📎";
+  icon.setAttribute("aria-hidden", "true");
+  el.appendChild(icon);
+
+  const label = document.createElement("span");
+  label.className = "message__file-affordance-label";
+  label.textContent = filename || "file";
+  el.appendChild(label);
+
+  if (mimeType) {
+    const type = document.createElement("span");
+    type.className = "message__file-affordance-type";
+    type.textContent = mimeType.split("/")[1]?.toUpperCase() ?? mimeType;
+    el.appendChild(type);
+  }
+
+  const activate = () => {
+    el.dispatchEvent(new CustomEvent("quark:open-file", {
+      bubbles: true,
+      detail: { mxcUrl, filename, mimeType, encryptionInfo },
+    }));
+  };
+  el.addEventListener("click", activate);
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
+  });
+
+  return el;
 }

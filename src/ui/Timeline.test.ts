@@ -482,3 +482,69 @@ describe("time separator day labels (#40)", () => {
     }
   });
 });
+
+// #78 let a file be sent into a thread, but the inline panel only branched on
+// image/sticker/video — a file fell through to the text branch and drew its
+// filename as an inert line, with no way to open it, before and after a reload.
+describe("inline thread file attachments", () => {
+  let timeline: Timeline;
+
+  beforeEach(() => {
+    timeline = new Timeline();
+    document.body.appendChild(timeline.getElement());
+    timeline.setMessages([makeMsg({ id: "$root", body: "see attached" })]);
+  });
+
+  afterEach(() => {
+    timeline.getElement().remove();
+  });
+
+  function openWithFile(over: Record<string, unknown> = {}) {
+    timeline.openInlineThread("$root", [
+      {
+        id: "$reply",
+        senderName: "Bob",
+        timestamp: "2024-01-01T12:00:00Z",
+        body: "notes.pdf",
+        type: "file",
+        mediaUrl: "mxc://x/file",
+        mediaAlt: "notes.pdf",
+        mediaMimeType: "application/pdf",
+        ...over,
+      },
+    ]);
+    return timeline.getElement();
+  }
+
+  it("renders a file reply as an openable affordance, not a line of text", () => {
+    const aff = openWithFile().querySelector(".message__file-affordance");
+
+    expect(aff).not.toBeNull();
+    expect(aff?.querySelector(".message__file-affordance-label")?.textContent).toBe("notes.pdf");
+    expect(aff?.getAttribute("role")).toBe("button");
+  });
+
+  it("bubbles quark:open-file with the event's media details", () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
+    document.addEventListener("quark:open-file", onOpen);
+    try {
+      openWithFile().querySelector<HTMLElement>(".message__file-affordance")?.click();
+    } finally {
+      document.removeEventListener("quark:open-file", onOpen);
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].mxcUrl).toBe("mxc://x/file");
+    expect(seen[0].filename).toBe("notes.pdf");
+  });
+
+  // The filename, not the caption: on a captioned upload the body is the
+  // caption, and naming the row after it also names the saved file after it.
+  it("labels the row with the filename and shows the caption beneath", () => {
+    const panel = openWithFile({ body: "the good bits", caption: "the good bits" });
+
+    expect(panel.querySelector(".message__file-affordance-label")?.textContent).toBe("notes.pdf");
+    expect(panel.querySelector(".message__image-caption")?.textContent).toBe("the good bits");
+  });
+});
