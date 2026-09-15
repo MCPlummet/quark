@@ -745,7 +745,7 @@ Scoped maps (`tmap`, `rmap`, `pmap`) take precedence over global `nmap` when tha
 
 **quarkrc also supports:**
 - `source <path>` — include another rc file
-- `colorscheme <name>` — shorthand for `:theme`
+- `colorscheme <name>` — the theme to start in, unless `config.toml` names one (see [Theme precedence](#theme-precedence))
 - `set <option>=<value>` — set config options inline
 - `" comments` — lines starting with `"` are ignored
 - `autocmd` — hooks for events (e.g., `autocmd RoomEnter * set scrolloff=3`)
@@ -1127,6 +1127,21 @@ visual_indicator = "VIS"
 ### Theme Hot-Reloading
 Themes reload on file save (watched via `notify` crate / filesystem events passed through Tauri). No restart required.
 
+### Theme precedence
+
+Three places can name a theme. They are applied in this order, and the later one wins:
+
+1. **`quarkrc`'s `colorscheme <name>`** — the theme to start in.
+2. **`config.toml`'s `[general] theme`** — the active theme. This is what Settings → Themes writes, and what `colorscheme` yields to: a theme picked in the UI has to survive a relaunch, and the UI does not edit `quarkrc`.
+
+`colorscheme` therefore applies only while `config.toml` leaves `theme` at its default (`"phosphor"`) — i.e. until the user picks one in Settings. After that the rc directive is ignored, and the reason is logged to the console as `[quarkrc] colorscheme … ignored`.
+
+`:theme <name>` applies a theme for the session only; it does not persist.
+
+One known gap: because `"phosphor"` doubles as "no theme chosen", explicitly picking Phosphor in Settings while `quarkrc` names another theme still loses to the rc file on the next launch. Closing it needs `theme` to gain a real unset state.
+
+`quarkrc`'s `set theme=<name>` is a different thing again — it *writes* `config.toml`, so it re-applies on every launch and does override the Settings picker. Use `colorscheme` unless that is what you want.
+
 ---
 
 ## Configuration
@@ -1135,7 +1150,8 @@ Themes reload on file save (watched via `notify` crate / filesystem events passe
 
 ```toml
 [general]
-theme = "phosphor"
+theme = "phosphor"            # the active theme; outranks quarkrc's `colorscheme`
+                              # (see Theme precedence below)
 notifications = true
 confirm_redact = true
 send_key_behavior = "auto"    # auto | enter | newline — what the Enter key does
