@@ -985,8 +985,22 @@ alongside `openExternalUrl` opened every link twice.
   staged image and caption to the composer. Committing an inline edit takes
   precedence — the staged image stays pending. Staged images persist across
   room switches like text drafts and send to the room current at send time.
-  Videos and non-image files still upload immediately. Known limitation: with
-  a thread open, images post to the main timeline (no thread relation).
+  Videos and non-image files still upload immediately. A caption goes through
+  the same emoji expansion as a typed message — Unicode shortcodes become
+  glyphs in `body`, custom (MSC2545) ones become `<img data-mx-emoticon>` in
+  `formatted_body` with the shortcode left in `body` as the fallback — and the
+  read path renders `formatted_body` where the event carries one.
+- **Attachments follow the open thread.** An image, file, video, sticker or GIF
+  sent with a thread open carries that thread's relation, exactly as a text
+  reply does. A reply armed *inside* a thread produces one threaded reply
+  (`m.thread` carrying the replied-to event), not a reply alongside a thread —
+  `m.relates_to` holds one relation, so the two cannot both be set. Attachments
+  sent into a thread have no optimistic row: they appear when the echo arrives,
+  which is what routes them into the panel with their media.
+- **Pasting.** Anything on the clipboard that is a file pastes into the
+  composer, not just images: an image stages in the preview, a video sends as
+  `m.video`, everything else as `m.file` — the same routing the attach button
+  uses. Drag-and-drop is not implemented.
 - **Encrypted attachments.** In an encrypted room the bytes are encrypted
   before upload and the event references them as an `m.file` source carrying the
   key, never a plaintext `mxc://`. The room decides this, not the call site:
