@@ -18,6 +18,58 @@ const MODE_CSS_CLASS: Record<string, string> = {
   Visual: "input-bar__mode--visual",
 };
 
+/**
+ * What the compose field held either side of a default paste, so the async
+ * clipboard fallback can undo one — see {@link Input._undoDefaultPaste}.
+ */
+interface PasteUndo {
+  /** The value before the paste. */
+  value: string;
+  /** The caret before the paste. */
+  caret: number | null;
+  /** The value immediately after the paste; `null` until it has landed. */
+  pasted: string | null;
+}
+
+/**
+ * The text a paste inserted, as the difference between the field before and
+ * after. Derived rather than read from the clipboard: the async fallback exists
+ * precisely because the `paste` event's own `clipboardData` can't be trusted to
+ * hold it.
+ */
+function insertedText(before: string, after: string): string {
+  let start = 0;
+  while (start < before.length && before[start] === after[start]) start++;
+  let end = 0;
+  while (
+    end < after.length - start &&
+    end < before.length - start &&
+    before[before.length - 1 - end] === after[after.length - 1 - end]
+  ) end++;
+  return after.slice(start, after.length - end);
+}
+
+/**
+ * Whether inserted text reads as a clipboard image's text stand-in rather than
+ * as prose the user meant to paste.
+ *
+ * A stand-in is what a source puts on the clipboard *because* the payload is an
+ * image: the URL it was dragged from, or the path of the file. Both are a single
+ * token. Prose is not — and where the two can't be told apart, keeping the text
+ * is the recoverable mistake.
+ */
+function looksLikeImageFallbackText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/\s/.test(trimmed)) return false; // prose, or a multi-line selection
+  return (
+    /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ||               // http:, file:, data:, blob:…
+    /^[/~]/.test(trimmed) ||                              // /home/u/pic.png, ~/pic.png
+    /^[a-z]:[\\/]/i.test(trimmed) ||                      // C:\Users\…\pic.png
+    /\.(png|jpe?g|gif|webp|bmp|avif|heic|tiff?|svg)$/i.test(trimmed) // a bare filename
+  );
+}
+
 export class Input {
   private _el: HTMLElement;
   private _modeEl: HTMLElement;
@@ -131,44 +183,59 @@ export class Input {
     // CSS max-height, beyond which the textarea scrolls.
     this._fieldEl.addEventListener("input", () => this._autoGrow());
 
-    // Image paste handler. clipboardData.items is standard; .files is an
+    // Attachment paste handler. clipboardData.items is standard; .files is an
     // alternative that some Linux clipboard managers populate instead.
     // On Linux/Wayland, WebKit2GTK text inputs may not expose image data
     // in clipboardData at all, so we also fall back to navigator.clipboard.read().
+    //
+    // Both synchronous paths take *any* file, not just images (#83). Every
+    // branch used to filter on `image/`, so a PDF, zip or mp4 on the clipboard
+    // fell through to the browser's default text paste and vanished — even
+    // though the file picker beside it has sent those as `m.file`/`m.video` all
+    // along. Images stage in the composer preview (Enter sends, typed text is
+    // the caption); everything else goes through the picker's own handler.
     this._fieldEl.addEventListener("paste", (e) => {
       // Standard path: items
       const items = e.clipboardData?.items;
       if (items) {
         for (const item of Array.from(items)) {
-          if (item.type.startsWith("image/")) {
-            const blob = item.getAsFile();
-            if (blob) {
-              e.preventDefault();
-              this.showImagePreview(blob);
-              return;
-            }
-          }
+          // `getAsFile()` is the test for "is this a file": it returns null for
+          // a string item by spec, which makes it a stricter check than `kind`
+          // and one less thing an engine has to have implemented.
+          const blob = item.getAsFile();
+          if (!blob) continue;
+          e.preventDefault();
+          this._stageOrSend(blob);
+          return;
         }
       }
       // Fallback: files list (used by some Linux clipboard managers)
       const files = e.clipboardData?.files;
       if (files && files.length > 0) {
-        for (const file of Array.from(files)) {
-          if (file.type.startsWith("image/")) {
-            e.preventDefault();
-            this.showImagePreview(file);
-            return;
-          }
-        }
+        e.preventDefault();
+        this._stageOrSend(files[0]);
+        return;
       }
       // Async fallback: Clipboard API (Linux/Wayland may not populate clipboardData
-      // for images pasted into a text input)
+      // for images pasted into a text input).
+      //
+      // `preventDefault()` is not an option here — whether there is an image to
+      // paste is not known until the read resolves, and suppressing the default
+      // on the chance of one would break every ordinary text paste. So snapshot
+      // the field first and put it back if an image does turn up: the default
+      // paste has already run by then, which is how the clipboard's *text*
+      // flavour ended up typed into the composer at the same moment the image
+      // staged.
       if (typeof navigator !== "undefined" && navigator.clipboard?.read) {
+        const before = this._snapshotForUndo();
         void navigator.clipboard.read().then((clipItems) => {
           for (const ci of clipItems) {
             for (const type of ci.types) {
               if (type.startsWith("image/")) {
-                void ci.getType(type).then((blob) => this.showImagePreview(blob));
+                void ci.getType(type).then((blob) => {
+                  this._undoDefaultPaste(before);
+                  this.showImagePreview(blob);
+                });
                 return;
               }
             }
@@ -315,7 +382,87 @@ export class Input {
     this._sendBtnEl.style.display = visible ? "" : "none";
   }
 
-  /** Register a callback invoked when the user picks a file via the attach button. */
+  /**
+   * Route one pasted file: an image stages in the composer preview, anything
+   * else goes to the file-pick handler, which already knows how to send a video
+   * as `m.video` and everything else as `m.file`.
+   *
+   * Deliberately not delegating the whole decision to `_onFilePick`, which the
+   * picker's handler also owns: that one switches to Insert mode and focuses the
+   * field, which is right for a button press and redundant for a paste the user
+   * is already typing into.
+   *
+   * A clipboard image carries a real `File` with a name where the source had
+   * one, so it is passed through — a named file pasted and the same file
+   * attached should not upload under different names.
+   */
+  private _stageOrSend(file: File): void {
+    if (file.type.startsWith("image/")) {
+      this.showImagePreview(file, file.name || undefined);
+      return;
+    }
+    this._onFilePick?.(file);
+  }
+
+  /**
+   * Record what the field held before a default paste, and what it holds
+   * immediately after — the two values {@link _undoDefaultPaste} needs.
+   *
+   * `pasted` is captured on the next task rather than now: the default paste
+   * has not run yet when the `paste` listener is on the stack, so this is the
+   * earliest point at which the inserted text is visible.
+   */
+  private _snapshotForUndo(): PasteUndo {
+    const undo: PasteUndo = {
+      value: this._fieldEl.value,
+      caret: this._fieldEl.selectionStart,
+      pasted: null,
+    };
+    setTimeout(() => {
+      undo.pasted = this._fieldEl.value;
+    }, 0);
+    return undo;
+  }
+
+  /**
+   * Put the compose field back the way it was before a default paste ran.
+   *
+   * Only for the async clipboard fallback, which cannot call
+   * `preventDefault()` in time.
+   *
+   * It restores only if the field still holds exactly what the paste left
+   * there. `navigator.clipboard.read()` can sit behind a permission prompt, so
+   * that window is not always a microtask — and restoring a stale snapshot
+   * wholesale would silently delete everything the user typed while waiting.
+   * Better to leave the pasted text in place than to take their sentence with
+   * it.
+   *
+   * The same caution applies to the text itself: an image on the clipboard does
+   * not mean the text beside it was a stand-in for it. A rich selection copied
+   * out of a browser or a spreadsheet carries `text/plain` *and* `image/png`,
+   * and taking the text back out there deletes a paste the user asked for. So
+   * the undo is limited to text that reads as the image's fallback — see
+   * {@link looksLikeImageFallbackText}. Anything else stays, and becomes the
+   * staged image's caption (#84), which is visible and removable either way.
+   */
+  private _undoDefaultPaste(undo: PasteUndo): void {
+    if (undo.pasted === null) return; // the default paste has not landed yet
+    if (this._fieldEl.value !== undo.pasted) return; // the user has typed since
+    if (undo.pasted === undo.value) return; // nothing was inserted
+    // …and only when what landed was the image's own stand-in, not text the
+    // user meant to paste alongside it.
+    if (!looksLikeImageFallbackText(insertedText(undo.value, undo.pasted))) return;
+    this._fieldEl.value = undo.value;
+    if (undo.caret !== null) {
+      this._fieldEl.selectionStart = this._fieldEl.selectionEnd = undo.caret;
+    }
+    this._autoGrow();
+  }
+
+  /**
+   * Register the handler for a file the user attached — from the attach button,
+   * or pasted into the composer (see {@link _stageOrSend}).
+   */
   onFilePick(handler: (file: File) => void): void {
     this._onFilePick = handler;
   }

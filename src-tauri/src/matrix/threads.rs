@@ -3,9 +3,7 @@ use matrix_sdk::{
     room::MessagesOptions,
     ruma::{
         events::{
-            room::message::{
-                MessageType, OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
-            },
+            room::message::{MessageType, Relation, RoomMessageEventContent},
             AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
         },
         EventId, RoomId, UInt,
@@ -131,21 +129,30 @@ pub async fn get_thread_timeline(
 
     for timeline_event in messages.chunk {
         if let Ok(deserialized) = timeline_event.raw().deserialize() {
-            if let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
-                SyncMessageLikeEvent::Original(ev),
-            )) = deserialized
-            {
-                let event_id_str = ev.event_id.to_string();
-                let is_root = event_id_str == thread_root_event_id;
+            match deserialized {
+                AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
+                    SyncMessageLikeEvent::Original(ev),
+                )) => {
+                    let is_root = ev.event_id.as_str() == thread_root_event_id;
+                    let in_thread = belongs_to_thread(ev.content.relates_to.as_ref(), &root_id);
 
-                let is_thread_reply = matches!(
-                    &ev.content.relates_to,
-                    Some(Relation::Thread(t)) if t.event_id == root_id
-                );
-
-                if is_root || is_thread_reply {
-                    thread_events.push(convert_thread_event(ev, is_root, thread_root_event_id));
+                    if is_root || in_thread {
+                        let te = crate::matrix::timeline::convert_sync_room_message(ev);
+                        thread_events.push(anchor_to_thread(te, is_root, thread_root_event_id));
+                    }
                 }
+                // Stickers are thread replies too. Matching only `RoomMessage`
+                // meant one sent into a thread was invisible in the panel even
+                // after a reload — it is an `m.sticker`, not an `m.room.message`.
+                AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::Sticker(
+                    SyncMessageLikeEvent::Original(ev),
+                )) => {
+                    if belongs_to_thread(ev.content.relates_to.as_ref(), &root_id) {
+                        let te = crate::matrix::timeline::convert_sync_sticker_event(ev);
+                        thread_events.push(anchor_to_thread(te, false, thread_root_event_id));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -168,18 +175,29 @@ pub async fn get_thread_timeline(
 /// it from the event's own `m.thread` relation, which the *root* event does not
 /// carry, so the root is forced to `None` and a reply missing the relation (it
 /// was matched some other way) is backfilled with the requested root.
-fn convert_thread_event(
-    ev: OriginalSyncRoomMessageEvent,
+fn anchor_to_thread(
+    mut te: TimelineEvent,
     is_root: bool,
     thread_root_event_id: &str,
 ) -> TimelineEvent {
-    let mut te = crate::matrix::timeline::convert_sync_room_message(ev);
     if is_root {
         te.thread_root = None;
     } else if te.thread_root.is_none() {
         te.thread_root = Some(thread_root_event_id.to_string());
     }
     te
+}
+
+/// Whether a relation puts its event in the given thread.
+///
+/// Generic over the relation's replacement-content type so stickers and room
+/// messages can ask the same question — they carry the same `Thread` variant
+/// under different `Relation<C>`s.
+fn belongs_to_thread<C>(
+    relates_to: Option<&Relation<C>>,
+    root_id: &matrix_sdk::ruma::EventId,
+) -> bool {
+    matches!(relates_to, Some(Relation::Thread(t)) if t.event_id == root_id)
 }
 
 /// Send a reply in a thread.
@@ -204,13 +222,12 @@ pub async fn send_thread_reply(
         RoomMessageEventContent::text_plain(body)
     };
 
-    use matrix_sdk::ruma::events::relation::Thread as ThreadRelation;
-    // Add thread relation to the content
+    // Shared with every other sender rather than built here — the media senders
+    // needed the same decision for #78, and a second copy of it is how they
+    // would drift.
     let mut thread_content = content;
-    thread_content.relates_to = Some(Relation::Thread(ThreadRelation::plain(
-        root_id.clone(),
-        root_id.clone(),
-    )));
+    thread_content.relates_to =
+        crate::matrix::relations::build_relation(Some(root_id.as_str()), None)?;
 
     let response = room
         .send(thread_content)
@@ -225,6 +242,22 @@ pub async fn send_thread_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
+
+    /// What `get_thread_replies` does to one room message, in one call: convert,
+    /// then anchor. Split in the source because stickers need the second half
+    /// with a different converter.
+    fn convert_thread_event(
+        ev: OriginalSyncRoomMessageEvent,
+        is_root: bool,
+        thread_root_event_id: &str,
+    ) -> TimelineEvent {
+        anchor_to_thread(
+            crate::matrix::timeline::convert_sync_room_message(ev),
+            is_root,
+            thread_root_event_id,
+        )
+    }
 
     fn image_reply(root: &str, with_relation: bool) -> OriginalSyncRoomMessageEvent {
         let mut content = serde_json::json!({
@@ -280,5 +313,52 @@ mod tests {
         let root = "$root:example.com";
         let te = convert_thread_event(image_reply(root, false), false, root);
         assert_eq!(te.thread_root.as_deref(), Some(root));
+    }
+
+    fn sticker_in_thread(root: &str) -> matrix_sdk::ruma::events::OriginalSyncMessageLikeEvent<
+        matrix_sdk::ruma::events::sticker::StickerEventContent,
+    > {
+        serde_json::from_value(serde_json::json!({
+            "type": "m.sticker",
+            "event_id": "$sticker:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "body": "party",
+                "url": "mxc://example.com/sticker",
+                "info": { "mimetype": "image/png", "w": 128, "h": 128 },
+                "m.relates_to": { "rel_type": "m.thread", "event_id": root },
+            },
+        }))
+        .expect("deserialize sticker")
+    }
+
+    // A sticker sent into a thread is an `m.sticker`, not an `m.room.message`,
+    // so matching only the latter left it invisible in the panel — on the live
+    // echo *and* on every reload afterwards (#78).
+    #[test]
+    fn a_sticker_in_a_thread_belongs_to_it() {
+        let root = "$root:example.com";
+        let root_id = EventId::parse(root).expect("valid root");
+        let ev = sticker_in_thread(root);
+
+        assert!(belongs_to_thread(ev.content.relates_to.as_ref(), &root_id));
+
+        let te = anchor_to_thread(
+            crate::matrix::timeline::convert_sync_sticker_event(ev),
+            false,
+            root,
+        );
+        assert_eq!(te.msg_type, "m.sticker");
+        assert_eq!(te.thread_root.as_deref(), Some(root));
+        assert_eq!(te.media_url.as_deref(), Some("mxc://example.com/sticker"));
+    }
+
+    #[test]
+    fn a_sticker_outside_the_thread_is_left_alone() {
+        let root_id = EventId::parse("$other:example.com").expect("valid root");
+        let ev = sticker_in_thread("$root:example.com");
+
+        assert!(!belongs_to_thread(ev.content.relates_to.as_ref(), &root_id));
     }
 }

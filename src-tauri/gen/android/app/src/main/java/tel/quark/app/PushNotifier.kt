@@ -33,6 +33,14 @@ object PushNotifier {
   private const val ACTION_INTENT_KEY = "NotificationUserAction"
   private const val REMOTE_INPUT_KEY = "NotificationRemoteInput"
 
+  /**
+   * Request code for the placeholder's launch intent. Notification request codes
+   * are `id + action.hashCode()` over FNV-1a event-id hashes, so a fixed small
+   * number is as safe from collision as any other value and is at least
+   * greppable when one shows up in a bug report.
+   */
+  private const val PLACEHOLDER_REQUEST_CODE = 0x9174B
+
   /** Post every spec, adding a per-room summary once a room has more than one. */
   fun post(context: Context, specs: List<PushSpec>) {
     if (specs.isEmpty()) return
@@ -163,7 +171,11 @@ object PushNotifier {
       .setGroup(spec.group)
       .setGroupSummary(true)
       .setAutoCancel(true)
-      .setContentIntent(actionIntent(context, spec, "tap"))
+      // Keyed on the summary, not on `spec.id`: the summary stands for the room,
+      // so carrying the last message's id made it claim to be that message —
+      // harmless for launching, still wrong, and wrong in a way that would bite
+      // the first time anything routed on `event_id`.
+      .setContentIntent(actionIntent(context, spec, "tap", id = spec.summaryId, eventId = null))
       .build()
 
   private fun replyAction(context: Context, spec: PushSpec): NotificationCompat.Action =
@@ -175,14 +187,26 @@ object PushNotifier {
    * Build the tap/action PendingIntent the way the notification plugin does, so
    * the existing cold-start replay in MainActivity recognises it.
    */
-  private fun actionIntent(context: Context, spec: PushSpec, action: String): PendingIntent {
+  private fun actionIntent(
+    context: Context,
+    spec: PushSpec,
+    action: String,
+    id: Int = spec.id,
+    eventId: String? = spec.eventId,
+  ): PendingIntent {
     val intent = Intent(context, MainActivity::class.java).apply {
       this.action = Intent.ACTION_MAIN
       addCategory(Intent.CATEGORY_LAUNCHER)
-      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-      putExtra(NOTIFICATION_INTENT_KEY, spec.id)
+      // NEW_TASK is added anyway — `ActivityStarter.computeLaunchingTaskFlags`
+      // forces it for a non-activity caller — but setting it explicitly costs
+      // nothing and keeps the forced-add out of the log, where it reads as a
+      // symptom.
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+        Intent.FLAG_ACTIVITY_CLEAR_TOP
+      putExtra(NOTIFICATION_INTENT_KEY, id)
       putExtra(ACTION_INTENT_KEY, action)
-      putExtra(NOTIFICATION_OBJ_INTENT_KEY, sourceJson(spec))
+      putExtra(NOTIFICATION_OBJ_INTENT_KEY, sourceJson(spec, id, eventId))
     }
     // MUTABLE because the reply action's RemoteInput fills the typed text in.
     var flags = PendingIntent.FLAG_UPDATE_CURRENT
@@ -190,16 +214,41 @@ object PushNotifier {
       flags = flags or PendingIntent.FLAG_MUTABLE
     }
     // Distinct request codes per action, or the three intents collapse into one.
-    return PendingIntent.getActivity(context, spec.id + action.hashCode(), intent, flags)
+    return PendingIntent.getActivity(context, id + action.hashCode(), intent, flags)
+  }
+
+  /**
+   * A bare "open the app" PendingIntent, carrying none of the notification
+   * extras the replay reads — there is no room to route to.
+   *
+   * For the foreground-service placeholder, which had no content intent at all.
+   * It is posted on every push and sits in the shade beside the real message
+   * row, so tapping it dismissed the shade and did nothing — by construction,
+   * and indistinguishable from a broken tap to anyone who does not sort the two
+   * rows apart (#87).
+   */
+  fun launchIntent(context: Context): PendingIntent {
+    val intent = Intent(context, MainActivity::class.java).apply {
+      action = Intent.ACTION_MAIN
+      addCategory(Intent.CATEGORY_LAUNCHER)
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+        Intent.FLAG_ACTIVITY_CLEAR_TOP
+    }
+    var flags = PendingIntent.FLAG_UPDATE_CURRENT
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      flags = flags or PendingIntent.FLAG_IMMUTABLE
+    }
+    return PendingIntent.getActivity(context, PLACEHOLDER_REQUEST_CODE, intent, flags)
   }
 
   /**
    * The notification JSON the frontend reads on replay. `extra.room_id` is the
    * field `routeNotificationAction` routes on; everything else is context.
    */
-  private fun sourceJson(spec: PushSpec): String =
+  private fun sourceJson(spec: PushSpec, id: Int, eventId: String?): String =
     JSONObject().apply {
-      put("id", spec.id)
+      put("id", id)
       put("title", spec.title)
       put("body", spec.body)
       put("group", spec.group)
@@ -207,7 +256,9 @@ object PushNotifier {
         "extra",
         JSONObject().apply {
           put("room_id", spec.roomId)
-          put("event_id", spec.eventId)
+          // A summary stands for the room, not for any one message, so it
+          // carries no event id rather than the last message's.
+          if (eventId != null) put("event_id", eventId)
         }
       )
     }.toString()

@@ -3,7 +3,8 @@
 import { createReactionBar, type ReactionGroup } from "./Reactions.js";
 import { attachResizeHandle } from "./ResizeHandle.js";
 import { guardViewportPan } from "../app/mobile.js";
-import { appendLinkifiedText, decorateMessageLinks } from "../app/links.js";
+import { appendLinkifiedText } from "../app/links.js";
+import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
 
 export interface ThreadMessageData {
   id: string;
@@ -22,6 +23,9 @@ export interface ThreadMessageData {
   /** Media caption (MSC2530) shown beneath the media, when the event carries a
    *  distinct filename. Mirrors Timeline's `MessageData.caption`. */
   caption?: string;
+  /** The caption's `formatted_body`, when it has one — where inline custom
+   *  emoji live. Mirrors Timeline's `MessageData.captionHtml` (#84). */
+  captionHtml?: string;
   reactions?: ReactionGroup[];
 }
 
@@ -35,22 +39,6 @@ export interface ThreadRootData {
 
 type ThreadReplyCallback = (body: string) => void;
 type ThreadCloseCallback = () => void;
-
-/** Render an MSC2530 media caption beneath the media, reusing Timeline's
- *  `.message__image-caption` styling so threads and the main timeline match.
- *  No-op when the event carried no caption (a bare-filename body isn't one).
- *
- *  `blockName` is the caller's BEM block — this panel and Timeline's inline
- *  thread panel style their message bodies separately. Shared rather than
- *  copied so the next caption change (escaping, a spoiler, a max-height)
- *  cannot land on one thread surface and miss the other. */
-export function appendCaption(row: HTMLElement, blockName: string, caption?: string): void {
-  if (!caption) return;
-  const el = document.createElement("div");
-  el.className = `${blockName}__message-body message__image-caption`;
-  el.textContent = caption;
-  row.appendChild(el);
-}
 
 function formatTimestamp(iso: string): string {
   try {
@@ -210,8 +198,7 @@ export class ThreadView {
     const body = document.createElement("div");
     body.className = "thread-view__root-body";
     if (root.htmlBody) {
-      body.innerHTML = root.htmlBody;
-      decorateMessageLinks(body);
+      renderFormattedBody(body, root.htmlBody);
     } else {
       appendLinkifiedText(body, root.body);
     }
@@ -277,7 +264,7 @@ export class ThreadView {
       img.alt = msg.mediaAlt ?? type;
       img.loading = "lazy";
       row.appendChild(img);
-      appendCaption(row, "thread-view", msg.caption);
+      appendCaption(row, "thread-view__message-body", msg.caption, msg.captionHtml);
     } else if (type === "video") {
       const aff = document.createElement("div");
       aff.className = "message__video-affordance";
@@ -304,13 +291,17 @@ export class ThreadView {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
       });
       row.appendChild(aff);
-      appendCaption(row, "thread-view", msg.caption);
+      appendCaption(row, "thread-view__message-body", msg.caption, msg.captionHtml);
+    } else if (type === "file") {
+      row.appendChild(
+        buildFileAffordance(msg.mediaUrl, msg.mediaAlt ?? msg.body, msg.mediaMimeType, msg.mediaEncryptionInfo),
+      );
+      appendCaption(row, "thread-view__message-body", msg.caption, msg.captionHtml);
     } else {
       const body = document.createElement("div");
       body.className = "thread-view__message-body";
       if (msg.htmlBody) {
-        body.innerHTML = msg.htmlBody;
-        decorateMessageLinks(body);
+        renderFormattedBody(body, msg.htmlBody);
       } else {
         appendLinkifiedText(body, msg.body);
       }

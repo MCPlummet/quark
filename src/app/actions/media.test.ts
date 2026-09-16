@@ -1,20 +1,27 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { AppComponents } from "../../ui/App.js";
+import type { TimelineEvent } from "../../ipc/types.js";
 
 // Mock the IPC surface so no real invoke happens; capture the send call.
 // Typed with the real signature so `.mock.calls[n]` destructures cleanly under
 // `tsc` (the Nix build typechecks test files too, unlike vitest).
-const sendPastedImage =
-  vi.fn<
-    (
-      roomId: string,
-      dataBase64: string,
-      mimeType: string,
-      filename: string,
-      caption?: string,
-      replyToEventId?: string,
-    ) => Promise<string>
-  >(async () => "$sent");
+type Sent = {
+  roomId: string;
+  dataBase64: string;
+  mimeType: string;
+  filename: string;
+  caption?: string;
+  formattedCaption?: string;
+  replyToEventId?: string;
+  threadRootEventId?: string;
+  uploadId?: string;
+  fileSize?: number;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+};
+
+const sendPastedImage = vi.fn<(send: Sent) => Promise<string>>(async () => "$sent");
 vi.mock("../../ipc/index.js", () => ({
   sendPastedImage: (...args: Parameters<typeof sendPastedImage>) => sendPastedImage(...args),
   // Referenced elsewhere in media.ts's module scope; stubbed to no-ops.
@@ -28,32 +35,9 @@ vi.mock("../../ipc/index.js", () => ({
   sendVideo: (...args: Parameters<typeof sendVideo>) => sendVideo(...args),
 }));
 
-const sendFile =
-  vi.fn<
-    (
-      roomId: string,
-      dataBase64: string,
-      mimeType: string,
-      filename: string,
-      fileSize?: number,
-      uploadId?: string,
-    ) => Promise<string>
-  >(async () => "$file");
+const sendFile = vi.fn<(send: Sent) => Promise<string>>(async () => "$file");
 
-const sendVideo =
-  vi.fn<
-    (
-      roomId: string,
-      dataBase64: string,
-      mimeType: string,
-      filename: string,
-      width?: number,
-      height?: number,
-      durationMs?: number,
-      fileSize?: number,
-      uploadId?: string,
-    ) => Promise<string>
-  >(async () => "$video");
+const sendVideo = vi.fn<(send: Sent) => Promise<string>>(async () => "$video");
 
 // Upload-progress channel: capture the subscriber so tests can drive the row.
 let progressHandler: ((p: { upload_id: string; transferred: number; total: number }) => void) | null =
@@ -83,7 +67,7 @@ vi.mock("./messages.js", () => ({
 }));
 
 import { sendPendingImage, handleFilePick } from "./media.js";
-import { setComponents } from "./context.js";
+import { setComponents, _shortcodeToMxc } from "./context.js";
 import { AppState } from "../state.js";
 
 const showImagePreview = vi.fn();
@@ -111,7 +95,14 @@ beforeEach(() => {
   setComponents({
     input: { showImagePreview, getValue, setValue, startAttachmentProgress },
   } as unknown as AppComponents);
-  AppState.patch({ currentRoomId: "!room:x", replyToEventId: null });
+  AppState.patch({
+    currentRoomId: "!room:x",
+    replyToEventId: null,
+    threadRootEventId: null,
+    currentTimeline: [],
+  });
+  // Module-global, so a room's custom emoji would otherwise leak between tests.
+  _shortcodeToMxc.clear();
 });
 
 // jsdom's Blob.arrayBuffer() doesn't round-trip bytes, so give the test blob a
@@ -129,35 +120,33 @@ describe("sendPendingImage", () => {
     await sendPendingImage(blob(), null);
 
     expect(sendPastedImage).toHaveBeenCalledTimes(1);
-    const [roomId, , mime, filename, caption, replyTo] = sendPastedImage.mock.calls[0];
-    expect(roomId).toBe("!room:x");
-    expect(mime).toBe("image/png");
-    expect(filename).toMatch(/^pasted-image-\d+\.png$/);
-    expect(caption).toBeUndefined();
-    expect(replyTo).toBeUndefined();
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.roomId).toBe("!room:x");
+    expect(send.mimeType).toBe("image/png");
+    expect(send.filename).toMatch(/^pasted-image-\d+\.png$/);
+    expect(send.caption).toBeUndefined();
+    expect(send.replyToEventId).toBeUndefined();
     expect(rowApi.succeed).toHaveBeenCalled();
   });
 
   it("passes through the original filename and caption", async () => {
     await sendPendingImage(blob(), "cat.png", "a cat");
 
-    const [, , , filename, caption] = sendPastedImage.mock.calls[0];
-    expect(filename).toBe("cat.png");
-    expect(caption).toBe("a cat");
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.filename).toBe("cat.png");
+    expect(send.caption).toBe("a cat");
   });
 
   it("drops a whitespace-only caption", async () => {
     await sendPendingImage(blob(), "cat.png", "   ");
-    const [, , , , caption] = sendPastedImage.mock.calls[0];
-    expect(caption).toBeUndefined();
+    expect(sendPastedImage.mock.calls[0][0].caption).toBeUndefined();
   });
 
   it("sends as a reply and clears reply state on success", async () => {
     AppState.set("replyToEventId", "$parent");
     await sendPendingImage(blob(), "cat.png");
 
-    const [, , , , , replyTo] = sendPastedImage.mock.calls[0];
-    expect(replyTo).toBe("$parent");
+    expect(sendPastedImage.mock.calls[0][0].replyToEventId).toBe("$parent");
     expect(cancelReply).toHaveBeenCalledTimes(1);
   });
 
@@ -207,8 +196,7 @@ describe("attachment progress (#63)", () => {
   it("passes an upload id so progress events can be correlated", async () => {
     await handleFilePick(file());
 
-    const [, , , , , uploadId] = sendFile.mock.calls[0];
-    expect(uploadId).toBe("upload-1");
+    expect(sendFile.mock.calls[0][0].uploadId).toBe("upload-1");
   });
 
   it("renders real byte progress from the backend, for the matching upload only", async () => {
@@ -317,5 +305,238 @@ describe("attachment progress (#63)", () => {
     await handleFilePick(file());
 
     expect(sendFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #78: the attachment path was thread-blind at every layer while the text path
+// had routed on the open thread since threads landed. Attaching an image with a
+// thread open uploaded fine, reported success, and put the image in the main
+// timeline — no error, and no row in the thread panel either.
+/**
+ * jsdom has no `URL.createObjectURL` and never fires media events, so the
+ * metadata probe would throw on the way in. Stand in for it with a video element
+ * that reports failure — the probe is best-effort by design, and the send goes
+ * ahead without dimensions.
+ */
+function stubVideoProbe(): () => void {
+  const url = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown };
+  const hadCreate = "createObjectURL" in url;
+  const hadRevoke = "revokeObjectURL" in url;
+  url.createObjectURL = () => "blob:stub";
+  url.revokeObjectURL = () => {};
+
+  const realCreate = document.createElement.bind(document);
+  const spy = vi.spyOn(document, "createElement").mockImplementation(((tag: string) => {
+    if (tag !== "video") return realCreate(tag);
+    const el = { preload: "", onloadedmetadata: null, onerror: null } as Record<string, unknown>;
+    Object.defineProperty(el, "src", {
+      set() {
+        queueMicrotask(() => (el.onerror as (() => void) | null)?.());
+      },
+    });
+    return el as unknown as HTMLElement;
+  }) as typeof document.createElement);
+
+  return () => {
+    spy.mockRestore();
+    if (!hadCreate) delete url.createObjectURL;
+    if (!hadRevoke) delete url.revokeObjectURL;
+  };
+}
+
+/** A timeline event that is only ever looked up by id and thread root. */
+function threadEvent(eventId: string, threadRoot: string | null): TimelineEvent {
+  return {
+    event_id: eventId,
+    sender: "@bob:x",
+    body: "hi",
+    formatted_body: null,
+    timestamp: 1000,
+    msg_type: "m.text",
+    is_edit: false,
+    relates_to_event_id: null,
+    in_reply_to: null,
+    thread_root: threadRoot,
+    media_url: null,
+    media_mimetype: null,
+    media_width: null,
+    media_height: null,
+  };
+}
+
+describe("attachments follow the open thread (#78)", () => {
+  it("sends a staged image into the open thread", async () => {
+    AppState.set("threadRootEventId", "$root");
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(sendPastedImage.mock.calls[0][0].threadRootEventId).toBe("$root");
+  });
+
+  it("sends a picked file into the open thread", async () => {
+    AppState.set("threadRootEventId", "$root");
+
+    await handleFilePick(new File(["hi"], "notes.txt", { type: "text/plain" }));
+
+    expect(sendFile.mock.calls[0][0].threadRootEventId).toBe("$root");
+  });
+
+  it("sends a video into the open thread", async () => {
+    AppState.set("threadRootEventId", "$root");
+    const restore = stubVideoProbe();
+
+    try {
+      await handleFilePick(new File(["hi"], "clip.mp4", { type: "video/mp4" }));
+    } finally {
+      restore();
+    }
+
+    expect(sendVideo.mock.calls[0][0].threadRootEventId).toBe("$root");
+  });
+
+  // A reply armed inside a thread is still a thread event — the backend folds
+  // the two into one relation, but it can only do that if it gets both.
+  it("carries a reply and a thread root together", async () => {
+    AppState.patch({
+      threadRootEventId: "$root",
+      replyToEventId: "$parent",
+      currentTimeline: [threadEvent("$parent", "$root")],
+    });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.threadRootEventId).toBe("$root");
+    expect(send.replyToEventId).toBe("$parent");
+  });
+
+  it("carries a reply to the thread root itself", async () => {
+    AppState.patch({ threadRootEventId: "$root", replyToEventId: "$root" });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.threadRootEventId).toBe("$root");
+    expect(send.replyToEventId).toBe("$root");
+  });
+
+  // The two can be armed at once without the composer showing it: openThread()
+  // puts the thread banner where the reply banner was, so a reply armed on the
+  // main timeline survives the swap invisibly. Folding it in would send a
+  // threaded reply pointing at an event the thread doesn't contain.
+  it("drops a reply armed outside the open thread", async () => {
+    AppState.patch({
+      threadRootEventId: "$root",
+      replyToEventId: "$elsewhere",
+      currentTimeline: [threadEvent("$elsewhere", null)],
+    });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.threadRootEventId).toBe("$root");
+    expect(send.replyToEventId).toBeUndefined();
+  });
+
+  // The thread's own replies load separately from `currentTimeline`, so an
+  // unknown parent proves nothing either way — and only one of the two readings
+  // can misattribute the reply.
+  it("drops a reply whose parent is not in the loaded timeline", async () => {
+    AppState.patch({ threadRootEventId: "$root", replyToEventId: "$unknown" });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(sendPastedImage.mock.calls[0][0].replyToEventId).toBeUndefined();
+  });
+
+  it("keeps a reply armed with no thread open", async () => {
+    AppState.set("replyToEventId", "$parent");
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(sendPastedImage.mock.calls[0][0].replyToEventId).toBe("$parent");
+  });
+
+  // Before these paths carried the reply at all, leaving the banner up was
+  // merely untidy. Now the attachment really is a reply, so a banner left
+  // standing makes every message after it one too.
+  it("disarms the reply once a picked file has consumed it", async () => {
+    AppState.set("replyToEventId", "$parent");
+
+    await handleFilePick(new File(["hi"], "notes.txt", { type: "text/plain" }));
+
+    expect(sendFile.mock.calls[0][0].replyToEventId).toBe("$parent");
+    expect(cancelReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the reply armed when the attachment fails", async () => {
+    AppState.set("replyToEventId", "$parent");
+    sendFile.mockRejectedValueOnce(new Error("boom"));
+
+    await handleFilePick(new File(["hi"], "notes.txt", { type: "text/plain" }));
+
+    expect(cancelReply).not.toHaveBeenCalled();
+  });
+
+  it("leaves the thread root off when no thread is open", async () => {
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(sendPastedImage.mock.calls[0][0].threadRootEventId).toBeUndefined();
+  });
+});
+
+// #84: captions skipped `prepareOutgoingBody` entirely — the one compose path
+// that did. The autocomplete popup still fires with an attachment staged, so the
+// user picks `:party:` from a list, sees it in the field, and sends the literal
+// text.
+describe("image captions expand emoji like any other message (#84)", () => {
+  it("replaces a unicode shortcode with its glyph", async () => {
+    await sendPendingImage(blob(), "cat.png", "look :smile:");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.caption).toBe("look 😄");
+    expect(send.formattedCaption).toBeUndefined();
+  });
+
+  it("puts a custom emoji in the formatted caption and leaves the plain one alone", async () => {
+    _shortcodeToMxc.set("party", "mxc://example.org/party");
+
+    await sendPendingImage(blob(), "cat.png", "look :party:");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    // The plain body keeps the shortcode — that is the MSC2545 fallback for
+    // clients that can't render the image.
+    expect(send.caption).toBe("look :party:");
+    expect(send.formattedCaption).toContain("data-mx-emoticon");
+    expect(send.formattedCaption).toContain("mxc://example.org/party");
+  });
+
+  // What comes back on failure is what the user typed, not what we resolved —
+  // restoring the expanded body would silently rewrite their text.
+  it("restores the caption as typed when the send fails", async () => {
+    sendPastedImage.mockRejectedValueOnce(new Error("boom"));
+
+    await sendPendingImage(blob(), "cat.png", "look :smile:");
+
+    expect(setValue).toHaveBeenCalledWith("look :smile:");
+  });
+});
+
+// #83: a blob the webview could not type carries an empty MIME string, which
+// reaches `mime_type.parse()` in media.rs as "" and fails the whole upload.
+describe("untyped attachments still upload (#83)", () => {
+  it("falls back to a generic MIME type", async () => {
+    await handleFilePick(new File(["hi"], "mystery.bin", { type: "" }));
+
+    expect(sendFile.mock.calls[0][0].mimeType).toBe("application/octet-stream");
+  });
+
+  it("names a pasted SVG with an extension, not a MIME subtype", async () => {
+    const b = new Blob(["<svg/>"], { type: "image/svg+xml" });
+    Object.defineProperty(b, "arrayBuffer", { value: async () => new Uint8Array([60]).buffer });
+
+    await sendPendingImage(b, null);
+
+    expect(sendPastedImage.mock.calls[0][0].filename).toMatch(/^pasted-image-\d+\.svg$/);
   });
 });

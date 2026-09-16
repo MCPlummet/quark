@@ -412,6 +412,7 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
     mediaWidth: e.media_width ?? undefined,
     mediaHeight: e.media_height ?? undefined,
     caption: e.caption ?? undefined,
+    captionHtml: e.caption_formatted ?? undefined,
     mediaEncryptionInfo: e.media_encryption_info ?? undefined,
     mediaThumbnailUrl: e.media_thumbnail_url ?? undefined,
     mediaThumbnailEncryptionInfo: e.media_thumbnail_encryption_info ?? undefined,
@@ -437,9 +438,11 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
  * arriving into an open thread renders exactly like one loaded with the thread.
  *
  * Carries the MSC2530 caption through like {@link timelineEventToMessage} does
- * (#42). `mediaAlt` is the file's own name where the sender supplied one, so a
- * captioned upload is not announced as its caption twice over — the dedicated
- * `caption` field is what the renderer draws beneath the
+ * (#42), including its formatted form — which is where an inline custom emoji
+ * lives, so a caption that has one renders as an image rather than a literal
+ * `:shortcode:` (#84). `mediaAlt` is the file's own name where the sender
+ * supplied one, so a captioned upload is not announced as its caption twice
+ * over — the dedicated `caption` field is what the renderer draws beneath the
  * media.
  */
 export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageData {
@@ -460,6 +463,7 @@ export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageDat
     mediaUrl,
     mediaAlt: e.filename ?? e.body,
     caption: e.caption ?? undefined,
+    captionHtml: e.caption_formatted ?? undefined,
     mediaMimeType: e.media_mimetype ?? undefined,
     mediaEncryptionInfo: e.media_encryption_info ?? undefined,
     mediaThumbnailUrl: e.media_thumbnail_url ?? undefined,

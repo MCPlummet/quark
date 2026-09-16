@@ -43,6 +43,21 @@ function mockAvatar(sender: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
+/**
+ * The relation fields an attachment send carries, as the backend would echo
+ * them back.
+ *
+ * The mock used to drop these, which mirrored the bug rather than the fix: a
+ * media send with a thread open produced a mock event with `thread_root: null`,
+ * so browser dev mode agreed the image belonged in the main timeline (#78).
+ */
+function mockRelation(args?: Record<string, unknown>): Partial<TimelineEvent> {
+  return {
+    in_reply_to: (args?.replyToEventId as string | null) ?? null,
+    thread_root: (args?.threadRootEventId as string | null) ?? null,
+  };
+}
+
 function mockEvent(sender: string, body: string, minutesAgo: number): TimelineEvent {
   return {
     event_id: `$evt${msgCounter++}`,
@@ -410,20 +425,21 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         msg_type: "m.image",
         media_url: (args?.gifUrl as string) ?? "",
         media_mimetype: "image/gif",
+        ...mockRelation(args),
       } as TimelineEvent);
       return "$mock-gif-event-id";
     }
     case "send_pasted_image": {
       const filename = (args?.filename as string) ?? "pasted-image.png";
       const caption = (args?.caption as string | null) ?? null;
-      const replyTo = (args?.replyToEventId as string | null) ?? null;
       MOCK_TIMELINE.push({
         ...mockEvent("@you:matrix.org", caption ?? `[Image: ${filename}]`, 0),
         msg_type: "m.image",
         media_url: "",
         media_mimetype: (args?.mimeType as string) ?? "image/png",
         caption,
-        in_reply_to: replyTo,
+        caption_formatted: (args?.formattedCaption as string | null) ?? null,
+        ...mockRelation(args),
       } as TimelineEvent);
       return "$mock-paste-event-id";
     }
@@ -434,6 +450,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         msg_type: "m.file",
         media_url: "",
         media_mimetype: (args?.mimeType as string) ?? "application/octet-stream",
+        ...mockRelation(args),
       } as TimelineEvent);
       return "$mock-file-event-id";
     }
@@ -446,11 +463,23 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         media_mimetype: (args?.mimeType as string) ?? "video/mp4",
         media_width: (args?.width as number) ?? null,
         media_height: (args?.height as number) ?? null,
+        ...mockRelation(args),
       } as TimelineEvent);
       return "$mock-video-event-id";
     }
-    case "send_sticker":
+    case "send_sticker": {
+      // Pushed to the timeline like every other send: a mock that returns an id
+      // and nothing else cannot show browser dev mode where a sticker lands,
+      // which is the whole question #78 was about.
+      MOCK_TIMELINE.push({
+        ...mockEvent("@you:matrix.org", (args?.body as string) ?? "sticker", 0),
+        msg_type: "m.sticker",
+        media_url: (args?.url as string) ?? "",
+        media_mimetype: "image/png",
+        ...mockRelation(args),
+      } as TimelineEvent);
       return "$mock-sticker-event-id";
+    }
     case "get_own_profile":
       return { user_id: "@you:matrix.org", display_name: "You", avatar_url: null };
     case "set_presence_status":

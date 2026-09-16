@@ -2,6 +2,7 @@
 
 import { invoke } from "./invoke.js";
 import type { EmojiPack, EmojiEntry } from "./types.js";
+import type { MessageTarget } from "./types.js";
 
 export type { EmojiPack, EmojiEntry };
 
@@ -48,6 +49,7 @@ export async function sendSticker(
   body: string | null,
   packId: string,
   packName: string | null,
+  target: MessageTarget = {},
 ): Promise<string> {
   return invoke<string>("send_sticker", {
     roomId,
@@ -56,5 +58,7 @@ export async function sendSticker(
     body,
     packId,
     packName,
+    replyToEventId: target.replyToEventId ?? null,
+    threadRootEventId: target.threadRootEventId ?? null,
   });
 }

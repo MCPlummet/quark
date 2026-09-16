@@ -41,6 +41,7 @@ import {
   jumpToMessage,
   jumpToLatest,
   loadTheme,
+  configThemeOverridesRc,
   selectRoom,
   confirmAndLeaveRoom,
   startVerification,
@@ -836,7 +837,17 @@ const MAP_TYPE_TO_CONTEXT: Readonly<Record<string, KeyContext>> = {
 
 // applySetOptions lives in ./set_options.ts (pure, unit-tested).
 
-async function applyRcDirectives(rc: ParsedRc): Promise<void> {
+export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
+  // Read the config up front: `colorscheme` is subordinate to config.toml's
+  // `general.theme` (#91), so that decision needs the config in hand before any
+  // directive runs. A config we cannot read leaves `cfg` null, which lets the rc
+  // file apply as it always did — losing the config read should not also lose
+  // the user's theme.
+  const cfg = await getAppConfig().catch((err) => {
+    console.warn("[quarkrc] failed to read config:", err);
+    return null;
+  });
+
   for (const directive of rc.directives) {
     if (directive.type === "map") {
       const context = MAP_TYPE_TO_CONTEXT[directive.map_type];
@@ -847,6 +858,15 @@ async function applyRcDirectives(rc: ParsedRc): Promise<void> {
     } else if (directive.type === "let" && directive.name === "mapleader") {
       keymapManager.setLeaderKey(directive.value);
     } else if (directive.type === "colorscheme") {
+      if (configThemeOverridesRc(cfg?.general.theme)) {
+        // Not a failure, so no toast — but the user is looking at a theme their
+        // rc file does not name, and this is the only place that says why.
+        console.info(
+          `[quarkrc] colorscheme ${directive.name} ignored: config.toml's ` +
+          `general.theme (${cfg?.general.theme}) takes precedence`,
+        );
+        continue;
+      }
       // Silent: this is the rc file being applied at startup, not the user
       // asking for a theme. It is also the second of two startup paths that can
       // name one — config.toml's `general.theme` is the other — so announcing
@@ -861,12 +881,10 @@ async function applyRcDirectives(rc: ParsedRc): Promise<void> {
   const setDirectives = rc.directives.filter(
     (d): d is Extract<typeof d, { type: "set" }> => d.type === "set"
   );
-  if (setDirectives.length === 0) return;
+  if (setDirectives.length === 0 || !cfg) return;
 
   try {
-    const cfg = await getAppConfig();
-    const updated = applySetOptions(cfg, setDirectives);
-    await setAppConfig(updated);
+    await setAppConfig(applySetOptions(cfg, setDirectives));
   } catch (err) {
     console.warn("[quarkrc] failed to apply set directives:", err);
   }

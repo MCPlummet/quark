@@ -1,4 +1,5 @@
 use crate::matrix::emoji::{get_emoji_packs, EmojiPack};
+use crate::matrix::relations::SendTarget;
 use matrix_sdk::{
     ruma::{
         events::sticker::StickerEventContent,
@@ -62,11 +63,15 @@ pub async fn list_stickers(
     Ok(stickers)
 }
 
-/// Send a sticker event to a room.
+/// Send a sticker event to a room, optionally into a thread or as a reply.
+///
+/// Stickers took no target at all until #78, so one sent with a thread open
+/// landed in the main timeline — the same defect as images, one event type over.
 pub async fn send_sticker(
     client: &Client,
     room_id: &str,
     sticker: &StickerInfo,
+    target: SendTarget<'_>,
 ) -> Result<String, String> {
     use matrix_sdk::ruma::MxcUri;
 
@@ -81,11 +86,12 @@ pub async fn send_sticker(
 
     let image_info = matrix_sdk::ruma::events::room::ImageInfo::new();
 
-    let sticker_content = StickerEventContent::new(
+    let mut sticker_content = StickerEventContent::new(
         sticker.body.clone().unwrap_or_else(|| sticker.shortcode.clone()),
         image_info,
         mxc_uri.to_owned(),
     );
+    sticker_content.relates_to = target.relation()?;
 
     let response = room
         .send(sticker_content)

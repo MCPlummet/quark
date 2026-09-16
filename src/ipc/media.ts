@@ -1,9 +1,39 @@
 // Media IPC calls
 
 import { invoke } from "./invoke.js";
-import type { MediaDownload, UrlPreview } from "./types.js";
+import type { MediaDownload, MessageTarget, UrlPreview } from "./types.js";
 
-export type { MediaDownload, UrlPreview };
+export type { MediaDownload, MessageTarget, UrlPreview };
+
+/**
+ * The common half of every attachment send.
+ *
+ * One object rather than a tail of positional `string | undefined`s: all three
+ * senders take the same six fields, and `sendVideo` was already at ten
+ * positional parameters before threads needed two more — a list nothing but
+ * counting commas could keep honest.
+ */
+export interface AttachmentSend extends MessageTarget {
+  roomId: string;
+  dataBase64: string;
+  mimeType: string;
+  filename: string;
+  /** Correlates upload-progress events with the composer row showing them. */
+  uploadId?: string;
+}
+
+/** The shared invoke arguments for an attachment send. */
+function attachmentArgs(send: AttachmentSend): Record<string, unknown> {
+  return {
+    roomId: send.roomId,
+    dataBase64: send.dataBase64,
+    mimeType: send.mimeType,
+    filename: send.filename,
+    replyToEventId: send.replyToEventId ?? null,
+    threadRootEventId: send.threadRootEventId ?? null,
+    uploadId: send.uploadId ?? null,
+  };
+}
 
 // ─── Cache Stats ─────────────────────────────────────────────────────────────
 
@@ -115,20 +145,11 @@ export async function uploadMedia(filePath: string): Promise<string> {
  * Used for the file picker attach flow.
  */
 export async function sendFile(
-  roomId: string,
-  dataBase64: string,
-  mimeType: string,
-  filename: string,
-  fileSize?: number,
-  uploadId?: string,
+  send: AttachmentSend & { fileSize?: number },
 ): Promise<string> {
   return invoke<string>("send_file", {
-    roomId,
-    dataBase64,
-    mimeType,
-    filename,
-    fileSize: fileSize ?? null,
-    uploadId: uploadId ?? null,
+    ...attachmentArgs(send),
+    fileSize: send.fileSize ?? null,
   });
 }
 
@@ -138,26 +159,19 @@ export async function sendFile(
  * file and let the timeline reserve the correct aspect ratio before download.
  */
 export async function sendVideo(
-  roomId: string,
-  dataBase64: string,
-  mimeType: string,
-  filename: string,
-  width?: number,
-  height?: number,
-  durationMs?: number,
-  fileSize?: number,
-  uploadId?: string,
+  send: AttachmentSend & {
+    width?: number;
+    height?: number;
+    durationMs?: number;
+    fileSize?: number;
+  },
 ): Promise<string> {
   return invoke<string>("send_video", {
-    roomId,
-    dataBase64,
-    mimeType,
-    filename,
-    width: width ?? null,
-    height: height ?? null,
-    durationMs: durationMs ?? null,
-    fileSize: fileSize ?? null,
-    uploadId: uploadId ?? null,
+    ...attachmentArgs(send),
+    width: send.width ?? null,
+    height: send.height ?? null,
+    durationMs: send.durationMs ?? null,
+    fileSize: send.fileSize ?? null,
   });
 }
 
@@ -251,25 +265,17 @@ export async function openMediaExternally(
 /**
  * Upload base64-encoded image bytes and send as an m.image event.
  * Used for clipboard paste and picked images. `caption` becomes the MSC2530
- * caption (event body); `replyToEventId` sends the image as a reply.
+ * caption (event body), `formattedCaption` its HTML form — which is where a
+ * custom emoji actually lives, so sending one without the other sends a literal
+ * `:shortcode:` (#84).
  */
 export async function sendPastedImage(
-  roomId: string,
-  dataBase64: string,
-  mimeType: string,
-  filename: string,
-  caption?: string,
-  replyToEventId?: string,
-  uploadId?: string,
+  send: AttachmentSend & { caption?: string; formattedCaption?: string },
 ): Promise<string> {
   return invoke<string>("send_pasted_image", {
-    roomId,
-    dataBase64,
-    mimeType,
-    filename,
-    caption: caption ?? null,
-    replyToEventId: replyToEventId ?? null,
-    uploadId: uploadId ?? null,
+    ...attachmentArgs(send),
+    caption: send.caption ?? null,
+    formattedCaption: send.formattedCaption ?? null,
   });
 }
 

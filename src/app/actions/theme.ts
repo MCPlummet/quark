@@ -10,6 +10,37 @@ import { setCurrentThemeName } from "../../ui/settings/tabs/themes.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
+/**
+ * The theme applied when nothing names one. `general.theme` carries this value
+ * whenever the user has not chosen a theme, so it doubles as "unset" — see
+ * {@link configThemeOverridesRc}.
+ */
+export const DEFAULT_THEME = "phosphor";
+
+/**
+ * Whether `config.toml`'s `general.theme` outranks a quarkrc `colorscheme`
+ * directive (#91).
+ *
+ * A theme can be named in two places, and before this the winner was whichever
+ * startup path happened to run last — the rc file, because `setupKeyboard()` is
+ * called after the session restore that loads the config. So a theme picked in
+ * Settings, which writes `general.theme` and never touches quarkrc, came back
+ * as the old one on the next launch with nothing explaining why.
+ *
+ * The rule now: `config.toml` is the active theme because that is what the UI
+ * writes, and `colorscheme` is the default it falls back to. The default theme
+ * name reads as "not chosen" so a quarkrc-only setup — the common one, and the
+ * only one that worked before — is unaffected.
+ *
+ * The gap this leaves: explicitly picking the default theme in Settings while
+ * quarkrc names another still reverts, because the two are indistinguishable on
+ * disk. Closing it needs `general.theme` to gain a real unset state, which is a
+ * config schema change rather than a fix.
+ */
+export function configThemeOverridesRc(theme: string | undefined): boolean {
+  return !!theme && theme !== DEFAULT_THEME;
+}
+
 /** Options for {@link loadTheme}. */
 export interface LoadThemeOptions {
   /**
@@ -66,10 +97,10 @@ export async function loadThemeFromConfig(): Promise<void> {
   try {
     const config = await getAppConfig();
     const themeName = config.general.theme;
-    if (themeName && themeName !== "phosphor") {
+    if (configThemeOverridesRc(themeName)) {
       await loadTheme(themeName, { announce: false });
     } else {
-      setCurrentThemeName("phosphor");
+      setCurrentThemeName(DEFAULT_THEME);
     }
     // Apply app-level CSS variables from config
     const iconRadius = config.general.icon_radius;

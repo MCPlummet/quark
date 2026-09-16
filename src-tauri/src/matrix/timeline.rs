@@ -5,8 +5,8 @@ use matrix_sdk::{
             relation::InReplyTo,
             room::{
                 message::{
-                    FileInfo, FileMessageEventContent, ImageMessageEventContent, MessageType,
-                    OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
+                    FileInfo, FileMessageEventContent, FormattedBody, ImageMessageEventContent,
+                    MessageType, OriginalSyncRoomMessageEvent, Relation, RoomMessageEventContent,
                     VideoInfo, VideoMessageEventContent,
                 },
                 ImageInfo, MediaSource,
@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::matrix::reactions::ReactionGroup;
+use crate::matrix::relations::SendTarget;
 
 /// Serializable timeline event for IPC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +49,12 @@ pub struct TimelineEvent {
     /// distinct `filename` is present. `None` when the body is merely the filename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
+    /// The caption's HTML form, when it has one — what carries inline custom
+    /// emoji. Hardcoded `None` here until #84; a captioned image whose caption
+    /// used a custom emoji rendered the literal `:shortcode:`, including ones
+    /// Quark itself had just sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption_formatted: Option<String>,
     /// The uploaded file's own name, when the sender's client set one.
     ///
     /// The counterpart to `caption`: where a captioned upload is present, `body`
@@ -369,6 +376,7 @@ fn index_msg_to_event(m: crate::search_index::IndexedMessage) -> TimelineEvent {
         media_width: None,
         media_height: None,
         caption: None,
+        caption_formatted: None,
         filename: None,
         media_encryption_info: None,
         media_thumbnail_url: None,
@@ -785,6 +793,11 @@ fn convert_sync_sticker(ev: matrix_sdk::ruma::events::OriginalSyncMessageLikeEve
     let mime = ev.content.info.mimetype.clone();
     let w: Option<u64> = ev.content.info.width.map(|v| v.into());
     let h: Option<u64> = ev.content.info.height.map(|v| v.into());
+    // Stickers carry a relation like any other message. Hardcoding these to
+    // `None` meant a sticker sent into a thread came back from sync looking
+    // like a main-timeline message, and the frontend put it there (#78).
+    let (is_edit, relates_to_event_id, in_reply_to, thread_root) =
+        extract_relations(ev.content.relates_to.as_ref());
     TimelineEvent {
         event_id,
         sender,
@@ -792,15 +805,16 @@ fn convert_sync_sticker(ev: matrix_sdk::ruma::events::OriginalSyncMessageLikeEve
         formatted_body: None,
         timestamp,
         msg_type: "m.sticker".to_string(),
-        is_edit: false,
-        relates_to_event_id: None,
-        in_reply_to: None,
-        thread_root: None,
+        is_edit,
+        relates_to_event_id,
+        in_reply_to,
+        thread_root,
         media_url: url,
         media_mimetype: mime,
         media_width: w,
         media_height: h,
         caption: None,
+        caption_formatted: None,
         filename: None,
         media_encryption_info: enc,
         media_thumbnail_url: None,
@@ -831,6 +845,7 @@ fn convert_sync_encrypted(
         media_width: None,
         media_height: None,
         caption: None,
+        caption_formatted: None,
         filename: None,
         media_encryption_info: None,
         media_thumbnail_url: None,
@@ -858,14 +873,9 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
     let content = extract_message_content(&effective_content.msgtype);
 
     let (is_edit, relates_to_event_id, in_reply_to, thread_root) =
-        extract_relations(&ev.content);
+        extract_relations(ev.content.relates_to.as_ref());
 
-    // Media captions (MSC2530): only present when the message carries a distinct
-    // filename, so a bare-filename body is not surfaced as a caption.
-    let caption = match &effective_content.msgtype {
-        MessageType::Image(image) => image.caption().map(|c| c.to_owned()),
-        _ => None,
-    };
+    let (caption, caption_formatted) = extract_caption(&effective_content.msgtype);
 
     TimelineEvent {
         event_id,
@@ -883,11 +893,38 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
         media_width: content.media_width,
         media_height: content.media_height,
         caption,
+        caption_formatted,
         filename: content.filename,
         media_encryption_info: content.media_encryption_info,
         media_thumbnail_url: content.media_thumbnail_url,
         media_thumbnail_encryption_info: content.media_thumbnail_encryption_info,
         reactions: vec![],
+    }
+}
+
+/// The MSC2530 caption of a media message, plain and formatted.
+///
+/// Only present when the message carries a distinct `filename`, so a
+/// bare-filename body is not surfaced as a caption — that is what ruma's
+/// `caption()`/`formatted_caption()` decide.
+///
+/// Shared by the room-load and live-sync converters for the same reason
+/// [`extract_message_content`] is: they carried near-identical copies of this
+/// match, and copies drift.
+///
+/// The formatted half is sanitized, like every other `formatted_body` the
+/// backend lifts out of an event. A caption is as attacker-controlled as a
+/// message body — any member of any joined room can set one — and it lands in
+/// the same `innerHTML` sink.
+pub(crate) fn extract_caption(msgtype: &MessageType) -> (Option<String>, Option<String>) {
+    match msgtype {
+        MessageType::Image(image) => (
+            image.caption().map(|c| c.to_owned()),
+            image
+                .formatted_caption()
+                .map(|f| crate::matrix::html::sanitize(&f.body)),
+        ),
+        _ => (None, None),
     }
 }
 
@@ -1032,15 +1069,15 @@ pub(crate) fn extract_message_content(msgtype: &MessageType) -> MessageContent {
 }
 
 
-fn extract_relations(
-    content: &RoomMessageEventContent,
+pub(crate) fn extract_relations<C>(
+    relates_to: Option<&Relation<C>>,
 ) -> (bool, Option<String>, Option<String>, Option<String>) {
     let mut is_edit = false;
     let mut relates_to_event_id = None;
     let mut in_reply_to = None;
     let mut thread_root = None;
 
-    if let Some(relation) = &content.relates_to {
+    if let Some(relation) = relates_to {
         match relation {
             Relation::Replacement(replacement) => {
                 is_edit = true;
@@ -1174,6 +1211,33 @@ fn build_image_body(filename: &str, caption: Option<&str>) -> (String, Option<St
     }
 }
 
+/// A media caption and its HTML form.
+///
+/// The two travel together: `formatted` is only meaningful as the rich version
+/// of `body`, and the spec says to set it only when the body *is* a caption. A
+/// caption carrying a custom emoji has a literal `:shortcode:` in `body` and the
+/// `<img data-mx-emoticon>` only in `formatted`, so dropping the second half
+/// sends the shortcode as text (#84).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Caption<'a> {
+    /// The caption as typed.
+    pub body: Option<&'a str>,
+    /// The caption as HTML, when it needs one.
+    pub formatted: Option<&'a str>,
+}
+
+impl<'a> Caption<'a> {
+    /// No caption — a bare upload.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// A caption with no formatting of its own.
+    pub fn plain(body: Option<&'a str>) -> Self {
+        Self { body, formatted: None }
+    }
+}
+
 /// Build the `m.image` content for a media source.
 ///
 /// Split out of `send_image` so the source can be asserted on without a live
@@ -1181,7 +1245,7 @@ fn build_image_body(filename: &str, caption: Option<&str>) -> (String, Option<St
 /// included) with no plaintext `url` beside it (#81).
 fn build_image_content(
     filename: &str,
-    caption: Option<&str>,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
@@ -1192,9 +1256,16 @@ fn build_image_content(
     img_info.width = width.and_then(|w| UInt::try_from(w).ok());
     img_info.height = height.and_then(|h| UInt::try_from(h).ok());
 
-    let (body, filename_field) = build_image_body(filename, caption);
+    let (body, filename_field) = build_image_body(filename, caption.body);
     let mut img_content = ImageMessageEventContent::new(body, source);
     img_content.info = Some(Box::new(img_info));
+    // `formatted` is only set when the body represents a caption — an
+    // uncaptioned upload's body is the filename, and a formatted filename is
+    // not a thing the spec has a meaning for.
+    img_content.formatted = filename_field
+        .as_ref()
+        .and(caption.formatted)
+        .map(|html| FormattedBody::html(html.to_owned()));
     img_content.filename = filename_field;
     img_content
 }
@@ -1210,12 +1281,12 @@ pub async fn send_image(
     client: &Client,
     room_id: &str,
     filename: &str,
-    caption: Option<&str>,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
     height: Option<u64>,
-    in_reply_to: Option<&str>,
+    target: SendTarget<'_>,
 ) -> Result<String, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
@@ -1226,14 +1297,7 @@ pub async fn send_image(
         build_image_content(filename, caption, source, mime_type, width, height);
 
     let mut msg_content = RoomMessageEventContent::new(MessageType::Image(img_content));
-
-    if let Some(reply_event_id) = in_reply_to {
-        let owned_id = OwnedEventId::try_from(reply_event_id)
-            .map_err(|e| format!("Invalid reply event ID: {e}"))?;
-        msg_content.relates_to = Some(Relation::Reply {
-            in_reply_to: InReplyTo::new(owned_id),
-        });
-    }
+    msg_content.relates_to = target.relation()?;
 
     let response = room
         .send(msg_content)
@@ -1261,7 +1325,8 @@ fn build_file_content(
     file_content
 }
 
-/// Send a generic file (m.file) event to a room.
+/// Send a generic file (m.file) event to a room, optionally into a thread or as
+/// a reply.
 pub async fn send_file(
     client: &Client,
     room_id: &str,
@@ -1269,6 +1334,7 @@ pub async fn send_file(
     source: MediaSource,
     mime_type: &str,
     file_size: Option<u64>,
+    target: SendTarget<'_>,
 ) -> Result<String, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
@@ -1277,7 +1343,8 @@ pub async fn send_file(
 
     let file_content = build_file_content(body, source, mime_type, file_size);
 
-    let msg_content = RoomMessageEventContent::new(MessageType::File(file_content));
+    let mut msg_content = RoomMessageEventContent::new(MessageType::File(file_content));
+    msg_content.relates_to = target.relation()?;
 
     let response = room
         .send(msg_content)
@@ -1313,7 +1380,8 @@ fn build_video_content(
     video_content
 }
 
-/// Send a video (m.video) event to a room.
+/// Send a video (m.video) event to a room, optionally into a thread or as a
+/// reply.
 pub async fn send_video(
     client: &Client,
     room_id: &str,
@@ -1324,6 +1392,7 @@ pub async fn send_video(
     height: Option<u64>,
     duration_ms: Option<u64>,
     file_size: Option<u64>,
+    target: SendTarget<'_>,
 ) -> Result<String, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
@@ -1334,7 +1403,8 @@ pub async fn send_video(
         body, source, mime_type, width, height, duration_ms, file_size,
     );
 
-    let msg_content = RoomMessageEventContent::new(MessageType::Video(video_content));
+    let mut msg_content = RoomMessageEventContent::new(MessageType::Video(video_content));
+    msg_content.relates_to = target.relation()?;
 
     let response = room
         .send(msg_content)
@@ -1542,6 +1612,7 @@ mod tests {
             media_width: None,
             media_height: None,
             caption: None,
+            caption_formatted: None,
             filename: None,
             media_encryption_info: None,
             media_thumbnail_url: None,
@@ -1922,7 +1993,7 @@ mod tests {
     fn test_image_content_from_encrypted_source_has_no_plaintext_url() {
         let content = super::build_image_content(
             "cat.png",
-            None,
+            Caption::none(),
             MediaSource::Encrypted(Box::new(test_encrypted_file())),
             "image/png",
             Some(800),
@@ -1945,7 +2016,7 @@ mod tests {
         let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
         let content = super::build_image_content(
             "cat.png",
-            None,
+            Caption::none(),
             MediaSource::Plain(uri.to_owned()),
             "image/png",
             None,
@@ -1993,7 +2064,7 @@ mod tests {
     fn test_encrypted_image_keeps_its_msc2530_caption() {
         let content = super::build_image_content(
             "cat.png",
-            Some("look at this"),
+            Caption::plain(Some("look at this")),
             MediaSource::Encrypted(Box::new(test_encrypted_file())),
             "image/png",
             None,
@@ -2003,6 +2074,53 @@ mod tests {
         let json = serde_json::to_value(&content).expect("serialisable");
         assert_eq!(json["body"], "look at this");
         assert_eq!(json["filename"], "cat.png");
+    }
+
+    /// #84: a caption's custom emoji live only in `formatted_body` — the plain
+    /// body keeps the literal `:shortcode:`. Without this the shortcode is what
+    /// every recipient sees.
+    #[test]
+    fn test_captioned_image_carries_its_formatted_caption() {
+        let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
+        let content = super::build_image_content(
+            "cat.png",
+            Caption {
+                body: Some(":party: look"),
+                formatted: Some(r#"<img data-mx-emoticon src="mxc://e/1" alt=":party:"> look"#),
+            },
+            MediaSource::Plain(uri.to_owned()),
+            "image/png",
+            None,
+            None,
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert_eq!(json["body"], ":party: look");
+        assert_eq!(json["format"], "org.matrix.custom.html");
+        assert!(
+            json["formatted_body"].as_str().expect("html").contains("data-mx-emoticon"),
+            "the custom emoji has to reach the wire: {json}"
+        );
+    }
+
+    /// The spec sets `formatted_body` only when the body represents a caption.
+    /// An uncaptioned upload's body is the filename, so a formatted one would be
+    /// a rich rendering of a filename — meaningless, and Element renders it.
+    #[test]
+    fn test_uncaptioned_image_has_no_formatted_body_even_if_offered_one() {
+        let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
+        let content = super::build_image_content(
+            "cat.png",
+            Caption { body: None, formatted: Some("<b>cat.png</b>") },
+            MediaSource::Plain(uri.to_owned()),
+            "image/png",
+            None,
+            None,
+        );
+
+        let json = serde_json::to_value(&content).expect("serialisable");
+        assert_eq!(json["body"], "cat.png");
+        assert!(json.get("formatted_body").is_none(), "no caption, no html: {json}");
     }
 
     #[test]
@@ -2151,6 +2269,98 @@ mod tests {
         assert_eq!(te.msg_type, "m.image");
         assert_eq!(te.body, "look at this cat");
         assert_eq!(te.caption.as_deref(), Some("look at this cat"));
+        assert_eq!(te.caption_formatted, None, "no formatted_body, nothing to surface");
+    }
+
+    /// The receive half of #84. This converter hardcoded `None` in the
+    /// formatted slot, so a caption's custom emoji rendered as `:shortcode:` —
+    /// including ones Quark had just sent itself.
+    #[test]
+    fn test_convert_sync_captioned_image_surfaces_its_formatted_caption() {
+        let json = serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$img3:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "msgtype": "m.image",
+                "body": ":party: look",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<img data-mx-emoticon src=\"mxc://e/1\" alt=\":party:\"> look",
+                "filename": "cat.png",
+                "url": "mxc://example.com/abc123",
+                "info": { "mimetype": "image/png" }
+            }
+        });
+        let ev: OriginalSyncRoomMessageEvent =
+            serde_json::from_value(json).expect("deserialize image event");
+        let te = convert_sync_room_message(ev);
+
+        assert_eq!(te.caption.as_deref(), Some(":party: look"));
+        assert!(
+            te.caption_formatted.as_deref().expect("formatted caption").contains("data-mx-emoticon"),
+            "the custom emoji has to reach the UI, or it renders as a shortcode"
+        );
+    }
+
+    /// A caption is `formatted_body` like any other, so it goes through the same
+    /// allowlist. Without this the one path that skipped `sanitize` was reachable
+    /// by any member of any joined room, and lands in an `innerHTML`.
+    #[test]
+    fn test_convert_sync_caption_html_is_sanitized() {
+        let json = serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$img5:example.com",
+            "sender": "@mallory:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "msgtype": "m.image",
+                "body": "hi",
+                "format": "org.matrix.custom.html",
+                "formatted_body":
+                    "<script>alert(1)</script><img src=\"https://tracker.example/p.gif\" onerror=\"x\">hi",
+                "filename": "cat.png",
+                "url": "mxc://example.com/abc123",
+                "info": { "mimetype": "image/png" }
+            }
+        });
+        let ev: OriginalSyncRoomMessageEvent =
+            serde_json::from_value(json).expect("deserialize image event");
+        let te = convert_sync_room_message(ev);
+
+        let html = te.caption_formatted.expect("formatted caption");
+        assert!(!html.contains("<script"), "script survived sanitization: {html}");
+        assert!(!html.contains("onerror"), "event handler survived sanitization: {html}");
+        // The remote `<img src="https://…">` deliberately survives: the Matrix
+        // spec allows it in `formatted_body`, so the allowlist permits it in
+        // every message body already. A caption is not a special case of that.
+        assert!(html.contains("tracker.example"));
+    }
+
+    /// A formatted body beside a *filename* body is not a caption, and ruma's
+    /// reader agrees — surfacing it would put HTML where a filename goes.
+    #[test]
+    fn test_convert_sync_uncaptioned_image_surfaces_no_formatted_caption() {
+        let json = serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$img4:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "msgtype": "m.image",
+                "body": "cat.png",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "<b>cat.png</b>",
+                "url": "mxc://example.com/abc123",
+                "info": { "mimetype": "image/png" }
+            }
+        });
+        let ev: OriginalSyncRoomMessageEvent =
+            serde_json::from_value(json).expect("deserialize image event");
+        let te = convert_sync_room_message(ev);
+
+        assert_eq!(te.caption, None);
+        assert_eq!(te.caption_formatted, None);
     }
 
     #[test]

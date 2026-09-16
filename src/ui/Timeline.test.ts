@@ -145,6 +145,64 @@ describe("Timeline", () => {
       const caption = timeline.getElement().querySelector(".message__image-caption");
       expect(caption).not.toBeNull();
       expect(caption?.textContent).toBe("a wild sunset");
+      // The caption is still a message body, not a class of its own — the
+      // stylesheet's `.message__body` rules are what give it its type.
+      expect(caption?.classList.contains("message__body")).toBe(true);
+    });
+
+    // #84's render half: the caption was drawn with `textContent`, so a custom
+    // emoji in it came out as the literal `:shortcode:` — including one Quark
+    // had just sent itself.
+    it("renders a formatted caption as HTML, stashing custom emoji for download", () => {
+      timeline.setMessages([
+        makeMsg({
+          type: "image",
+          mediaUrl: "https://x.com/img.png",
+          caption: ":party: nice",
+          captionHtml: '<img data-mx-emoticon src="mxc://e/1" alt=":party:"> nice',
+        }),
+      ]);
+
+      const img = timeline
+        .getElement()
+        .querySelector<HTMLImageElement>(".message__image-caption img[data-mx-emoticon]");
+      expect(img).not.toBeNull();
+      // The mxc:// src is unloadable, so it moves to data-mxc until the app
+      // layer swaps in a data: URL.
+      expect(img?.dataset.mxc).toBe("mxc://e/1");
+      expect(img?.hasAttribute("src")).toBe(false);
+    });
+
+    // The resolver queries the whole list element, so a caption's emoji is
+    // picked up by the same pass that handles message bodies — but only if the
+    // caption went through the stash.
+    it("offers a caption's custom emoji to the inline-emoji resolver", () => {
+      timeline.setMessages([
+        makeMsg({
+          type: "image",
+          mediaUrl: "https://x.com/img.png",
+          caption: ":party:",
+          captionHtml: '<img data-mx-emoticon src="mxc://e/1" alt=":party:">',
+        }),
+      ]);
+
+      expect(timeline.getPendingInlineEmojiUrls()).toContain("mxc://e/1");
+
+      timeline.resolveInlineEmoji("mxc://e/1", "data:image/png;base64,AA");
+      const img = timeline
+        .getElement()
+        .querySelector<HTMLImageElement>(".message__image-caption img[data-mx-emoticon]");
+      expect(img?.getAttribute("src")).toBe("data:image/png;base64,AA");
+    });
+
+    it("falls back to plain text for a caption with no formatted body", () => {
+      timeline.setMessages([
+        makeMsg({ type: "image", mediaUrl: "https://x.com/img.png", caption: "<b>not html</b>" }),
+      ]);
+
+      const caption = timeline.getElement().querySelector(".message__image-caption");
+      expect(caption?.querySelector("b")).toBeNull();
+      expect(caption?.textContent).toBe("<b>not html</b>");
     });
   });
 
@@ -422,5 +480,71 @@ describe("time separator day labels (#40)", () => {
       if (prevTz === undefined) delete env.TZ;
       else env.TZ = prevTz;
     }
+  });
+});
+
+// #78 let a file be sent into a thread, but the inline panel only branched on
+// image/sticker/video — a file fell through to the text branch and drew its
+// filename as an inert line, with no way to open it, before and after a reload.
+describe("inline thread file attachments", () => {
+  let timeline: Timeline;
+
+  beforeEach(() => {
+    timeline = new Timeline();
+    document.body.appendChild(timeline.getElement());
+    timeline.setMessages([makeMsg({ id: "$root", body: "see attached" })]);
+  });
+
+  afterEach(() => {
+    timeline.getElement().remove();
+  });
+
+  function openWithFile(over: Record<string, unknown> = {}) {
+    timeline.openInlineThread("$root", [
+      {
+        id: "$reply",
+        senderName: "Bob",
+        timestamp: "2024-01-01T12:00:00Z",
+        body: "notes.pdf",
+        type: "file",
+        mediaUrl: "mxc://x/file",
+        mediaAlt: "notes.pdf",
+        mediaMimeType: "application/pdf",
+        ...over,
+      },
+    ]);
+    return timeline.getElement();
+  }
+
+  it("renders a file reply as an openable affordance, not a line of text", () => {
+    const aff = openWithFile().querySelector(".message__file-affordance");
+
+    expect(aff).not.toBeNull();
+    expect(aff?.querySelector(".message__file-affordance-label")?.textContent).toBe("notes.pdf");
+    expect(aff?.getAttribute("role")).toBe("button");
+  });
+
+  it("bubbles quark:open-file with the event's media details", () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const onOpen = (e: Event) => seen.push((e as CustomEvent).detail);
+    document.addEventListener("quark:open-file", onOpen);
+    try {
+      openWithFile().querySelector<HTMLElement>(".message__file-affordance")?.click();
+    } finally {
+      document.removeEventListener("quark:open-file", onOpen);
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].mxcUrl).toBe("mxc://x/file");
+    expect(seen[0].filename).toBe("notes.pdf");
+  });
+
+  // The filename, not the caption: on a captioned upload the body is the
+  // caption, and naming the row after it also names the saved file after it.
+  it("labels the row with the filename and shows the caption beneath", () => {
+    const panel = openWithFile({ body: "the good bits", caption: "the good bits" });
+
+    expect(panel.querySelector(".message__file-affordance-label")?.textContent).toBe("notes.pdf");
+    expect(panel.querySelector(".message__image-caption")?.textContent).toBe("the good bits");
   });
 });

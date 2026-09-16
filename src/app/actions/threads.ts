@@ -16,6 +16,7 @@ import {
   prepareOutgoingBody,
   timelineEventToThreadMessage,
   _downloadMessageImages,
+  _downloadInlineEmoji,
 } from "./context.js";
 
 /**
@@ -33,6 +34,14 @@ export async function openThread(eventId: string): Promise<void> {
   // the drawer.
   if (isMobile()) closeDrawer();
 
+  // Disarm any reply armed on the main timeline. The thread banner is about to
+  // take the reply banner's place in the compose bar, so a reply left armed here
+  // is armed invisibly — and since #78 the attachment paths read it, which folded
+  // it into the thread's relation as a reply to an event outside the thread.
+  // The text path has always resolved this the same way, by handing off to
+  // `sendThreadReply` and dropping the reply.
+  AppState.set("replyToEventId", null);
+
   // Show the thread banner in the reply-preview bar so the compose box is
   // visually marked as "sending to thread".
   const { replyPreview } = getComponents();
@@ -47,6 +56,12 @@ export async function openThread(eventId: string): Promise<void> {
     _downloadMessageImages(replies, {
       updateMessageMedia: (id: string, url: string) => timeline.updateInlineThreadMedia(id, url),
     });
+    // The panel renders into the timeline's list element, so the same resolver
+    // the main timeline uses reaches it. Without this a custom emoji in a reply
+    // (or, since #84, in a reply's caption) keeps the `data-mxc` stash
+    // `renderFormattedBody` puts there and never gets a src — it stayed blank
+    // until some unrelated sync event in the room happened to run the resolver.
+    _downloadInlineEmoji(timeline);
   } catch (err) {
     showError(`Failed to load thread: ${err instanceof Error ? err.message : String(err)}`);
     replyPreview.hide();

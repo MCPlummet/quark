@@ -745,7 +745,7 @@ Scoped maps (`tmap`, `rmap`, `pmap`) take precedence over global `nmap` when tha
 
 **quarkrc also supports:**
 - `source <path>` — include another rc file
-- `colorscheme <name>` — shorthand for `:theme`
+- `colorscheme <name>` — the theme to start in, unless `config.toml` names one (see [Theme precedence](#theme-precedence))
 - `set <option>=<value>` — set config options inline
 - `" comments` — lines starting with `"` are ignored
 - `autocmd` — hooks for events (e.g., `autocmd RoomEnter * set scrolloff=3`)
@@ -985,8 +985,33 @@ alongside `openExternalUrl` opened every link twice.
   staged image and caption to the composer. Committing an inline edit takes
   precedence — the staged image stays pending. Staged images persist across
   room switches like text drafts and send to the room current at send time.
-  Videos and non-image files still upload immediately. Known limitation: with
-  a thread open, images post to the main timeline (no thread relation).
+  Videos and non-image files still upload immediately. A caption goes through
+  the same emoji expansion as a typed message — Unicode shortcodes become
+  glyphs in `body`, custom (MSC2545) ones become `<img data-mx-emoticon>` in
+  `formatted_body` with the shortcode left in `body` as the fallback — and the
+  read path renders `formatted_body` where the event carries one.
+- **Attachments follow the open thread.** An image, file, video, sticker or GIF
+  sent with a thread open carries that thread's relation, exactly as a text
+  reply does. A reply armed *inside* a thread produces one threaded reply
+  (`m.thread` carrying the replied-to event), not a reply alongside a thread —
+  `m.relates_to` holds one relation, so the two cannot both be set. A reply
+  armed *outside* the open thread is not carried: opening a thread disarms the
+  reply (the thread banner replaces the reply banner, so one left armed is armed
+  invisibly), and an attachment only folds in a reply to the thread's root or to
+  one of its replies. Files sent into a thread render in the panel as the same
+  click-to-open affordance the main timeline gives them. Attachments
+  sent into a thread have no optimistic row: they appear when the echo arrives,
+  which is what routes them into the panel with their media. An armed reply is
+  consumed by the attachment and cleared, as it is for a text message.
+- **Pasting.** Anything on the clipboard that is a file pastes into the
+  composer, not just images: an image stages in the preview, a video sends as
+  `m.video`, everything else as `m.file` — the same routing the attach button
+  uses. Where the webview exposes a pasted image only through the async
+  Clipboard API (Linux/WebKitGTK), the default text paste has already run by the
+  time the image arrives; the text it inserted is taken back out only when it
+  reads as the image's stand-in (a lone URL, path or image filename). Prose that
+  merely shares the clipboard with an image stays, and becomes the caption.
+  Drag-and-drop is not implemented.
 - **Encrypted attachments.** In an encrypted room the bytes are encrypted
   before upload and the event references them as an `m.file` source carrying the
   key, never a plaintext `mxc://`. The room decides this, not the call site:
@@ -1127,6 +1152,21 @@ visual_indicator = "VIS"
 ### Theme Hot-Reloading
 Themes reload on file save (watched via `notify` crate / filesystem events passed through Tauri). No restart required.
 
+### Theme precedence
+
+Two places name a theme at startup. They are applied in this order, and the later one wins:
+
+1. **`quarkrc`'s `colorscheme <name>`** — the theme to start in.
+2. **`config.toml`'s `[general] theme`** — the active theme. This is what Settings → Themes writes, and what `colorscheme` yields to: a theme picked in the UI has to survive a relaunch, and the UI does not edit `quarkrc`.
+
+`colorscheme` therefore applies only while `config.toml` leaves `theme` at its default (`"phosphor"`) — i.e. until the user picks one in Settings. After that the rc directive is ignored, and the reason is logged to the console as `[quarkrc] colorscheme … ignored`.
+
+`:theme <name>` applies a theme for the session only; it does not persist.
+
+One known gap: because `"phosphor"` doubles as "no theme chosen", explicitly picking Phosphor in Settings while `quarkrc` names another theme still loses to the rc file on the next launch. Closing it needs `theme` to gain a real unset state.
+
+`quarkrc`'s `set theme=<name>` is a different thing again — it *writes* `config.toml`, so it re-applies on every launch and does override the Settings picker. Use `colorscheme` unless that is what you want.
+
 ---
 
 ## Configuration
@@ -1135,7 +1175,8 @@ Themes reload on file save (watched via `notify` crate / filesystem events passe
 
 ```toml
 [general]
-theme = "phosphor"
+theme = "phosphor"            # the active theme; outranks quarkrc's `colorscheme`
+                              # (see Theme precedence below)
 notifications = true
 confirm_redact = true
 send_key_behavior = "auto"    # auto | enter | newline — what the Enter key does

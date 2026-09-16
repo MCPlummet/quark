@@ -5,6 +5,7 @@ pub mod emoji;
 pub mod html;
 pub mod media;
 pub mod reactions;
+pub mod relations;
 pub mod rooms;
 pub mod spaces;
 pub mod stickers;

@@ -3,11 +3,12 @@
 import { createReactionBar, updateReactionBar, type ReactionGroup } from "./Reactions.js";
 import { invoke } from "../ipc/invoke.js";
 import type { SearchResult } from "../ipc/types.js";
-import { appendCaption, type ThreadMessageData } from "./ThreadView.js";
+import { type ThreadMessageData } from "./ThreadView.js";
+import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { hashColor } from "./avatarColors.js";
 import { isMobile, viewportPan } from "../app/mobile.js";
-import { appendLinkifiedText, decorateMessageLinks } from "../app/links.js";
+import { appendLinkifiedText } from "../app/links.js";
 import { mountOverlay } from "./overlay.js";
 
 // ── Blob URL management ───────────────────────────────────────────────────────
@@ -42,37 +43,6 @@ function revokeActiveBlobUrls(): void {
 // `formatted_body` HTML path (`decorateMessageLinks`) live in app/links.ts so
 // markdown links and bare URLs render identically, and so activation is
 // handled once by the global link guard installed there.
-
-/**
- * Activate Matrix spoilers (MSC2010 / `data-mx-spoiler`) inside a freshly
- * rendered message body. The server-supplied HTML already contains
- * `<span data-mx-spoiler[="reason"]>…</span>`; on its own that renders as plain
- * text. Here we obscure each spoiler (the CSS `.message__spoiler` rule blurs it)
- * and reveal it on click/tap. An optional reason is exposed as a tooltip.
- */
-function setupSpoilers(container: HTMLElement): void {
-  for (const span of Array.from(container.querySelectorAll<HTMLElement>("[data-mx-spoiler]"))) {
-    if (span.classList.contains("message__spoiler")) continue; // already wired
-    span.classList.add("message__spoiler");
-    span.setAttribute("role", "button");
-    span.setAttribute("tabindex", "0");
-    const reason = span.getAttribute("data-mx-spoiler");
-    span.title = reason ? `Spoiler: ${reason}` : "Spoiler — click to reveal";
-    const reveal = (e: Event): void => {
-      if (span.classList.contains("message__spoiler--revealed")) return;
-      // Stop the reveal tap from also selecting the message / opening a menu.
-      e.preventDefault();
-      e.stopPropagation();
-      span.classList.add("message__spoiler--revealed");
-      span.removeAttribute("role");
-      span.removeAttribute("tabindex");
-    };
-    span.addEventListener("click", reveal);
-    span.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") reveal(e);
-    });
-  }
-}
 
 // ── URL preview cards ─────────────────────────────────────────────────────────
 
@@ -255,6 +225,12 @@ export interface MessageData {
   mediaHeight?: number;
   /** Media caption (MSC2530) shown beneath an image; absent when the body is just a filename. */
   caption?: string;
+  /**
+   * The caption's `formatted_body`, when it has one. Rendered in place of the
+   * plain caption so an inline custom emoji is an image rather than a literal
+   * `:shortcode:` (#84).
+   */
+  captionHtml?: string;
   /** MIME type for media messages (used for video canPlayType check) */
   mediaMimeType?: string;
   /** JSON-serialized EncryptedFile for E2EE video/audio; absent for plain media */
@@ -433,50 +409,6 @@ function buildVideoAffordance(
   return el;
 }
 
-function buildFileAffordance(
-  mxcUrl?: string,
-  filename?: string,
-  mimeType?: string,
-  encryptionInfo?: string,
-): HTMLElement {
-  const el = document.createElement("div");
-  el.className = "message__file-affordance";
-  el.setAttribute("role", "button");
-  el.setAttribute("tabindex", "0");
-  el.title = "Click to open file";
-
-  const icon = document.createElement("span");
-  icon.className = "message__file-affordance-icon";
-  icon.textContent = "📎";
-  icon.setAttribute("aria-hidden", "true");
-  el.appendChild(icon);
-
-  const label = document.createElement("span");
-  label.className = "message__file-affordance-label";
-  label.textContent = filename || "file";
-  el.appendChild(label);
-
-  if (mimeType) {
-    const type = document.createElement("span");
-    type.className = "message__file-affordance-type";
-    type.textContent = mimeType.split("/")[1]?.toUpperCase() ?? mimeType;
-    el.appendChild(type);
-  }
-
-  const activate = () => {
-    el.dispatchEvent(new CustomEvent("quark:open-file", {
-      bubbles: true,
-      detail: { mxcUrl, filename, mimeType, encryptionInfo },
-    }));
-  };
-  el.addEventListener("click", activate);
-  el.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); }
-  });
-
-  return el;
-}
-
 /**
  * Build the inner content of a single message (body, media, reactions) —
  * does NOT include the sender/timestamp header (that lives on the group).
@@ -589,12 +521,7 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     }
     row.appendChild(img);
     // Render the media caption (MSC2530) beneath the image, when present.
-    if (msg.caption) {
-      const caption = document.createElement("div");
-      caption.className = "message__body message__image-caption";
-      caption.textContent = msg.caption;
-      row.appendChild(caption);
-    }
+    appendCaption(row, "message__body", msg.caption, msg.captionHtml);
   } else if (type === "video") {
     row.classList.add("message--video");
     const aff = buildVideoAffordance(msg.mediaUrl, msg.mediaAlt, msg.mediaMimeType, msg.mediaEncryptionInfo, msg.mediaThumbnailUrl, msg.mediaThumbnailEncryptionInfo);
@@ -624,23 +551,7 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     body.className = "message__body";
 
     if (msg.htmlBody) {
-      // Render HTML body. In production this must be sanitized server-side or
-      // with DOMPurify; for the UI shell we accept pre-trusted HTML.
-      body.innerHTML = msg.htmlBody;
-      // Stash mxc:// src in data-mxc so actions.ts can resolve them later,
-      // and clear src to avoid broken-image icons in the meantime.
-      for (const img of body.querySelectorAll<HTMLImageElement>("img[data-mx-emoticon]")) {
-        if (img.src.startsWith("mxc://") || img.getAttribute("src")?.startsWith("mxc://")) {
-          img.dataset.mxc = img.getAttribute("src") ?? img.src;
-          img.removeAttribute("src");
-        }
-      }
-      // Give anchors from formatted_body the same class, rel and tooltip the
-      // linkifier gives bare URLs (#51), and strip non-http hrefs so nothing
-      // can navigate the WebView. Activation goes through the global link
-      // guard in app/links.ts, so no per-anchor listener is attached here.
-      decorateMessageLinks(body);
-      setupSpoilers(body);
+      renderFormattedBody(body, msg.htmlBody);
     } else {
       appendLinkifiedText(body, msg.body);
     }
@@ -2051,18 +1962,24 @@ export class Timeline {
       img.alt = msg.mediaAlt ?? type;
       img.loading = "lazy";
       row.appendChild(img);
-      appendCaption(row, "thread-inline", msg.caption);
+      appendCaption(row, "thread-inline__message-body", msg.caption, msg.captionHtml);
     } else if (type === "video") {
       const aff = buildVideoAffordance(msg.mediaUrl, msg.mediaAlt, msg.mediaMimeType, msg.mediaEncryptionInfo, msg.mediaThumbnailUrl, msg.mediaThumbnailEncryptionInfo);
       row.appendChild(aff);
-      appendCaption(row, "thread-inline", msg.caption);
+      appendCaption(row, "thread-inline__message-body", msg.caption, msg.captionHtml);
+    } else if (type === "file") {
+      // mediaAlt over body for the same reason the main timeline prefers it: on
+      // a captioned upload the body is the caption, which would name the saved
+      // file after it.
+      row.appendChild(
+        buildFileAffordance(msg.mediaUrl, msg.mediaAlt ?? msg.body, msg.mediaMimeType, msg.mediaEncryptionInfo),
+      );
+      appendCaption(row, "thread-inline__message-body", msg.caption, msg.captionHtml);
     } else {
       const body = document.createElement("div");
       body.className = "thread-inline__message-body";
       if (msg.htmlBody) {
-        body.innerHTML = msg.htmlBody;
-        decorateMessageLinks(body);
-        setupSpoilers(body);
+        renderFormattedBody(body, msg.htmlBody);
       } else {
         appendLinkifiedText(body, msg.body);
       }
@@ -2307,19 +2224,7 @@ export class Timeline {
     const bodyEl = el.querySelector<HTMLElement>(".message__body");
     if (!bodyEl) return;
     if (newHtmlBody) {
-      bodyEl.innerHTML = newHtmlBody;
-      // Same mxc:// stashing the initial render does (see buildMessageElement):
-      // custom-emoji <img>s arrive with an unloadable mxc:// src, which is moved
-      // to data-mxc so the app layer can download and swap in a data: URL.
-      for (const img of bodyEl.querySelectorAll<HTMLImageElement>("img[data-mx-emoticon]")) {
-        const src = img.getAttribute("src") ?? "";
-        if (src.startsWith("mxc://")) {
-          img.dataset.mxc = src;
-          img.removeAttribute("src");
-        }
-      }
-      decorateMessageLinks(bodyEl);
-      setupSpoilers(bodyEl);
+      renderFormattedBody(bodyEl, newHtmlBody);
     } else {
       // Re-linkify: assigning textContent would drop the anchors the initial
       // render produced, leaving an edited message's URLs as dead plain text.
