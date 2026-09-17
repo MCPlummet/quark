@@ -1,49 +1,15 @@
-// Command parser for Quark's vim-style : commands
+// Syntax for Quark's vim-style `:` commands — parsing and history.
+//
+// Deliberately ignorant of which commands exist. The vocabulary (names,
+// aliases, arguments, completion) lives in app/registry.ts, so this module can
+// stay a pure string parser and the two cannot drift: there is no local list
+// here to fall out of step with the executor.
 
 export interface ParsedCommand {
   name: string;
   args: string[];
   raw: string;
 }
-
-export type CompletionResult = string[];
-
-// Known command names for tab completion
-const KNOWN_COMMANDS: string[] = [
-  "join",
-  "leave",
-  "theme",
-  "upload",
-  "quit",
-  "q",
-  "logout",
-  "help",
-  "msg",
-  "invite",
-  "kick",
-  "ban",
-  "unban",
-  "nick",
-  "topic",
-  "verify",
-  "cross-sign",
-  "setup-cross-signing",
-  "profile",
-  "settings",
-  "info",
-  "pinned",
-  "search",
-  "directory",
-  "roomsettings",
-  "spacesettings",
-  "converttodm",
-  "converttoroom",
-  "convert-to-dm",
-  "convert-to-room",
-  "debug",
-  "version",
-  "update",
-];
 
 /**
  * Parse a command string (with or without leading colon).
@@ -118,25 +84,4 @@ export class CommandHistory {
   get cursor(): number {
     return this._cursor;
   }
-}
-
-/**
- * Tab-complete a partial command name.
- * Returns all known command names that start with the given prefix.
- */
-export function completeCommand(partial: string): CompletionResult {
-  const lower = partial.toLowerCase();
-  return KNOWN_COMMANDS.filter((cmd) => cmd.startsWith(lower));
-}
-
-/**
- * Tab-complete within a full command line. Operates on the name portion only
- * (argument completion is command-specific and out of scope here).
- */
-export function completeLine(line: string): CompletionResult {
-  const trimmed = line.startsWith(":") ? line.slice(1) : line;
-  const spaceIdx = trimmed.indexOf(" ");
-  // Only complete if we haven't typed a space yet (still typing the name)
-  if (spaceIdx !== -1) return [];
-  return completeCommand(trimmed);
 }

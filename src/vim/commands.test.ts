@@ -1,10 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import {
-  parseCommand,
-  CommandHistory,
-  completeCommand,
-  completeLine,
-} from "./commands";
+import { parseCommand, CommandHistory } from "./commands";
 
 describe("parseCommand", () => {
   // ── Basic parsing ─────────────────────────────────────────────────────
@@ -169,48 +164,5 @@ describe("CommandHistory", () => {
     history.prev();
     history.push(":join #a:b");
     expect(history.cursor).toBe(-1);
-  });
-});
-
-describe("completeCommand", () => {
-  it("returns matching commands for a prefix", () => {
-    const results = completeCommand("j");
-    expect(results).toContain("join");
-  });
-
-  it("returns multiple matches when applicable", () => {
-    const results = completeCommand("le");
-    expect(results).toContain("leave");
-  });
-
-  it("returns the exact command when prefix matches exactly", () => {
-    const results = completeCommand("join");
-    expect(results).toContain("join");
-  });
-
-  it("returns empty array for unrecognised prefix", () => {
-    expect(completeCommand("zzz")).toEqual([]);
-  });
-
-  it("is case-insensitive", () => {
-    const results = completeCommand("J");
-    expect(results).toContain("join");
-  });
-});
-
-describe("completeLine", () => {
-  it("completes from a colon-prefixed partial line", () => {
-    const results = completeLine(":jo");
-    expect(results).toContain("join");
-  });
-
-  it("completes from a bare partial name", () => {
-    const results = completeLine("th");
-    expect(results).toContain("theme");
-  });
-
-  it("returns empty array when line has a space (args region)", () => {
-    const results = completeLine(":join #room");
-    expect(results).toEqual([]);
   });
 });
