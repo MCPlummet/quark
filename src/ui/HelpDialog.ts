@@ -1,6 +1,19 @@
-// Help dialog — :commands and vim keybindings reference
+// Help dialog — :commands and vim keybindings reference.
+//
+// Both tables are generated from the action registry. They used to be
+// hand-maintained arrays here, and had drifted badly: fourteen implemented
+// commands were missing, `:upload` was advertised as working when it is a
+// stub, and the Ctrl-e / Ctrl-g rows named action ids ("emoji", "gif") that do
+// not exist in dispatchAction, so their live-binding lookup could never
+// resolve and the rows were permanently static.
+//
+// What the registry cannot describe stays in EXTRA_BINDINGS below: behaviours
+// with no action id behind them, like the Enter key sending a message or
+// `:word:` opening shortcode autocomplete. They are documentation, not
+// bindings, and are marked as such so nobody expects them to be remappable.
 
-import { keymapManager } from "../vim/keybindings.js";
+import { keymapManager, type KeyContext } from "../vim/keybindings.js";
+import { ACTIONS, commandEntries, modeLabel } from "../app/registry.js";
 import { DialogBase } from "./DialogBase.js";
 
 interface CommandEntry {
@@ -19,54 +32,63 @@ interface BindingEntry {
   context?: string;
 }
 
-const COMMANDS: CommandEntry[] = [
-  { name: "join",     args: "<room-id|alias>",  description: "Join a room or space" },
-  { name: "leave",    args: "[room-id]",         description: "Leave current or specified room" },
-  { name: "invite",   args: "<user-id>",         description: "Invite a user to the current room" },
-  { name: "kick",     args: "<user-id>",         description: "Kick a user from the current room" },
-  { name: "ban",      args: "<user-id>",         description: "Ban a user from the current room" },
-  { name: "unban",    args: "<user-id>",         description: "Unban a previously banned user" },
-  { name: "msg",      args: "<user-id> <text>",  description: "Send a direct message to a user" },
-  { name: "nick",     args: "<display-name>",    description: "Set your display name" },
-  { name: "topic",    args: "<text>",            description: "Set the room topic" },
-  { name: "theme",    args: "<name>",            description: "Load a colour theme by name" },
-  { name: "upload",   args: "<path>",            description: "Upload a file to the current room" },
-  { name: "verify",   args: "<user-id>",         description: "Start SAS verification with a user" },
-  { name: "help",     args: "",                  description: "Show this help dialog" },
-  { name: "logout",   args: "",                  description: "Log out and return to login screen" },
-  { name: "q / quit", args: "",                  description: "Close the application" },
-];
+/** Arrow keys read better as glyphs than as their DOM key names. */
+const KEY_GLYPHS: Record<string, string> = {
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+};
 
-const BINDINGS: BindingEntry[] = [
-  // Mode transitions
-  { keys: "i",       mode: "normal",   description: "Enter insert mode",               action: "mode-insert",     context: "global" },
-  { keys: ":",       mode: "normal",   description: "Enter command mode",              action: "mode-command",    context: "global" },
-  { keys: "v",       mode: "normal",   description: "Enter visual mode",               action: "mode-visual",     context: "global" },
-  { keys: "Escape",  mode: "any",      description: "Return to normal mode / cancel" },
-  // Timeline navigation (normal / timeline)
-  { keys: "j / ↓",  mode: "normal",   description: "Select next message",             action: "nav-down",        context: "global" },
-  { keys: "k / ↑",  mode: "normal",   description: "Select previous message",         action: "nav-up",          context: "global" },
-  { keys: "gg",      mode: "normal",   description: "Jump to first message",           action: "jump-top",        context: "global" },
-  { keys: "G",       mode: "normal",   description: "Jump to last message",            action: "jump-bottom",     context: "global" },
-  // Room list navigation
-  { keys: "j / k",   mode: "roomlist", description: "Navigate rooms" },
-  { keys: "Enter",   mode: "roomlist", description: "Open selected room" },
-  // Message actions
-  { keys: "r",       mode: "normal",   description: "Reply to selected message",       action: "reply",           context: "global" },
-  { keys: "e",       mode: "normal",   description: "React to selected message",       action: "react",           context: "global" },
-  { keys: "E / c",   mode: "normal",   description: "Edit (revise) selected message",  action: "edit",            context: "global" },
-  { keys: "dd",      mode: "normal",   description: "Redact (delete) selected message",action: "redact",          context: "global" },
-  { keys: "t",       mode: "normal",   description: "Open thread for selected message",action: "open-thread",     context: "global" },
-  { keys: "m",       mode: "normal",   description: "Toggle member list panel",        action: "toggle-members",  context: "global" },
-  { keys: "P",       mode: "normal",   description: "Open profile dialog",             action: "open-profile",    context: "global" },
-  { keys: "I",       mode: "normal",   description: "Open room info dialog",           action: "open-room-info",  context: "global" },
-  { keys: "S",       mode: "normal",   description: "Edit presence status",            action: "edit-status",     context: "global" },
-  { keys: "?",       mode: "normal",   description: "Open settings",                   action: "open-settings",   context: "global" },
-  // Insert mode
-  { keys: "Ctrl-e",  mode: "insert",   description: "Open emoji picker",              action: "emoji",           context: "insert" },
-  { keys: "Ctrl-g",  mode: "insert",   description: "Open GIF picker",                action: "gif",             context: "insert" },
-  { keys: "Enter",   mode: "insert",   description: "Send message" },
-  { keys: ":word:",  mode: "insert",   description: "Shortcode emoji autocomplete" },
+const prettyKey = (sequence: string): string => KEY_GLYPHS[sequence] ?? sequence;
+
+/** `:command` rows, straight from the registry. */
+function buildCommands(): CommandEntry[] {
+  return commandEntries().map((entry) => ({
+    name: entry.command.aliases?.length
+      ? `${entry.command.name} / ${entry.command.aliases.join(" / ")}`
+      : entry.command.name,
+    args: entry.command.args ?? "",
+    description: entry.description,
+  }));
+}
+
+/**
+ * Keybinding rows, one per registry entry that declares a default binding.
+ *
+ * The `keys` value here is the *default*; _buildBindingsTable replaces it with
+ * the live sequence and flags the row when the two differ, which is what makes
+ * the table honest about a user's quarkrc.
+ */
+function buildBindings(): BindingEntry[] {
+  const rows: BindingEntry[] = [];
+  for (const entry of ACTIONS) {
+    if (!entry.bindings?.length) continue;
+    const context = entry.bindings[0].context;
+    rows.push({
+      keys: entry.bindings.map((b) => prettyKey(b.sequence)).join(" / "),
+      mode: modeLabel(entry, context),
+      description: entry.description,
+      action: entry.id,
+      context,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Behaviours with no registry action behind them. Not remappable, and listed
+ * after the generated rows so the two are not confused.
+ */
+const EXTRA_BINDINGS: BindingEntry[] = [
+  { keys: "Enter", mode: "roomlist", description: "Open the selected room" },
+  { keys: "Ctrl-e", mode: "insert", description: "Open the emoji / sticker picker" },
+  { keys: "Ctrl-g", mode: "insert", description: "Open the GIF picker" },
+  { keys: "Ctrl-b / i / u", mode: "insert", description: "Bold / italic / underline the selection" },
+  { keys: "Enter", mode: "insert", description: "Send the message (see send-key behaviour)" },
+  { keys: "Ctrl-Enter", mode: "insert", description: "Send regardless of send-key behaviour" },
+  { keys: ":word:", mode: "insert", description: "Shortcode emoji autocomplete" },
+  { keys: "Tab", mode: "picker", description: "Switch emoji ↔ sticker ↔ GIF" },
 ];
 
 type Section = "bindings" | "commands";
@@ -185,8 +207,9 @@ export class HelpDialog extends DialogBase {
     table.className = "help-dialog__table";
     table.setAttribute("role", "list");
 
-    for (let i = 0; i < BINDINGS.length; i++) {
-      const b = BINDINGS[i];
+    const bindingRows = [...buildBindings(), ...EXTRA_BINDINGS];
+    for (let i = 0; i < bindingRows.length; i++) {
+      const b = bindingRows[i];
       const row = document.createElement("div");
       row.className = "help-dialog__row help-dialog__row--bindings";
       row.setAttribute("role", "listitem");
@@ -199,9 +222,11 @@ export class HelpDialog extends DialogBase {
       let displayKeys = b.keys;
       let isCustomized = false;
       if (b.action && b.context) {
-        const liveSeqs = actionToSeqs.get(`${b.context}:${b.action}`);
+        const liveSeqs = actionToSeqs.get(`${b.context as KeyContext}:${b.action}`);
         if (liveSeqs && liveSeqs.length > 0) {
-          const liveKey = liveSeqs.join(" / ");
+          // Prettified the same way as the declared default, or every arrow
+          // row would compare unequal and be flagged as remapped.
+          const liveKey = liveSeqs.map(prettyKey).join(" / ");
           if (liveKey !== b.keys) {
             isCustomized = true;
             displayKeys = liveKey;
@@ -240,8 +265,9 @@ export class HelpDialog extends DialogBase {
     table.className = "help-dialog__table";
     table.setAttribute("role", "list");
 
-    for (let i = 0; i < COMMANDS.length; i++) {
-      const cmd = COMMANDS[i];
+    const commandRows = buildCommands();
+    for (let i = 0; i < commandRows.length; i++) {
+      const cmd = commandRows[i];
       const row = document.createElement("div");
       row.className = "help-dialog__row help-dialog__row--commands";
       row.setAttribute("role", "listitem");
