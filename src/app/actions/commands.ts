@@ -1,6 +1,14 @@
-// The `:` command executor — parses and dispatches vim-style ex commands.
-
-import { AppState } from "../state.js";
+// The `:` command executor — dispatches ex commands to the action layer.
+//
+// Switches on the *registry id*, not on the raw name the user typed. Aliases
+// (`:room-settings`, `:q`, `:convert-to-dm`) collapse in exactly one place —
+// actionByCommand — instead of accumulating parallel case labels here that tab
+// completion and the help dialog then had to be taught about separately.
+//
+// Preconditions are declared in the registry and checked once, up front, by
+// isAvailable. That replaces six hand-written copies of "No room selected"
+// which had drifted into slightly different wording, and it means the palette
+// (#98) can grey out exactly the commands this function would have refused.
 
 import {
   inviteUser as ipcInviteUser,
@@ -12,6 +20,13 @@ import {
 } from "../../ipc/index.js";
 
 import type { ParsedCommand } from "../../vim/commands.js";
+import {
+  actionByCommand,
+  isAvailable,
+  type ActionEntry,
+  type AvailabilityContext,
+} from "../registry.js";
+import { currentAvailability } from "../availability.js";
 
 import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js";
 import packageJson from "../../../package.json";
@@ -36,16 +51,59 @@ import { startVerification, setupCrossSigning } from "./crypto.js";
 import { runUpdateCheck } from "../update_check.js";
 
 /**
- * Execute a parsed : command.
+ * Commands that accept a room ID as their first argument, and so can run with
+ * no room open. Their "room" requirement still holds for the palette and menus,
+ * where no argument can be supplied — it is only the typed form that can name a
+ * target the app is not currently looking at.
+ */
+const ROOM_ARG_COMMANDS = new Set(["leave-room", "convert-to-dm", "convert-to-room"]);
+
+/** "Usage: :kick <user-id> [reason]", built from the registry's args spec. */
+function usageError(entry: ActionEntry): void {
+  const { name, args } = entry.command!;
+  showError(args ? `Usage: :${name} ${args}` : `Usage: :${name}`);
+}
+
+/** Why an action can't run right now, in the user's terms. */
+function unavailableReason(entry: ActionEntry, ctx: AvailabilityContext): string {
+  const name = entry.command?.name ?? entry.id;
+  for (const req of entry.requires ?? []) {
+    if (req === "session" && !ctx.loggedIn) return "Not logged in";
+    if (req === "room" && !ctx.roomId) return "No room selected";
+    if (req === "space" && !ctx.spaceId) return "No space selected";
+    if (req === "desktop" && ctx.isMobile) return `:${name} is not available on mobile`;
+  }
+  return `:${name} is not available right now`;
+}
+
+/**
+ * Execute a parsed `:` command.
  */
 export async function executeCommand(parsed: ParsedCommand): Promise<void> {
-  switch (parsed.name) {
-    case "join": {
+  const entry = actionByCommand(parsed.name);
+  if (!entry) {
+    showError(`Unknown command: ${parsed.name}`);
+    return;
+  }
+
+  // A room named as an argument satisfies the "room" requirement — `:leave
+  // !other:server` is meaningful with nothing open.
+  const explicitRoom = ROOM_ARG_COMMANDS.has(entry.id) ? parsed.args[0] : undefined;
+  const ctx = currentAvailability(explicitRoom ? { roomId: explicitRoom } : {});
+  if (!isAvailable(entry, ctx)) {
+    showError(unavailableReason(entry, ctx));
+    return;
+  }
+
+  // Gated above: anything declaring `requires: ["room"]` has reached this line
+  // with a room in hand, so this is the gate's guarantee rather than an
+  // assumption. Commands with no room requirement never read it.
+  const roomId = ctx.roomId!;
+
+  switch (entry.id) {
+    case "join-room": {
       const alias = parsed.args[0];
-      if (!alias) {
-        showError("Usage: :join <room-id-or-alias>");
-        return;
-      }
+      if (!alias) return usageError(entry);
       try {
         await joinRoom(alias);
       } catch (err) {
@@ -54,22 +112,14 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "leave": {
-      const roomId = parsed.args[0] ?? AppState.get("currentRoomId");
-      if (!roomId) {
-        showError("No room to leave");
-        return;
-      }
+    case "leave-room": {
       await leaveRoomWithFeedback(roomId);
       break;
     }
 
-    case "theme": {
+    case "load-theme": {
       const themeName = parsed.args[0];
-      if (!themeName) {
-        showError("Usage: :theme <name>");
-        return;
-      }
+      if (!themeName) return usageError(entry);
       await loadTheme(themeName);
       break;
     }
@@ -79,7 +129,6 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "q":
     case "quit": {
       // In Tauri: close the window
       try {
@@ -91,7 +140,7 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "upload": {
+    case "upload-file": {
       showToast("Upload: not yet implemented", "info");
       break;
     }
@@ -101,44 +150,42 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "profile": {
+    case "open-profile": {
       void openProfileDialog();
       break;
     }
 
-    case "settings": {
+    case "open-settings": {
       openSettings();
       break;
     }
 
-    case "info": {
+    case "open-room-info": {
       void openRoomInfo();
       break;
     }
 
-    case "pinned": {
+    case "open-pinned": {
       void openPinnedMessages();
       break;
     }
 
-    case "search": {
+    case "open-search": {
       openSearch(parsed.args.join(" "));
       break;
     }
 
-    case "directory": {
+    case "open-directory": {
       openRoomDirectory();
       break;
     }
 
-    case "roomsettings":
-    case "room-settings": {
+    case "open-room-settings": {
       void openRoomSettings();
       break;
     }
 
-    case "spacesettings":
-    case "space-settings": {
+    case "open-space-settings": {
       void openSpaceSettings();
       break;
     }
@@ -146,29 +193,17 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
     // Direction is a literal per case rather than derived from the command
     // name: an alias like :converttodirectmessage would fall the wrong side of
     // any endsWith("dm") test and silently convert the opposite way.
-    case "converttodm":
     case "convert-to-dm": {
-      const roomId = parsed.args[0] ?? AppState.get("currentRoomId");
-      if (!roomId) {
-        showError("No room selected");
-        return;
-      }
       await convertRoomDirectness(roomId, true);
       break;
     }
 
-    case "converttoroom":
     case "convert-to-room": {
-      const roomId = parsed.args[0] ?? AppState.get("currentRoomId");
-      if (!roomId) {
-        showError("No room selected");
-        return;
-      }
       await convertRoomDirectness(roomId, false);
       break;
     }
 
-    case "debug": {
+    case "open-debug": {
       const subjectArg = parsed.args[0];
       if (subjectArg === "cache") {
         // :debug cache — show event-cache diagnostics
@@ -183,54 +218,39 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "version": {
+    case "show-version": {
       showToast(`Quark v${packageJson.version}`, "info");
       break;
     }
 
-    case "update": {
+    case "check-for-updates": {
       showToast("Checking for updates…", "info");
       await runUpdateCheck(getComponents(), true);
       break;
     }
 
-    case "msg": {
+    case "open-dm": {
       const targetUser = parsed.args[0];
-      if (!targetUser) {
-        showError("Usage: :msg <user-id>");
-        return;
-      }
+      if (!targetUser) return usageError(entry);
       void openOrCreateDm(targetUser);
       break;
     }
 
-    case "verify": {
+    case "verify-user": {
       const userId = parsed.args[0];
-      if (!userId) {
-        showError("Usage: :verify <user-id>");
-        return;
-      }
+      if (!userId) return usageError(entry);
       await startVerification(userId);
       break;
     }
 
-    case "cross-sign":
     case "setup-cross-signing": {
       await setupCrossSigning(parsed.args[0]);
       break;
     }
 
-    case "invite": {
+    case "invite-user": {
       const userId = parsed.args[0];
-      if (!userId) {
-        showError("Usage: :invite <user-id>");
-        return;
-      }
-      const roomId = AppState.get("currentRoomId");
-      if (!roomId) {
-        showError("No room selected");
-        return;
-      }
+      if (!userId) return usageError(entry);
       try {
         await ipcInviteUser(roomId, userId);
         showSuccess(`Invited ${userId}`);
@@ -240,17 +260,9 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "kick": {
+    case "kick-user": {
       const userId = parsed.args[0];
-      if (!userId) {
-        showError("Usage: :kick <user-id> [reason]");
-        return;
-      }
-      const roomId = AppState.get("currentRoomId");
-      if (!roomId) {
-        showError("No room selected");
-        return;
-      }
+      if (!userId) return usageError(entry);
       const reason = parsed.args.slice(1).join(" ") || undefined;
       try {
         await ipcKickUser(roomId, userId, reason);
@@ -261,17 +273,9 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "ban": {
+    case "ban-user": {
       const userId = parsed.args[0];
-      if (!userId) {
-        showError("Usage: :ban <user-id> [reason]");
-        return;
-      }
-      const roomId = AppState.get("currentRoomId");
-      if (!roomId) {
-        showError("No room selected");
-        return;
-      }
+      if (!userId) return usageError(entry);
       const reason = parsed.args.slice(1).join(" ") || undefined;
       try {
         await ipcBanUser(roomId, userId, reason);
@@ -282,17 +286,9 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "unban": {
+    case "unban-user": {
       const userId = parsed.args[0];
-      if (!userId) {
-        showError("Usage: :unban <user-id>");
-        return;
-      }
-      const roomId = AppState.get("currentRoomId");
-      if (!roomId) {
-        showError("No room selected");
-        return;
-      }
+      if (!userId) return usageError(entry);
       try {
         await ipcUnbanUser(roomId, userId);
         showSuccess(`Unbanned ${userId}`);
@@ -302,12 +298,9 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "nick": {
+    case "set-nick": {
       const newName = parsed.args.join(" ");
-      if (!newName) {
-        showError("Usage: :nick <display-name>");
-        return;
-      }
+      if (!newName) return usageError(entry);
       try {
         await ipcSetDisplayName(newName);
         showSuccess(`Display name set to "${newName}"`);
@@ -317,17 +310,9 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    case "topic": {
+    case "set-topic": {
       const topic = parsed.args.join(" ");
-      if (!topic) {
-        showError("Usage: :topic <text>");
-        return;
-      }
-      const roomId = AppState.get("currentRoomId");
-      if (!roomId) {
-        showError("No room selected");
-        return;
-      }
+      if (!topic) return usageError(entry);
       try {
         await setRoomTopic(roomId, topic);
         showSuccess("Topic updated");
@@ -337,7 +322,14 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
-    default:
-      showError(`Unknown command: ${parsed.name}`);
+    default: {
+      // Unreachable: every CommandId has a case above, and `tsc` proves it —
+      // adding a command to the registry without a handler here fails the build
+      // on this line rather than shipping a `:command` that silently does
+      // nothing. The runtime arm stays for a registry loaded at odds with this
+      // bundle (a stale cached module, a hot reload mid-edit).
+      const unhandled: never = entry.id;
+      showError(`Unknown command: ${String(unhandled)}`);
+    }
   }
 }
