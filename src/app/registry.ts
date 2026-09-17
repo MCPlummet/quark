@@ -112,7 +112,7 @@ export interface ActionEntry {
 
 // ── The registry ─────────────────────────────────────────────────────────────
 
-export const ACTIONS: readonly ActionEntry[] = [
+const ACTION_LITERALS = [
   // ── Modes ──────────────────────────────────────────────────────────────
   {
     id: "mode-insert",
@@ -387,6 +387,21 @@ export const ACTIONS: readonly ActionEntry[] = [
     command: { name: "join", args: "<room-id|alias>" },
   },
   {
+    id: "open-room",
+    description: "Open a room",
+    menus: [{ surface: "room", label: "Open", group: 1, order: 1 }],
+    palette: false,
+  },
+  {
+    // Offered only when the room is unread — expressed by the caller passing a
+    // handler conditionally, since `requires` describes app state rather than
+    // the menu's target.
+    id: "mark-room-read",
+    description: "Mark a room as read",
+    menus: [{ surface: "room", label: "Mark as read", group: 3, order: 1 }],
+    palette: false,
+  },
+  {
     id: "leave-room",
     description: "Leave a room",
     requires: ["room"],
@@ -398,7 +413,7 @@ export const ACTIONS: readonly ActionEntry[] = [
     id: "leave-room-confirm",
     description: "Leave this room",
     requires: ["room"],
-    menus: [{ surface: "room", label: "Leave room", group: 3, order: 1, danger: true }],
+    menus: [{ surface: "room", label: "Leave room", group: 4, order: 1, danger: true }],
     palette: false,
   },
   {
@@ -522,18 +537,48 @@ export const ACTIONS: readonly ActionEntry[] = [
     requires: ["desktop"],
     command: { name: "quit", aliases: ["q"] },
   },
-];
+] as const satisfies readonly ActionEntry[];
+
+// `as const` above is load-bearing rather than decoration: it narrows every
+// `id` to a string literal, which is what lets the `:` executor switch
+// exhaustively over CommandId so that `tsc` — not a test, not a reviewer —
+// refuses a build where a command has been added here with no handler behind
+// it. That is the drift this module exists to make impossible.
+//
+// The literal types stop there. Consumers iterate the *widened* ACTIONS below,
+// because under `as const` an omitted optional field does not exist on the
+// union at all, and every `entry.command` read would need narrowing first.
+
+/** Every action id in the registry. */
+export type ActionId = (typeof ACTION_LITERALS)[number]["id"];
+
+/** Ids of entries exposing a `:` command — the executor's exhaustive domain. */
+export type CommandId = Extract<
+  (typeof ACTION_LITERALS)[number],
+  { command: object }
+>["id"];
+
+/** An entry known to expose a `:` command. */
+export type CommandEntry = ActionEntry & { id: CommandId; command: CommandSpec };
+
+/** The registry, widened for iteration. */
+export const ACTIONS: readonly ActionEntry[] = ACTION_LITERALS;
 
 // ── Lookups ──────────────────────────────────────────────────────────────────
 
 const _byId = new Map<string, ActionEntry>();
-const _byCommand = new Map<string, ActionEntry>();
+const _byCommand = new Map<string, CommandEntry>();
 
 for (const entry of ACTIONS) {
   _byId.set(entry.id, entry);
   if (!entry.command) continue;
-  _byCommand.set(entry.command.name, entry);
-  for (const alias of entry.command.aliases ?? []) _byCommand.set(alias, entry);
+  // Sound by construction: only entries carrying a `command` reach this line,
+  // and every such id is in the CommandId union by derivation.
+  const withCommand = entry as CommandEntry;
+  _byCommand.set(withCommand.command.name, withCommand);
+  for (const alias of withCommand.command.aliases ?? []) {
+    _byCommand.set(alias, withCommand);
+  }
 }
 
 /** Look up an entry by its stable id. */
@@ -547,7 +592,7 @@ export function actionById(id: string): ActionEntry | undefined {
  * identically to `:roomsettings` in completion, help and execution rather than
  * in whichever of the three happened to list it.
  */
-export function actionByCommand(name: string): ActionEntry | undefined {
+export function actionByCommand(name: string): CommandEntry | undefined {
   return _byCommand.get(name.toLowerCase());
 }
 
@@ -557,8 +602,8 @@ export function commandNames(): string[] {
 }
 
 /** Entries that expose a `:` command, in registration order. */
-export function commandEntries(): ActionEntry[] {
-  return ACTIONS.filter((e) => e.command !== undefined);
+export function commandEntries(): CommandEntry[] {
+  return ACTIONS.filter((e): e is CommandEntry => e.command !== undefined);
 }
 
 /** Entries offered in the command palette (#98), respecting the opt-out. */

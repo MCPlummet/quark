@@ -2,10 +2,12 @@
 
 import { modeManager, Mode } from "../vim/mode.js";
 import { keymapManager } from "../vim/keybindings.js";
+import { registerDefaultBindings } from "./registry.js";
+import { currentAvailability } from "./availability.js";
+import { buildMenu } from "./context_menus.js";
 import { ComposeNormalEditor } from "../vim/compose_normal.js";
 import { modalManager } from "../ui/ModalManager.js";
 import type { AppComponents } from "../ui/App.js";
-import type { ContextMenuEntry } from "../ui/ContextMenu.js";
 import {
   sendMessage,
   sendReaction,
@@ -79,54 +81,6 @@ import { getThumbnail } from "../ipc/media.js";
 import { getRoomMembers } from "../ipc/rooms.js";
 import { extractShortcodeQuery, extractMentionQuery } from "./autocomplete_query.js";
 import { applySetOptions } from "./set_options.js";
-
-// ── Default keybindings ───────────────────────────────────────────────────────
-
-function registerDefaultBindings(): void {
-  // Normal mode — global
-  keymapManager.nmap("i", "mode-insert");
-  keymapManager.nmap(":", "mode-command");
-  keymapManager.nmap("v", "mode-visual");
-  keymapManager.nmap("j", "nav-down");
-  keymapManager.nmap("k", "nav-up");
-  keymapManager.nmap("h", "nav-left");
-  keymapManager.nmap("l", "nav-right");
-  keymapManager.nmap("ArrowLeft", "nav-left");
-  keymapManager.nmap("ArrowRight", "nav-right");
-  keymapManager.nmap("ArrowUp", "nav-up");
-  keymapManager.nmap("ArrowDown", "nav-down");
-  keymapManager.nmap("gg", "jump-top");
-  keymapManager.nmap("G", "jump-bottom");
-  keymapManager.nmap("r", "reply");
-  keymapManager.nmap("e", "react");
-  keymapManager.nmap("dd", "redact");
-  keymapManager.nmap("E", "edit");
-  keymapManager.nmap("c", "edit");
-  keymapManager.nmap("t", "open-thread");
-  keymapManager.nmap("m", "toggle-members");
-  keymapManager.nmap("P", "open-profile");
-  keymapManager.nmap("S", "edit-status");
-  keymapManager.nmap("?", "open-settings");
-  keymapManager.nmap("I", "open-room-info");
-
-  // select — activates the focused item in panels that support it (roomlist, spaces)
-  keymapManager.nmap("Enter", "select");
-  keymapManager.nmap("o", "select");
-  // In the timeline, `o` enters text-select mode on the selected message rather
-  // than the generic "select" action. Other panels keep `o` as a select alias.
-  keymapManager.tmap("o", "enter-text-select");
-
-  // copy / paste
-  keymapManager.nmap("y", "copy-message");
-  keymapManager.nmap("p", "paste-to-input");
-
-  // Quote-selection — text-select Visual mode only. Outside text-select the
-  // action is unhandled (no-op), so binding it globally costs nothing.
-  keymapManager.nmap(">", "quote-selection");
-
-  // close — clears selection / reply / thread for the active panel
-  keymapManager.nmap("Escape", "close");
-}
 
 // ── Action dispatcher ─────────────────────────────────────────────────────────
 
@@ -965,6 +919,12 @@ export function setupKeyboard(components: AppComponents): void {
     revisionHistoryDialog.show(eventId, originalBody);
   });
 
+  // ── Context menus ────────────────────────────────────────────────────────
+  // Rows, order and grouping come from the registry; hints come from the live
+  // keymap. Only behaviour is wired here, keyed by action id — and an id with
+  // no handler is dropped, which is how "Mark as read" appears on unread rooms
+  // alone without the registry needing to model that.
+
   // Right-click / long-press context menu for messages
   timeline.onContextMenu((eventId, x, y) => {
     const events = AppState.get("currentTimeline");
@@ -972,117 +932,69 @@ export function setupKeyboard(components: AppComponents): void {
     const ownUserId = AppState.get("ownUserId");
     const isOwn = !!evt && !!ownUserId && evt.sender === ownUserId;
 
-    const entries: ContextMenuEntry[] = [
-      {
-        label: "Reply",
-        hint: "r",
-        action: () => {
-          if (evt) {
-            startReply(eventId, evt.sender, evt.body.slice(0, 80));
-            input.focus();
-          }
-        },
-      },
-      {
-        label: "React",
-        hint: "e",
-        action: () => openQuickReactPicker(eventId),
-      },
-      {
-        label: "Thread",
-        hint: "t",
-        action: () => void openThread(eventId),
-      },
-      { separator: true },
-      {
-        label: "Copy message text",
-        hint: "y",
-        action: () => {
-          const text = evt?.body ?? "";
-          void navigator.clipboard.writeText(text);
-        },
-      },
-      {
-        label: "View raw event",
-        action: () => void openDebugViewerForEvent(eventId),
-      },
-    ];
+    // Both the desktop right-click menu and the mobile long-press sheet flow
+    // through this callback, so this is the single place that gives
+    // finger-input users a way to edit or delete.
+    const ctx = currentAvailability({
+      selectedMessageId: eventId,
+      selectedMessageIsOwn: isOwn,
+    });
 
-    // Own-message actions: edit and delete. Both the desktop right-click menu
-    // and the mobile long-press sheet flow through this callback, so this is
-    // the single place that gives finger-input users a way to delete/edit.
-    if (isOwn) {
-      entries.push(
-        { separator: true },
-        {
-          label: "Edit",
-          hint: "E",
-          action: () => {
-            // Prefer the MessageData body (reflects applied edits) over the
-            // raw timeline event.
-            const body = timeline.getMessageBodyById(eventId) ?? evt?.body ?? "";
-            startEdit(eventId, body);
-            modeManager.transition(Mode.Insert);
-            input.focus();
-          },
-        },
-        {
-          label: "Delete",
-          hint: "dd",
-          action: () => void redactMessage(eventId),
-        },
-      );
-    }
-
-    contextMenu.show(x, y, entries);
+    contextMenu.show(x, y, buildMenu("message", ctx, {
+      "reply": () => {
+        if (!evt) return;
+        startReply(eventId, evt.sender, evt.body.slice(0, 80));
+        input.focus();
+      },
+      "react": () => openQuickReactPicker(eventId),
+      "open-thread": () => void openThread(eventId),
+      "copy-message": () => {
+        void navigator.clipboard.writeText(evt?.body ?? "");
+      },
+      "view-raw-event": () => void openDebugViewerForEvent(eventId),
+      "edit": () => {
+        // Prefer the MessageData body (reflects applied edits) over the raw
+        // timeline event.
+        const body = timeline.getMessageBodyById(eventId) ?? evt?.body ?? "";
+        startEdit(eventId, body);
+        modeManager.transition(Mode.Insert);
+        input.focus();
+      },
+      "redact": () => void redactMessage(eventId),
+    }));
   });
 
   // Right-click context menu for rooms in the room list
   roomList.onContextMenu((roomId, x, y) => {
-    const rooms = AppState.get("roomListCache");
-    const room = rooms.find((r) => r.room_id === roomId);
-    contextMenu.show(x, y, [
-      {
-        label: "Open",
-        action: () => void selectRoom(roomId),
-      },
-      { separator: true },
-      {
-        label: "Room settings",
-        action: () => void selectRoom(roomId).then(() => openRoomSettings()),
-      },
-      {
-        label: "Room info",
-        action: () => void selectRoom(roomId).then(() => openRoomInfo()),
-      },
-      ...(room && room.unread_count > 0 ? [
-        { separator: true } as const,
-        {
-          label: "Mark as read",
-          action: () => void selectRoom(roomId),
-        },
-      ] : []),
-    ]);
+    const room = AppState.get("roomListCache").find((r) => r.room_id === roomId);
+    // The menu targets the room under the cursor, which is not necessarily the
+    // one that is open — so the room requirement is evaluated against that
+    // target rather than against AppState's current room.
+    const ctx = currentAvailability({ roomId });
+
+    contextMenu.show(x, y, buildMenu("room", ctx, {
+      "open-room": () => void selectRoom(roomId),
+      "open-room-settings": () => void selectRoom(roomId).then(() => openRoomSettings()),
+      "open-room-info": () => void selectRoom(roomId).then(() => openRoomInfo()),
+      // Unread rooms only; see the note above buildMenu's handler map.
+      "mark-room-read": room && room.unread_count > 0
+        ? () => void selectRoom(roomId)
+        : undefined,
+    }));
   });
 
   // Right-click context menu for subspace section labels in the room list
   roomList.onSectionContextMenu((spaceId, x, y) => {
-    contextMenu.show(x, y, [
-      {
-        label: "Space settings",
-        action: () => void openSpaceSettings(spaceId),
-      },
-    ]);
+    contextMenu.show(x, y, buildMenu("section", currentAvailability({ spaceId }), {
+      "open-space-settings": () => void openSpaceSettings(spaceId),
+    }));
   });
 
   // Right-click context menu for spaces in the space strip
   spaceStrip.onContextMenu((spaceId, x, y) => {
-    contextMenu.show(x, y, [
-      {
-        label: "Space settings",
-        action: () => void openSpaceSettings(spaceId),
-      },
-    ]);
+    contextMenu.show(x, y, buildMenu("space", currentAvailability({ spaceId }), {
+      "open-space-settings": () => void openSpaceSettings(spaceId),
+    }));
   });
 
   // ── User keybindings ──────────────────────────────────────────────────────
