@@ -345,6 +345,17 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # MUST stay set. The action's default is "tools platform-tools", and
+          # it shells out to `sdkmanager <pkg>` once per entry. `tools` is the
+          # obsolete SDK Tools package, which Google has dropped from the
+          # repository index — sdkmanager warns "Failed to find package 'tools'"
+          # and exits 1, failing the job (broke the v0.19.2 release). Empty is
+          # safe: the action filters blanks out of this list, and still exports
+          # ANDROID_HOME/ANDROID_SDK_ROOT and the PATH entries regardless. The
+          # next step installs everything we actually need, platform-tools
+          # included. Bumping the action to v4 does NOT help — same default.
+          packages: ""
 
       - name: Install Android platform, build-tools and NDK
         run: |
