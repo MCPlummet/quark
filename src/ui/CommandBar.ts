@@ -1,6 +1,7 @@
 // Command input overlay — appears in Command mode above the status bar
 
-import { parseCommand, completeLine, CommandHistory, ParsedCommand } from "../vim/commands.js";
+import { parseCommand, CommandHistory, ParsedCommand } from "../vim/commands.js";
+import { completeLine } from "../app/registry.js";
 
 export type CommandExecuteHandler = (parsed: ParsedCommand) => void;
 export type CommandCancelHandler = () => void;
