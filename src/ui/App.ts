@@ -28,7 +28,7 @@ import { PinnedMessagesDialog } from "./PinnedMessagesDialog.js";
 import { SearchDialog } from "./SearchDialog.js";
 import { RoomDirectoryDialog } from "./RoomDirectoryDialog.js";
 import { ImageLightbox } from "./ImageLightbox.js";
-import { QuickNavPalette } from "./QuickNavPalette.js";
+import { CommandPalette } from "./CommandPalette.js";
 import { MentionPreview } from "./MentionPreview.js";
 import { RoomSettingsDialog } from "./RoomSettingsDialog.js";
 import { SpaceSettingsDialog } from "./SpaceSettingsDialog.js";
@@ -83,7 +83,7 @@ export interface AppComponents {
   searchDialog: SearchDialog;
   roomDirectoryDialog: RoomDirectoryDialog;
   imageLightbox: ImageLightbox;
-  quickNavPalette: QuickNavPalette;
+  commandPalette: CommandPalette;
   mentionPreview: MentionPreview;
   roomSettingsDialog: RoomSettingsDialog;
   spaceSettingsDialog: SpaceSettingsDialog;
@@ -144,7 +144,7 @@ export function mountApp(container: HTMLElement): AppComponents {
   const searchDialog = new SearchDialog(timeline);
   const roomDirectoryDialog = new RoomDirectoryDialog();
   const imageLightbox = new ImageLightbox();
-  const quickNavPalette = new QuickNavPalette();
+  const commandPalette = new CommandPalette();
   const mentionPreview = new MentionPreview();
   const roomSettingsDialog = new RoomSettingsDialog();
   const spaceSettingsDialog = new SpaceSettingsDialog();
@@ -229,12 +229,15 @@ export function mountApp(container: HTMLElement): AppComponents {
   input.setSendButtonVisible(shouldShowSendButton());
   setupTouchGestures(mainLayout, {
     scrollEl: roomList.getScrollElement(),
-    // The quick-nav palette (Ctrl+K on desktop) is unreachable by touch. Pulling
-    // down from the top of the room list opens it; close the drawer first so the
-    // palette is visible and focused. (mobile quick-nav access)
+    // The command palette (Ctrl+K on desktop) is unreachable by touch, and with
+    // vim mode force-disabled on mobile it is the only route to a `:` command
+    // at all. Pulling down from the top of the room list opens it; close the
+    // drawer first so the palette is visible and focused.
     onPullDown: () => {
       closeDrawer();
-      document.dispatchEvent(new CustomEvent("quark:action", { detail: { action: "open-quick-nav" } }));
+      document.dispatchEvent(
+        new CustomEvent("quark:action", { detail: { action: "open-command-palette" } }),
+      );
     },
   });
   mobileTopBar.onHamburgerClick(() => toggleDrawer());
@@ -330,7 +333,7 @@ export function mountApp(container: HTMLElement): AppComponents {
   mountOverlay(searchDialog.getElement());
   mountOverlay(roomDirectoryDialog.getElement());
   mountOverlay(imageLightbox.getElement());
-  mountOverlay(quickNavPalette.getElement());
+  mountOverlay(commandPalette.getElement());
   mountOverlay(roomSettingsDialog.getElement());
   mountOverlay(spaceSettingsDialog.getElement());
   mountOverlay(debugViewer.getElement());
@@ -366,7 +369,7 @@ export function mountApp(container: HTMLElement): AppComponents {
     searchDialog,
     roomDirectoryDialog,
     imageLightbox,
-    quickNavPalette,
+    commandPalette,
     mentionPreview,
     roomSettingsDialog,
     spaceSettingsDialog,

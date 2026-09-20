@@ -82,6 +82,34 @@ import { getRoomMembers } from "../ipc/rooms.js";
 import { extractShortcodeQuery, extractMentionQuery } from "./autocomplete_query.js";
 import { applySetOptions } from "./set_options.js";
 
+// ── Mode routing ──────────────────────────────────────────────────────────────
+
+/** Which handler owns a keystroke, once modals and Escape have had their say. */
+export type ModeRoute = "insert" | "command" | "vim";
+
+/**
+ * Decide which handler a keystroke belongs to.
+ *
+ * Extracted from the global keydown ladder because the ordering is load-bearing
+ * and was wrong: the vim-off fallback used to be tested before Command mode, so
+ * with vim disabled every keystroke meant for the command bar was routed into
+ * the compose box instead. That never surfaced while the command bar was
+ * reachable only through the `mode-command` action — which requires vim — but
+ * the palette now opens it to finish a command that needs arguments, and on
+ * mobile vim is always off (#98).
+ *
+ * Command mode therefore outranks the vim-mode question: if the command bar is
+ * open, it owns the keys, whatever the editing model is.
+ */
+export function resolveModeRoute(mode: Mode, vimMode: boolean): ModeRoute {
+  if (mode === Mode.Insert) return "insert";
+  if (mode === Mode.Command) return "command";
+  // Normal/Visual are unreachable with vim disabled; treat anything that gets
+  // here as Insert rather than letting it fall through to the vim keymap.
+  if (!vimMode) return "insert";
+  return "vim";
+}
+
 // ── Action dispatcher ─────────────────────────────────────────────────────────
 
 export function dispatchAction(action: string, components: AppComponents): void {
@@ -288,8 +316,8 @@ export function dispatchAction(action: string, components: AppComponents): void 
       void logout();
       break;
 
-    case "open-quick-nav":
-      components.quickNavPalette.show();
+    case "open-command-palette":
+      components.commandPalette.show();
       break;
 
     case "close":
@@ -852,7 +880,7 @@ export function setupKeyboard(components: AppComponents): void {
   // are destructured.
   const { input, commandBar, shortcodePreview, mentionPreview, timeline,
           quickReactPicker, pinnedMessagesDialog, searchDialog, revisionHistoryDialog,
-          roomHeader, imageLightbox, quickNavPalette, contextMenu,
+          roomHeader, imageLightbox, commandPalette, contextMenu,
           spaceStrip, roomList } = components;
 
   registerDefaultBindings();
@@ -1001,8 +1029,33 @@ export function setupKeyboard(components: AppComponents): void {
   void loadQuarkrc().then(applyRcDirectives).catch(() => { /* no rc file is fine */ });
 
   // Wire quick nav palette → selectRoom
-  quickNavPalette.onSelect((roomId) => {
+  // Visible palette affordance in the room-list header — present on desktop and
+  // inside the mobile drawer, so the palette does not depend on knowing Ctrl+K
+  // or discovering the pull-down gesture.
+  roomList.onPaletteClick(() => commandPalette.show());
+
+  commandPalette.onSelectRoom((roomId) => {
     void selectRoom(roomId);
+  });
+
+  // Action rows. The registry's arg grammar decides which of the three routes
+  // a row takes; see invocationFor in CommandPalette.ts.
+  commandPalette.onInvoke((invocation) => {
+    switch (invocation.kind) {
+      case "dispatch":
+        dispatchAction(invocation.actionId, components);
+        break;
+      case "run":
+        void executeCommand({ name: invocation.command, args: [], raw: `:${invocation.command}` });
+        break;
+      case "prefill":
+        // The command needs an argument the palette cannot supply, so hand the
+        // user the command bar with the line started. This is the one path that
+        // needs Command mode to work without vim — see the keydown ordering.
+        modeManager.transition(Mode.Command);
+        commandBar.show(invocation.line);
+        break;
+    }
   });
 
   // Wire quick react picker → sendReaction
@@ -1111,14 +1164,24 @@ export function setupKeyboard(components: AppComponents): void {
   });
 
   // Command bar wiring
+  // Where the command bar returns to depends on whether there *is* a Normal
+  // mode to return to. With vim off, dropping the user into Normal would strand
+  // them in a mode the rest of the app refuses to route keys for.
+  const leaveCommandMode = (): void => {
+    if (AppState.get("vimMode")) {
+      modeManager.transition(Mode.Normal);
+    } else {
+      modeManager.transition(Mode.Insert);
+      input.focus();
+    }
+  };
+
   commandBar.onExecute((parsed) => {
-    modeManager.transition(Mode.Normal);
+    leaveCommandMode();
     void executeCommand(parsed);
   });
 
-  commandBar.onCancel(() => {
-    modeManager.transition(Mode.Normal);
-  });
+  commandBar.onCancel(leaveCommandMode);
 
   // Reply preview dismiss → cancel reply
   components.replyPreview.onDismiss(() => {
@@ -1231,11 +1294,13 @@ export function setupKeyboard(components: AppComponents): void {
       return;
     }
 
-    // Quick nav palette — Ctrl+K opens from any mode (no overlay open here).
+    // Command palette — Ctrl+K opens from any mode, vim or not (no overlay
+    // open here). Deliberately above the vim branches: it is the one entry
+    // point that must not depend on modal editing.
     if (e.ctrlKey && e.key === "k") {
       if (AppState.get("loggedIn")) {
         e.preventDefault();
-        quickNavPalette.show();
+        commandPalette.show();
         return;
       }
     }
@@ -1278,19 +1343,12 @@ export function setupKeyboard(components: AppComponents): void {
     // Only intercept when logged in
     if (!AppState.get("loggedIn")) return;
 
-    if (mode === Mode.Insert) {
+    const route = resolveModeRoute(mode, AppState.get("vimMode"));
+    if (route === "insert") {
       handleInsertKeydown(e, components);
       return;
     }
-
-    // When vim mode is disabled we should never reach Normal/Visual/Command,
-    // but guard just in case — treat everything as Insert.
-    if (!AppState.get("vimMode")) {
-      handleInsertKeydown(e, components);
-      return;
-    }
-
-    if (mode === Mode.Command) {
+    if (route === "command") {
       // Command bar handles its own keydown — nothing to do here
       return;
     }

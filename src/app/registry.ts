@@ -207,12 +207,16 @@ const ACTION_LITERALS = [
     palette: false,
   },
   {
-    id: "open-quick-nav",
-    description: "Jump to a room",
+    // The palette itself — excluded from its own listing, and from the `:`
+    // vocabulary, because reaching it already means you are in it.
+    id: "open-command-palette",
+    description: "Search rooms and commands",
     requires: ["session"],
     // Ctrl+K is currently hardcoded in keyboard.ts rather than resolved through
     // the keymap; #103 moves it onto this binding.
     bindings: [{ sequence: "Ctrl-k", context: "global" }],
+    chrome: ["drawer"],
+    palette: false,
   },
 
   // ── Message actions ────────────────────────────────────────────────────
@@ -297,6 +301,9 @@ const ACTION_LITERALS = [
     requires: ["room"],
     bindings: [{ sequence: "m", context: "global" }],
     chrome: ["room-header", "mobile-top-bar"],
+    // No `:` form, but a real user action — opt into the palette, which
+    // otherwise lists only entries that carry a command.
+    palette: true,
   },
   {
     id: "open-profile",
@@ -377,6 +384,9 @@ const ACTION_LITERALS = [
     requires: ["session"],
     bindings: [{ sequence: "S", context: "global" }],
     chrome: ["status-bar"],
+    // No `:` form, but a real user action — opt into the palette, which
+    // otherwise lists only entries that carry a command.
+    palette: true,
   },
 
   // ── Rooms ──────────────────────────────────────────────────────────────
@@ -487,6 +497,9 @@ const ACTION_LITERALS = [
     description: "Verify one of your other sessions",
     requires: ["session"],
     chrome: ["settings"],
+    // No `:` form, but a real user action — opt into the palette, which
+    // otherwise lists only entries that carry a command.
+    palette: true,
   },
   {
     id: "setup-cross-signing",
@@ -714,6 +727,19 @@ export function registerDefaultBindings(): void {
       keymapManager.map(binding.context, binding.sequence, entry.id, false);
     }
   }
+}
+
+/**
+ * Whether a command cannot run without an argument the caller must type.
+ *
+ * The args spec is the grammar: `<…>` is required, `[…]` is optional. So
+ * `:search [query]` and `:leave [room-id]` are runnable bare — they fall back
+ * to the open room or an empty query — while `:join <room-id|alias>` is not.
+ * The palette uses this to decide between running a command outright and
+ * prefilling the command bar for the user to finish (#98).
+ */
+export function requiresArguments(entry: ActionEntry): boolean {
+  return entry.command?.args?.includes("<") ?? false;
 }
 
 /** Whether a sequence is a modifier chord rather than a plain key run. */

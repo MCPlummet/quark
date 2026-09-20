@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { dispatchAction } from "./keyboard.js";
+import { dispatchAction, resolveModeRoute } from "./keyboard.js";
+import { Mode } from "../vim/mode.js";
 import { confirmAndLeaveRoom } from "./actions.js";
 import type { AppComponents } from "../ui/App.js";
 
@@ -31,5 +32,40 @@ describe("dispatchAction", () => {
   it("routes leave-room-confirm to the confirm-and-leave flow (#22)", () => {
     dispatchAction("leave-room-confirm", {} as AppComponents);
     expect(confirmAndLeaveRoom).toHaveBeenCalledOnce();
+  });
+});
+
+describe("resolveModeRoute", () => {
+  it("gives Insert mode to the compose handler", () => {
+    expect(resolveModeRoute(Mode.Insert, true)).toBe("insert");
+    expect(resolveModeRoute(Mode.Insert, false)).toBe("insert");
+  });
+
+  it("routes Normal and Visual to the vim keymap when vim mode is on", () => {
+    expect(resolveModeRoute(Mode.Normal, true)).toBe("vim");
+    expect(resolveModeRoute(Mode.Visual, true)).toBe("vim");
+  });
+
+  it("falls back to the compose handler for Normal/Visual with vim off", () => {
+    expect(resolveModeRoute(Mode.Normal, false)).toBe("insert");
+    expect(resolveModeRoute(Mode.Visual, false)).toBe("insert");
+  });
+
+  // The regression this function exists to pin (#98): the vim-off fallback used
+  // to be tested first, so with vim disabled every keystroke meant for the
+  // command bar was typed into the compose box. Harmless while the bar needed
+  // vim to open at all — but the palette opens it to finish a command that
+  // takes arguments, and on mobile vim is always off.
+  it("gives the command bar its keys regardless of vim mode", () => {
+    expect(resolveModeRoute(Mode.Command, true)).toBe("command");
+    expect(resolveModeRoute(Mode.Command, false)).toBe("command");
+  });
+});
+
+describe("dispatchAction — command palette", () => {
+  it("opens the palette", () => {
+    const show = vi.fn();
+    dispatchAction("open-command-palette", { commandPalette: { show } } as unknown as AppComponents);
+    expect(show).toHaveBeenCalledOnce();
   });
 });

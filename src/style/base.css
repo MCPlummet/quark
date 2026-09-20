@@ -320,6 +320,8 @@ body.quark-modal-open .input-bar__field {
 }
 
 .room-list__header {
+  display: flex;
+  align-items: center;
   padding: 4px 8px;
   color: var(--roomlist-muted);
   font-size: calc(var(--font-size) - 2px);
@@ -327,6 +329,40 @@ body.quark-modal-open .input-bar__field {
   letter-spacing: 0.05em;
   border-bottom: var(--border-width) solid var(--border-color);
   flex-shrink: 0;
+}
+
+/* Pushes the palette button to the right edge in both the desktop header and
+ * the mobile one, which is already a flex row with a ◀ pseudo-element. */
+.room-list__header-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-list__header-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  color: var(--roomlist-muted);
+  font-family: var(--font-family);
+  font-size: calc(var(--font-size) + 1px);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.room-list__header-btn:hover {
+  color: var(--accent-primary);
+}
+
+/* Comfortable tap target in the drawer. */
+body.quark-mobile .room-list__header-btn {
+  font-size: calc(var(--font-size) + 4px);
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--accent-primary);
 }
 
 .room-list__scroll {
@@ -5615,7 +5651,7 @@ body.quark-mobile .profile-edit-dialog__panel {
 
 /* ── Quick navigation palette ─────────────────────────────────────────────── */
 
-.quick-nav-palette {
+.command-palette {
   position: fixed;
   inset: 0;
   display: flex;
@@ -5627,7 +5663,7 @@ body.quark-mobile .profile-edit-dialog__panel {
   animation: gif-picker-fade-in 0.1s ease;
 }
 
-.quick-nav-palette__panel {
+.command-palette__panel {
   display: flex;
   flex-direction: column;
   width: min(520px, calc(100vw - 40px));
@@ -5638,7 +5674,7 @@ body.quark-mobile .profile-edit-dialog__panel {
   overflow: hidden;
 }
 
-.quick-nav-palette__search {
+.command-palette__search {
   background: transparent;
   border: none;
   border-bottom: var(--border-width) solid var(--border-color);
@@ -5650,28 +5686,28 @@ body.quark-mobile .profile-edit-dialog__panel {
   flex-shrink: 0;
 }
 
-.quick-nav-palette__search::placeholder {
+.command-palette__search::placeholder {
   color: var(--roomlist-muted);
   opacity: 0.6;
 }
 
-.quick-nav-palette__search:focus {
+.command-palette__search:focus {
   border-bottom-color: var(--accent-primary);
 }
 
-.quick-nav-palette__list {
+.command-palette__list {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
 }
 
-.quick-nav-palette__empty {
+.command-palette__empty {
   padding: 12px;
   color: var(--roomlist-muted);
   font-style: italic;
 }
 
-.quick-nav-palette__item {
+.command-palette__item {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -5680,19 +5716,19 @@ body.quark-mobile .profile-edit-dialog__panel {
   cursor: pointer;
 }
 
-.quick-nav-palette__item:last-child {
+.command-palette__item:last-child {
   border-bottom: none;
 }
 
-.quick-nav-palette__item:hover {
+.command-palette__item:hover {
   background-color: var(--surface-hover);
 }
 
-.quick-nav-palette__item--focused {
+.command-palette__item--focused {
   background-color: var(--surface-hover-strong);
 }
 
-.quick-nav-palette__name {
+.command-palette__name {
   color: var(--fg);
   font-size: var(--font-size);
   white-space: nowrap;
@@ -5701,11 +5737,11 @@ body.quark-mobile .profile-edit-dialog__panel {
   min-width: 0;
 }
 
-.quick-nav-palette__item--focused .quick-nav-palette__name {
+.command-palette__item--focused .command-palette__name {
   color: var(--accent-primary);
 }
 
-.quick-nav-palette__alias {
+.command-palette__alias {
   color: var(--roomlist-muted);
   font-size: calc(var(--font-size) - 1px);
   white-space: nowrap;
@@ -5715,7 +5751,47 @@ body.quark-mobile .profile-edit-dialog__panel {
   min-width: 0;
 }
 
-.quick-nav-palette__footer {
+/* Section heading between the Rooms and Commands runs. Not a navigable row —
+ * the SelectionList only ever sees .command-palette__item. */
+.command-palette__section {
+  padding: 5px 12px 3px;
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) - 2px);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background-color: var(--surface-dim);
+  border-bottom: var(--border-width) solid var(--border-color);
+  position: sticky;
+  top: 0;
+}
+
+.command-palette__desc {
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) - 1px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* The live keybinding, pinned right so the column reads as a shortcut list. */
+.command-palette__hint {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) - 2px);
+  padding: 1px 5px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 3px;
+}
+
+.command-palette__item--focused .command-palette__hint {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.command-palette__footer {
   padding: 4px 10px;
   border-top: var(--border-width) solid var(--border-color);
   color: var(--roomlist-muted);
