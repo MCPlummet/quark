@@ -256,7 +256,7 @@ const ACTION_LITERALS = [
     description: "Search rooms and commands",
     requires: ["session"],
     bindings: [{ sequence: "Ctrl-k", context: "global" }],
-    chrome: ["drawer"],
+    chrome: ["space-strip"],
     palette: false,
   },
 

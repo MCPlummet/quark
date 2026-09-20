@@ -1140,10 +1140,10 @@ export function setupKeyboard(components: AppComponents): void {
   void loadQuarkrc().then(applyRcDirectives).catch(() => { /* no rc file is fine */ });
 
   // Wire quick nav palette → selectRoom
-  // Visible palette affordance in the room-list header — present on desktop and
-  // inside the mobile drawer, so the palette does not depend on knowing Ctrl+K
-  // or discovering the pull-down gesture.
-  roomList.onPaletteClick(() => commandPalette.show());
+  // Visible palette affordance in the space strip, beside the other app-level
+  // controls. The strip is inside the drawer on mobile, so the palette still
+  // does not depend on knowing Ctrl+K or finding the pull-down gesture.
+  spaceStrip.onSearchClick(() => commandPalette.show());
   roomList.onDirectoryClick(() => openRoomDirectory());
 
   commandPalette.onSelectRoom((roomId) => {

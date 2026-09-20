@@ -33,8 +33,6 @@ export class RoomList {
   private _onSelect: ((id: string) => void) | null = null;
   private _onContextMenu: ((roomId: string, x: number, y: number) => void) | null = null;
   private _onSectionContextMenu: ((spaceId: string, x: number, y: number) => void) | null = null;
-  private _paletteBtnEl: HTMLButtonElement;
-  private _onPaletteClick: (() => void) | null = null;
   private _directoryBtnEl: HTMLButtonElement;
   private _onDirectoryClick: (() => void) | null = null;
 
@@ -49,21 +47,6 @@ export class RoomList {
     headerLabel.className = "room-list__header-label";
     headerLabel.textContent = "Rooms";
     this._headerEl.appendChild(headerLabel);
-
-    // Visible entry point to the command palette (#98). Ctrl+K is not
-    // discoverable and the mobile pull-down gesture is less so; this sits in
-    // the one piece of chrome present on both desktop and inside the mobile
-    // drawer. The click is deliberately left to bubble: on mobile the header
-    // doubles as the drawer's close target, and closing it is exactly what
-    // should happen as the palette takes over the screen.
-    this._paletteBtnEl = document.createElement("button");
-    this._paletteBtnEl.type = "button";
-    this._paletteBtnEl.className = "room-list__header-btn";
-    this._paletteBtnEl.textContent = "⌕";
-    this._paletteBtnEl.title = "Search rooms and commands (Ctrl+K)";
-    this._paletteBtnEl.setAttribute("aria-label", "Search rooms and commands");
-    this._paletteBtnEl.addEventListener("click", () => this._onPaletteClick?.());
-    this._headerEl.appendChild(this._paletteBtnEl);
 
     // Joining a room was `:join` or `:directory` and nothing else — the
     // directory dialog had no affordance anywhere in the UI (#102).
@@ -112,11 +95,6 @@ export class RoomList {
   /** Header element exposed so callers can wire mobile drawer-close behaviour. */
   getHeaderElement(): HTMLElement {
     return this._headerEl;
-  }
-
-  /** Wire the header's command-palette button. */
-  onPaletteClick(handler: () => void): void {
-    this._onPaletteClick = handler;
   }
 
   /** Wire the header's room-directory button. */

@@ -34,8 +34,10 @@ describe("pointer reachability gap-fills", () => {
     expect(actionById("open-directory")?.chrome).toContain("drawer");
   });
 
-  it("declares the palette reachable from the drawer", () => {
-    expect(actionById("open-command-palette")?.chrome).toContain("drawer");
+  // The button moved out of the room-list header and into the space strip,
+  // which is inside the drawer on mobile — so it stays touch-reachable.
+  it("declares the palette reachable from the space strip", () => {
+    expect(actionById("open-command-palette")?.chrome).toContain("space-strip");
   });
 });
 

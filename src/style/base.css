@@ -331,7 +331,7 @@ body.quark-modal-open .input-bar__field {
   flex-shrink: 0;
 }
 
-/* Pushes the palette button to the right edge in both the desktop header and
+/* Pushes the directory button to the right edge in both the desktop header and
  * the mobile one, which is already a flex row with a ◀ pseudo-element. */
 .room-list__header-label {
   min-width: 0;
@@ -6815,6 +6815,10 @@ body.quark-mobile input[type="search"],
 body.quark-mobile input[type="password"],
 body.quark-mobile textarea {
   font-size: max(16px, var(--font-size));
+}
+
+.space-strip__search-btn {
+  font-size: calc(var(--font-size) + 4px);
 }
 
 body.quark-mobile .space-strip__item,
