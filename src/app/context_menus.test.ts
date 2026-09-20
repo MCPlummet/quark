@@ -126,3 +126,31 @@ describe("buildMenu", () => {
     expect(shape(entries)).toEqual(["Open"]);
   });
 });
+
+// #79: mute and unmute are separate registry entries at the same slot, so the
+// caller offers exactly the one that applies. The old room menu had neither,
+// and the old info dialog was the only place either could be reached.
+describe("room menu mute rows", () => {
+  const base: MenuHandlers = { "open-room": noop };
+
+  it("offers Mute for an unmuted room", () => {
+    const rows = shape(buildMenu("room", ctx(), { ...base, "mute-room": noop }));
+    expect(rows).toContain("Mute");
+    expect(rows).not.toContain("Unmute");
+  });
+
+  it("offers Unmute for a muted room", () => {
+    const rows = shape(buildMenu("room", ctx(), { ...base, "unmute-room": noop }));
+    expect(rows).toContain("Unmute");
+    expect(rows).not.toContain("Mute");
+  });
+
+  it("puts Leave below them, on its own", () => {
+    const rows = shape(buildMenu("room", ctx(), {
+      ...base,
+      "mute-room": noop,
+      "leave-room-confirm": noop,
+    }));
+    expect(rows).toEqual(["Open", "──", "Mute", "──", "Leave room"]);
+  });
+});

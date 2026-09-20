@@ -23,14 +23,13 @@ import { QuickReactPicker } from "./QuickReactPicker.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { ProfileEditDialog } from "./ProfileEditDialog.js";
 import { SettingsDialog } from "./SettingsDialog.js";
-import { RoomInfoDialog } from "./RoomInfoDialog.js";
 import { PinnedMessagesDialog } from "./PinnedMessagesDialog.js";
 import { SearchDialog } from "./SearchDialog.js";
 import { RoomDirectoryDialog } from "./RoomDirectoryDialog.js";
 import { ImageLightbox } from "./ImageLightbox.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { MentionPreview } from "./MentionPreview.js";
-import { RoomSettingsDialog } from "./RoomSettingsDialog.js";
+import { RoomDialog } from "./RoomDialog.js";
 import { SpaceSettingsDialog } from "./SpaceSettingsDialog.js";
 import { DebugViewer } from "./DebugViewer.js";
 import { RevisionHistoryDialog } from "./RevisionHistoryDialog.js";
@@ -78,14 +77,13 @@ export interface AppComponents {
   profileDialog: ProfileDialog;
   profileEditDialog: ProfileEditDialog;
   settingsDialog: SettingsDialog;
-  roomInfoDialog: RoomInfoDialog;
   pinnedMessagesDialog: PinnedMessagesDialog;
   searchDialog: SearchDialog;
   roomDirectoryDialog: RoomDirectoryDialog;
   imageLightbox: ImageLightbox;
   commandPalette: CommandPalette;
   mentionPreview: MentionPreview;
-  roomSettingsDialog: RoomSettingsDialog;
+  roomDialog: RoomDialog;
   spaceSettingsDialog: SpaceSettingsDialog;
   debugViewer: DebugViewer;
   revisionHistoryDialog: RevisionHistoryDialog;
@@ -139,14 +137,13 @@ export function mountApp(container: HTMLElement): AppComponents {
   const profileDialog = new ProfileDialog();
   const profileEditDialog = new ProfileEditDialog();
   const settingsDialog = new SettingsDialog();
-  const roomInfoDialog = new RoomInfoDialog();
   const pinnedMessagesDialog = new PinnedMessagesDialog();
   const searchDialog = new SearchDialog(timeline);
   const roomDirectoryDialog = new RoomDirectoryDialog();
   const imageLightbox = new ImageLightbox();
   const commandPalette = new CommandPalette();
   const mentionPreview = new MentionPreview();
-  const roomSettingsDialog = new RoomSettingsDialog();
+  const roomDialog = new RoomDialog();
   const spaceSettingsDialog = new SpaceSettingsDialog();
   const debugViewer = new DebugViewer();
   const revisionHistoryDialog = new RevisionHistoryDialog();
@@ -341,13 +338,12 @@ export function mountApp(container: HTMLElement): AppComponents {
   mountOverlay(profileDialog.getElement());
   mountOverlay(profileEditDialog.getElement());
   mountOverlay(settingsDialog.getElement());
-  mountOverlay(roomInfoDialog.getElement());
   mountOverlay(pinnedMessagesDialog.getElement());
   mountOverlay(searchDialog.getElement());
   mountOverlay(roomDirectoryDialog.getElement());
   mountOverlay(imageLightbox.getElement());
   mountOverlay(commandPalette.getElement());
-  mountOverlay(roomSettingsDialog.getElement());
+  mountOverlay(roomDialog.getElement());
   mountOverlay(spaceSettingsDialog.getElement());
   mountOverlay(debugViewer.getElement());
   mountOverlay(revisionHistoryDialog.getElement());
@@ -377,14 +373,13 @@ export function mountApp(container: HTMLElement): AppComponents {
     profileDialog,
     profileEditDialog,
     settingsDialog,
-    roomInfoDialog,
     pinnedMessagesDialog,
     searchDialog,
     roomDirectoryDialog,
     imageLightbox,
     commandPalette,
     mentionPreview,
-    roomSettingsDialog,
+    roomDialog,
     spaceSettingsDialog,
     debugViewer,
     revisionHistoryDialog,

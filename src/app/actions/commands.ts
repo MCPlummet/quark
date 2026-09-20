@@ -27,6 +27,8 @@ import {
   type AvailabilityContext,
 } from "../registry.js";
 import { currentAvailability } from "../availability.js";
+import { AppState } from "../state.js";
+import { muteRoom, unmuteRoom } from "../notifications.js";
 
 import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js";
 import packageJson from "../../../package.json";
@@ -56,7 +58,13 @@ import { runUpdateCheck } from "../update_check.js";
  * where no argument can be supplied — it is only the typed form that can name a
  * target the app is not currently looking at.
  */
-const ROOM_ARG_COMMANDS = new Set(["leave-room", "convert-to-dm", "convert-to-room"]);
+const ROOM_ARG_COMMANDS = new Set([
+  "leave-room",
+  "convert-to-dm",
+  "convert-to-room",
+  "mute-room",
+  "unmute-room",
+]);
 
 /** "Usage: :kick <user-id> [reason]", built from the registry's args spec. */
 function usageError(entry: ActionEntry): void {
@@ -226,6 +234,26 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
     case "check-for-updates": {
       showToast("Checking for updates…", "info");
       await runUpdateCheck(getComponents(), true);
+      break;
+    }
+
+    case "mute-room":
+    case "unmute-room": {
+      // muteRoom/unmuteRoom raise their own toast on a ruleset write the server
+      // did not take, so there is nothing to report here beyond the outcome.
+      const outcome = entry.id === "mute-room"
+        ? await muteRoom(roomId)
+        : await unmuteRoom(roomId);
+      if (outcome.synced) {
+        const muted = entry.id === "mute-room";
+        AppState.set(
+          "roomListCache",
+          AppState.get("roomListCache").map((r) =>
+            r.room_id === roomId ? { ...r, muted } : r,
+          ),
+        );
+        showSuccess(muted ? "Room muted" : "Room unmuted");
+      }
       break;
     }
 

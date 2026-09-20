@@ -451,6 +451,32 @@ const ACTION_LITERALS = [
     palette: false,
   },
   {
+    // Mute and unmute are separate entries rather than one toggle so each can
+    // carry its own `:` command and its own menu label. Only one is ever
+    // applicable, which the menus express by the caller passing a handler for
+    // just that one — the same mechanism "Mark as read" uses.
+    id: "mute-room",
+    description: "Silence notifications for this room",
+    requires: ["room"],
+    command: { name: "mute", args: "[room-id]" },
+    menus: [
+      { surface: "room", label: "Mute", group: 3, order: 2 },
+      { surface: "overflow", label: "Mute room", group: 2, order: 2 },
+    ],
+    chrome: ["settings"],
+  },
+  {
+    id: "unmute-room",
+    description: "Restore notifications for this room",
+    requires: ["room"],
+    command: { name: "unmute", args: "[room-id]" },
+    menus: [
+      { surface: "room", label: "Unmute", group: 3, order: 2 },
+      { surface: "overflow", label: "Unmute room", group: 2, order: 2 },
+    ],
+    chrome: ["settings"],
+  },
+  {
     id: "open-dm",
     description: "Open or start a direct message",
     requires: ["session"],

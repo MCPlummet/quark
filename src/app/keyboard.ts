@@ -75,6 +75,7 @@ import { _shortcodeToMxc } from "./actions/context.js";
 import { onMobileChange, isMobile } from "./mobile.js";
 import { effectiveSendOnEnter, shouldShowSendButton } from "./send_behavior.js";
 import { showToast } from "../ui/NotificationToast.js";
+import { muteRoom as muteRoomAction, unmuteRoom as unmuteRoomAction } from "./notifications.js";
 import { filterShortcodes, type ShortcodeEntry } from "../ui/ShortcodePreview.js";
 import { filterMembers, type MentionEntry } from "../ui/MentionPreview.js";
 import { getEmojiPacks } from "../ipc/emoji.js";
@@ -1017,6 +1018,12 @@ export function setupKeyboard(components: AppComponents): void {
       "mark-room-read": room && room.unread_count > 0
         ? () => void selectRoom(roomId)
         : undefined,
+      // Exactly one of these is applicable, so exactly one gets a handler.
+      // `muted` is undefined before the room has synced, which reads as unmuted
+      // — the same fallback the Info tab uses.
+      "mute-room": room?.muted ? undefined : () => void muteRoomAction(roomId),
+      "unmute-room": room?.muted ? () => void unmuteRoomAction(roomId) : undefined,
+      "leave-room-confirm": () => void selectRoom(roomId).then(() => confirmAndLeaveRoom()),
     }));
   });
 
@@ -1037,6 +1044,15 @@ export function setupKeyboard(components: AppComponents): void {
       "open-room-info": () => void openRoomInfo(),
       "toggle-members": () => toggleMemberList(),
       "help": () => components.helpDialog.show(),
+      ...(() => {
+        const id = AppState.get("currentRoomId");
+        const current = AppState.get("roomListCache").find((r) => r.room_id === id);
+        return id && current?.muted
+          ? { "unmute-room": () => void unmuteRoomAction(id) }
+          : id
+            ? { "mute-room": () => void muteRoomAction(id) }
+            : {};
+      })(),
     }));
   });
 
