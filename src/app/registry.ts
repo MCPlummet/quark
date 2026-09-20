@@ -256,10 +256,20 @@ const ACTION_LITERALS = [
     palette: false,
   },
   {
+    // Mobile only, and expressed by the caller withholding the handler off
+    // mobile rather than by a requirement: on desktop you select text by
+    // dragging, and the row would be noise.
+    id: "select-message-text",
+    description: "Select text within the message",
+    requires: ["message"],
+    menus: [{ surface: "message", label: "Select text", group: 2, order: 2 }],
+    palette: false,
+  },
+  {
     id: "view-raw-event",
     description: "View the selected message's source event",
     requires: ["message"],
-    menus: [{ surface: "message", label: "View raw event", group: 2, order: 2 }],
+    menus: [{ surface: "message", label: "View raw event", group: 2, order: 3 }],
     palette: false,
   },
   {

@@ -55,6 +55,7 @@ import { resolveComposeSubmit } from "./compose_submit.js";
 import {
   enterMessageTextSelect,
   enterComposeTextSelect,
+  selectMessageTextForTouch,
   exitTextSelect,
   copyTextSelection,
   quoteTextSelectionIntoCompose,
@@ -71,7 +72,7 @@ import { getAppConfig, setAppConfig } from "../ipc/app_config.js";
 import type { KeyContext } from "../vim/keybindings.js";
 import { BUILTIN_EMOJI } from "../data/unicode-emoji.js";
 import { _shortcodeToMxc } from "./actions/context.js";
-import { onMobileChange } from "./mobile.js";
+import { onMobileChange, isMobile } from "./mobile.js";
 import { effectiveSendOnEnter, shouldShowSendButton } from "./send_behavior.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { filterShortcodes, type ShortcodeEntry } from "../ui/ShortcodePreview.js";
@@ -979,6 +980,14 @@ export function setupKeyboard(components: AppComponents): void {
       "copy-message": () => {
         void navigator.clipboard.writeText(evt?.body ?? "");
       },
+      // Mobile only. On desktop you select text by dragging, so the row would
+      // be noise; withholding the handler is what keeps it out of the menu.
+      "select-message-text": isMobile()
+        ? () => {
+            const bodyEl = timeline.getMessageBodyElementById(eventId);
+            if (bodyEl) selectMessageTextForTouch(bodyEl);
+          }
+        : undefined,
       "view-raw-event": () => void openDebugViewerForEvent(eventId),
       "edit": () => {
         // Prefer the MessageData body (reflects applied edits) over the raw

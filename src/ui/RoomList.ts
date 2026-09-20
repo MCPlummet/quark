@@ -1,6 +1,7 @@
 // Room list panel
 
 import { attachResizeHandle } from "./ResizeHandle.js";
+import { attachLongPress } from "../app/long_press.js";
 
 export interface RoomEntry {
   id: string;
@@ -71,6 +72,25 @@ export class RoomList {
     this._el.appendChild(this._scrollEl);
 
     this._el.addEventListener("keydown", (e) => this._handleKeydown(e));
+
+    // Touch path to the same menus `contextmenu` gives a mouse. Attached to the
+    // scroll container rather than to each row, which is rebuilt on every
+    // render. Rooms and subspace section labels share the gesture and are told
+    // apart by which one the press resolved to.
+    attachLongPress(this._scrollEl, {
+      resolve: (target) => {
+        const label = target.closest<HTMLElement>(".room-list__section-label");
+        if (label?.dataset.sectionSpaceId) return `section:${label.dataset.sectionSpaceId}`;
+        const item = target.closest<HTMLElement>(".room-list__item");
+        return item?.dataset.roomId ? `room:${item.dataset.roomId}` : null;
+      },
+      onLongPress: (id, x, y) => {
+        const [kind, ...rest] = id.split(":");
+        const value = rest.join(":");
+        if (kind === "section") this._onSectionContextMenu?.(value, x, y);
+        else this._onContextMenu?.(value, x, y);
+      },
+    });
 
     // Drag-to-resize handle at the right edge
     attachResizeHandle(this._el, "--room-list-width", "right", 120, 500);
@@ -176,6 +196,10 @@ export class RoomList {
           if (section.spaceId) {
             const spaceId = section.spaceId;
             label.style.cursor = "context-menu";
+            // Recorded on the element so the container-level long press can
+            // resolve it; labels are rebuilt on every render, so a per-label
+            // gesture listener would accumulate.
+            label.dataset.sectionSpaceId = spaceId;
             label.addEventListener("contextmenu", (e) => {
               e.preventDefault();
               this._onSectionContextMenu?.(spaceId, e.clientX, e.clientY);

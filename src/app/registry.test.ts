@@ -159,6 +159,7 @@ describe("menuEntries", () => {
       "react",
       "open-thread",
       "copy-message",
+      "select-message-text",
       "view-raw-event",
       "edit",
       "redact",

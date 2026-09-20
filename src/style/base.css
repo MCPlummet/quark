@@ -6927,6 +6927,27 @@ body.quark-mobile .status-bar {
   display: none;
 }
 
+/* Long press means "open the action sheet", and nothing else (#100).
+ *
+ * The engine starts its own text selection on the same press, so the sheet used
+ * to appear on top of a blue highlight the user never asked for. `-webkit-touch-
+ * callout: none` (set globally) suppresses iOS's callout but not the selection
+ * itself, so it has to be refused here.
+ *
+ * Copying a fragment is not lost — the sheet's "Select text" row opts this one
+ * body back in via .message__body--selectable and hands it to the platform,
+ * callout included, which is also where the drag handles come from. */
+body.quark-mobile .message__body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body.quark-mobile .message__body--selectable {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 /* Hover-driven message action bar is meaningless on touch; replaced by
  * long-press → context menu wired up in Timeline.ts. */
 body.quark-mobile .message:hover .message__actions {

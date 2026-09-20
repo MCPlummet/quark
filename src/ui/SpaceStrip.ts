@@ -2,6 +2,7 @@
 
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { PSEUDO_SPACES, isPseudoSpace } from "../app/pseudo_spaces.js";
+import { attachLongPress } from "../app/long_press.js";
 
 export interface SpaceItem {
   id: string;
@@ -43,6 +44,19 @@ export class SpaceStrip {
     this._el.className = "space-strip";
     this._el.setAttribute("role", "listbox");
     this._el.setAttribute("aria-label", "Spaces");
+
+    // Touch path to the space context menu (#99). Container-level, since items
+    // are rebuilt on every render. Pseudo-spaces (Home, DMs) have no menu, and
+    // carry no data-space-id-backed entry here for the same reason the
+    // right-click handler skips them.
+    attachLongPress(this._el, {
+      resolve: (target) => {
+        const item = target.closest<HTMLElement>(".space-strip__item");
+        const id = item?.dataset.spaceId;
+        return id && !isPseudoSpace(id) ? id : null;
+      },
+      onLongPress: (spaceId, x, y) => this._onContextMenu?.(spaceId, x, y),
+    });
 
   }
 
