@@ -58,6 +58,7 @@ import {
   _downloadMemberAvatars,
   ensureSenderAvatarDownloaded,
   isInContextView,
+  setContextView,
   setMediaCacheLimit,
 } from "./context.js";
 import { closeThread } from "./threads.js";
@@ -257,7 +258,7 @@ export async function selectRoom(
   paginationState.prevBatch = null;
   paginationState.nextBatch = null;
   paginationState.reachedStart = false;
-  paginationState.inContextView = false;
+  setContextView(false);
   paginationState.contextFocusEventId = null;
   paginationState.paginationLoading = false;
   paginationState.paginationLoadingForward = false;
@@ -529,7 +530,7 @@ async function loadMoreMessages(): Promise<void> {
   // the raw `getTimeline`/`prevBatch` token path; the live timeline uses the
   // cache-backed `loadOlderTimeline`/`reachedStart` path. They're mutually
   // exclusive — `inContextView` is fixed for the duration of this load.
-  const inCtx = paginationState.inContextView;
+  const inCtx = isInContextView();
   if (inCtx) {
     if (!paginationState.prevBatch) return;
   } else if (paginationState.reachedStart) {
@@ -609,7 +610,7 @@ async function loadMoreMessages(): Promise<void> {
  * view so subsequent sync messages append normally.
  */
 async function loadMoreMessagesForward(): Promise<void> {
-  if (paginationState.paginationLoadingForward || !paginationState.inContextView || !paginationState.nextBatch) return;
+  if (paginationState.paginationLoadingForward || !isInContextView() || !paginationState.nextBatch) return;
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
@@ -655,8 +656,7 @@ async function loadMoreMessagesForward(): Promise<void> {
     // Reaching `next_batch === null` means the live tail has been reached.
     // Drop out of context view so future sync messages append at the bottom.
     if (paginationState.nextBatch === null) {
-      paginationState.inContextView = false;
-      timeline.setContextView(false);
+      setContextView(false);
     }
   } catch (err) {
     showError(`Failed to load more messages: ${err instanceof Error ? err.message : String(err)}`);
@@ -706,7 +706,7 @@ function _renderContextPage(
 
   paginationState.prevBatch = ctx.prev_batch;
   paginationState.nextBatch = ctx.next_batch;
-  paginationState.inContextView = ctx.next_batch !== null;
+  setContextView(ctx.next_batch !== null);
 
   AppState.set("currentTimeline", ctx.events);
   const threadRootCounts = _buildThreadRootCounts(ctx.events);
@@ -722,7 +722,6 @@ function _renderContextPage(
   } else {
     timeline.setMessages(messages, { preserveScroll: true });
   }
-  timeline.setContextView(paginationState.inContextView);
 
   _downloadMessageImages(ctx.events, timeline);
   _downloadInlineEmoji(timeline);
@@ -781,7 +780,7 @@ export async function jumpToLatest(): Promise<void> {
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
-  if (!paginationState.inContextView) {
+  if (!isInContextView()) {
     // Not in context view — just scroll to the bottom of what's loaded
     timeline.selectLast();
     return;
@@ -793,7 +792,7 @@ export async function jumpToLatest(): Promise<void> {
     paginationState.prevBatch = null;
     paginationState.nextBatch = null;
     paginationState.reachedStart = page.reached_start;
-    paginationState.inContextView = false;
+    setContextView(false);
     paginationState.contextFocusEventId = null;
 
     AppState.set("currentTimeline", page.events);
@@ -802,7 +801,6 @@ export async function jumpToLatest(): Promise<void> {
     const mainEvents = _applyEdits(page.events).filter((e) => !e.thread_root);
     const messages = mainEvents.map((e) => timelineEventToMessage(e, page.events, threadRootCounts));
     timeline.setMessages(messages);
-    timeline.setContextView(false);
     timeline.selectLast();
 
     _downloadMessageImages(page.events, timeline);
