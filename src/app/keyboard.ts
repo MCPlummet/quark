@@ -14,6 +14,7 @@ import {
   cancelReply,
   openEmojiPicker,
   openGifPicker,
+  openStickerPicker,
   openProfileDialog,
   openSettings,
   openRoomInfo,
@@ -45,6 +46,7 @@ import {
   loadTheme,
   configThemeOverridesRc,
   selectRoom,
+  markRoomAsRead,
   confirmAndLeaveRoom,
   startVerification,
   setupCrossSigning,
@@ -75,6 +77,7 @@ import { _shortcodeToMxc } from "./actions/context.js";
 import { onMobileChange, isMobile } from "./mobile.js";
 import { effectiveSendOnEnter, shouldShowSendButton } from "./send_behavior.js";
 import { showToast } from "../ui/NotificationToast.js";
+import { runUpdateCheck } from "./update_check.js";
 import { muteRoom as muteRoomAction, unmuteRoom as unmuteRoomAction } from "./notifications.js";
 import { filterShortcodes, type ShortcodeEntry } from "../ui/ShortcodePreview.js";
 import { filterMembers, type MentionEntry } from "../ui/MentionPreview.js";
@@ -323,6 +326,23 @@ export function dispatchAction(action: string, components: AppComponents): void 
 
     case "open-debug":
       void openDebugViewer();
+      break;
+
+    case "open-directory":
+      openRoomDirectory();
+      break;
+
+    case "open-sticker-picker":
+      modeManager.transition(Mode.Insert);
+      input.focus();
+      openStickerPicker();
+      break;
+
+    // Settings → About's [check now]. The `:update` path goes through
+    // executeCommand; this is the same work reached from a button.
+    case "check-for-updates":
+      showToast("Checking for updates…", "info");
+      void runUpdateCheck(components, true);
       break;
 
     case "edit-status":
@@ -999,6 +1019,13 @@ export function setupKeyboard(components: AppComponents): void {
   // no handler is dropped, which is how "Mark as read" appears on unread rooms
   // alone without the registry needing to model that.
 
+  // The hover bar's ⋯ button opens the same menu right-click and long-press do,
+  // so all three routes to a message offer the same capabilities.
+  document.addEventListener("quark:msg-menu" as keyof DocumentEventMap, (e: Event) => {
+    const { eventId, x, y } = (e as CustomEvent<{ eventId: string; x: number; y: number }>).detail;
+    if (eventId) timeline.emitContextMenu(eventId, x, y);
+  });
+
   // Right-click / long-press context menu for messages
   timeline.onContextMenu((eventId, x, y) => {
     const events = AppState.get("currentTimeline");
@@ -1058,9 +1085,11 @@ export function setupKeyboard(components: AppComponents): void {
       "open-room": () => void selectRoom(roomId),
       "open-room-settings": () => void selectRoom(roomId).then(() => openRoomSettings()),
       "open-room-info": () => void selectRoom(roomId).then(() => openRoomInfo()),
-      // Unread rooms only; see the note above buildMenu's handler map.
+      // Unread rooms only; see the note above buildMenu's handler map. Marks
+      // read *without* opening — it used to call selectRoom, so the item both
+      // did the wrong thing and did nothing at all on the open room (#102).
       "mark-room-read": room && room.unread_count > 0
-        ? () => void selectRoom(roomId)
+        ? () => markRoomAsRead(roomId)
         : undefined,
       // Exactly one of these is applicable, so exactly one gets a handler.
       // `muted` is undefined before the room has synced, which reads as unmuted
@@ -1115,6 +1144,7 @@ export function setupKeyboard(components: AppComponents): void {
   // inside the mobile drawer, so the palette does not depend on knowing Ctrl+K
   // or discovering the pull-down gesture.
   roomList.onPaletteClick(() => commandPalette.show());
+  roomList.onDirectoryClick(() => openRoomDirectory());
 
   commandPalette.onSelectRoom((roomId) => {
     void selectRoom(roomId);

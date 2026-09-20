@@ -317,6 +317,7 @@ const ACTION_LITERALS = [
     id: "open-emoji-picker",
     description: "Open the emoji / sticker picker",
     requires: ["room"],
+    command: { name: "emoji" },
     bindings: [{ sequence: "Ctrl-e", context: "insert" }],
     chrome: ["compose"],
     palette: true,
@@ -325,7 +326,19 @@ const ACTION_LITERALS = [
     id: "open-gif-picker",
     description: "Open the GIF picker",
     requires: ["room"],
+    command: { name: "gif" },
     bindings: [{ sequence: "Ctrl-g", context: "insert" }],
+    chrome: ["compose"],
+    palette: true,
+  },
+  {
+    // openStickerPicker existed and was called from nowhere. DESIGN.md has
+    // documented `:stickers` all along, so this is the caller it was missing
+    // rather than dead code to delete.
+    id: "open-sticker-picker",
+    description: "Browse sticker packs",
+    requires: ["room"],
+    command: { name: "stickers" },
     chrome: ["compose"],
     palette: true,
   },
@@ -434,6 +447,7 @@ const ACTION_LITERALS = [
     description: "Browse the public room directory",
     requires: ["session"],
     command: { name: "directory" },
+    chrome: ["drawer"],
   },
   {
     id: "open-debug",

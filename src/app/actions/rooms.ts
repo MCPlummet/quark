@@ -186,6 +186,39 @@ export function swapComposeDraft(prevRoom: string | null, nextRoom: string): voi
 /**
  * Select a room: fetch timeline, update header, mark read.
  */
+/**
+ * Send the read markers for a room: the receipt other devices see, and the
+ * local notification dismissal they do not.
+ *
+ * Split out of selectRoom so "Mark as read" can be a real action. The room-list
+ * menu item used to call selectRoom, which meant it *opened* the room — a no-op
+ * if it was already open, and never what the label promised (#102).
+ */
+export function sendReadMarkers(roomId: string): void {
+  void markRoomRead(roomId).catch(() => {/* non-fatal: badge already cleared locally */});
+  // Dismiss this room's OS notifications immediately; the read-receipt echo
+  // from markRoomRead covers other devices, this covers the local one.
+  void clearRoomNotificationsIpc(roomId).catch(() => {/* non-fatal */});
+}
+
+/**
+ * Mark a room read without opening it.
+ *
+ * Clears the badge in the cache and in the list (updateRoomBadge, not setRooms,
+ * so the active space filter survives) and sends the markers.
+ */
+export function markRoomAsRead(roomId: string): void {
+  const { roomList } = getComponents();
+  AppState.set(
+    "roomListCache",
+    AppState.get("roomListCache").map((r) =>
+      r.room_id === roomId ? { ...r, unread_count: 0, notification_count: 0 } : r,
+    ),
+  );
+  roomList.updateRoomBadge(roomId, 0, 0);
+  sendReadMarkers(roomId);
+}
+
 export async function selectRoom(
   roomId: string,
   opts: { keepPanelFocus?: boolean } = {},
@@ -255,10 +288,7 @@ export async function selectRoom(
     );
     roomList.updateRoomBadge(roomId, 0, 0);
   }
-  void markRoomRead(roomId).catch(() => {/* non-fatal: badge already cleared locally */});
-  // Dismiss this room's OS notifications immediately; the read-receipt echo
-  // from markRoomRead covers other devices, this covers the local one.
-  void clearRoomNotificationsIpc(roomId).catch(() => {/* non-fatal */});
+  sendReadMarkers(roomId);
 
   // Find room info in cache (re-read after potential update above)
   const updatedCache = AppState.get("roomListCache");

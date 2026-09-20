@@ -76,6 +76,13 @@ export const aboutTab: SettingsTab = {
         const current = await getAppConfig();
         await setAppConfig({ ...current, updater: draft.updater });
       }));
+      // Running a check was `:update` and nothing else, so a mouse- or
+      // touch-only user could configure the updater but never trigger it (#102).
+      actions.appendChild(
+        controls.dispatchButton("[ check now ]", "Check for updates now", () => {
+          ctx.dispatch("check-for-updates");
+        }),
+      );
       updatesBody.appendChild(actions);
 
       // Load actual persisted config and sync the draft + controls, but only

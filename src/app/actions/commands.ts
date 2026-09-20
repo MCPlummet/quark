@@ -50,6 +50,7 @@ import {
   openDebugViewerForEvent,
 } from "./dialogs.js";
 import { startVerification, setupCrossSigning } from "./crypto.js";
+import { openEmojiPicker, openStickerPicker, openGifPicker } from "./gif.js";
 import { runUpdateCheck } from "../update_check.js";
 
 /**
@@ -180,6 +181,21 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
 
     case "open-search": {
       openSearch(parsed.args.join(" "));
+      break;
+    }
+
+    case "open-emoji-picker": {
+      openEmojiPicker();
+      break;
+    }
+
+    case "open-sticker-picker": {
+      openStickerPicker();
+      break;
+    }
+
+    case "open-gif-picker": {
+      openGifPicker();
       break;
     }
 

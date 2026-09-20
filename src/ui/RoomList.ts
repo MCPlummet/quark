@@ -35,6 +35,8 @@ export class RoomList {
   private _onSectionContextMenu: ((spaceId: string, x: number, y: number) => void) | null = null;
   private _paletteBtnEl: HTMLButtonElement;
   private _onPaletteClick: (() => void) | null = null;
+  private _directoryBtnEl: HTMLButtonElement;
+  private _onDirectoryClick: (() => void) | null = null;
 
   constructor() {
     this._el = document.createElement("div");
@@ -62,6 +64,17 @@ export class RoomList {
     this._paletteBtnEl.setAttribute("aria-label", "Search rooms and commands");
     this._paletteBtnEl.addEventListener("click", () => this._onPaletteClick?.());
     this._headerEl.appendChild(this._paletteBtnEl);
+
+    // Joining a room was `:join` or `:directory` and nothing else — the
+    // directory dialog had no affordance anywhere in the UI (#102).
+    this._directoryBtnEl = document.createElement("button");
+    this._directoryBtnEl.type = "button";
+    this._directoryBtnEl.className = "room-list__header-btn";
+    this._directoryBtnEl.textContent = "+";
+    this._directoryBtnEl.title = "Browse the room directory (:directory)";
+    this._directoryBtnEl.setAttribute("aria-label", "Browse the room directory");
+    this._directoryBtnEl.addEventListener("click", () => this._onDirectoryClick?.());
+    this._headerEl.appendChild(this._directoryBtnEl);
 
     this._el.appendChild(this._headerEl);
 
@@ -104,6 +117,11 @@ export class RoomList {
   /** Wire the header's command-palette button. */
   onPaletteClick(handler: () => void): void {
     this._onPaletteClick = handler;
+  }
+
+  /** Wire the header's room-directory button. */
+  onDirectoryClick(handler: () => void): void {
+    this._onDirectoryClick = handler;
   }
 
   getElement(): HTMLElement {

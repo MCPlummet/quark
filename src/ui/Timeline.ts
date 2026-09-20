@@ -657,9 +657,34 @@ function buildMessageElement(msg: MessageData): HTMLElement {
       );
     });
 
+    // The hover bar offers react/reply/thread while the context menu also has
+    // copy, raw, edit and delete — so the same message exposed different
+    // capabilities depending on how you reached it (#102). Rather than widen
+    // the bar (and re-solve "which of these apply to this message"), the last
+    // button opens the menu that already answers that.
+    const moreBtn = document.createElement("button");
+    moreBtn.className = "message__action-btn";
+    moreBtn.textContent = "⋯";
+    moreBtn.title = "More actions";
+    moreBtn.setAttribute("aria-label", "More actions for this message");
+    moreBtn.setAttribute("tabindex", "-1");
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Anchored to the button rather than the pointer: it is a click on a
+      // known element, not a right-click at an arbitrary point.
+      const r = moreBtn.getBoundingClientRect();
+      row.dispatchEvent(
+        new CustomEvent("quark:msg-menu", {
+          bubbles: true,
+          detail: { eventId: msg.id, x: r.left, y: r.bottom },
+        }),
+      );
+    });
+
     actions.appendChild(reactBtn);
     actions.appendChild(replyBtn);
     actions.appendChild(threadBtn);
+    actions.appendChild(moreBtn);
     row.appendChild(actions);
   }
 
@@ -1179,6 +1204,16 @@ export class Timeline {
   /** Register a callback fired when the user right-clicks a message — passes (eventId, x, y). */
   onContextMenu(cb: (eventId: string, x: number, y: number) => void): void {
     this._onContextMenuCallback = cb;
+  }
+
+  /**
+   * Open the message context menu programmatically, at the given anchor.
+   *
+   * The hover bar's ⋯ button routes here so the pointer, right-click and
+   * long-press paths all raise one menu built from one place.
+   */
+  emitContextMenu(eventId: string, x: number, y: number): void {
+    this._onContextMenuCallback?.(eventId, x, y);
   }
 
   /**
