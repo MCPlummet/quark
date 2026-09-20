@@ -1027,6 +1027,19 @@ export function setupKeyboard(components: AppComponents): void {
     }));
   });
 
+  // Mobile top bar's ⋮ menu — the room-scoped chrome the hidden desktop header
+  // used to carry. Same registry rows, same builder, rendered by ContextMenu as
+  // a bottom sheet in mobile mode.
+  components.mobileTopBar.onOverflowClick((x, y) => {
+    contextMenu.show(x, y, buildMenu("overflow", currentAvailability(), {
+      "open-search": () => openSearch(),
+      "open-pinned": () => void openPinnedMessages(),
+      "open-room-info": () => void openRoomInfo(),
+      "toggle-members": () => toggleMemberList(),
+      "help": () => components.helpDialog.show(),
+    }));
+  });
+
   // Right-click context menu for spaces in the space strip
   spaceStrip.onContextMenu((spaceId, x, y) => {
     contextMenu.show(x, y, buildMenu("space", currentAvailability({ spaceId }), {

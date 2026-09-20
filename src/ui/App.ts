@@ -311,8 +311,21 @@ export function mountApp(container: HTMLElement): AppComponents {
   syncComposeRight();
   new ResizeObserver(syncComposeRight).observe(timelineEl);
 
-  // ── Status bar (fixed bottom-right, floats over content) ─────────────────
-  container.appendChild(statusBar.getElement());
+  // ── Status bar ───────────────────────────────────────────────────────────
+  // Desktop: fixed bottom-right, floating over content. Mobile: reparented into
+  // the room-list drawer as a footer row.
+  //
+  // Mobile used to simply `display: none` it, which took presence status,
+  // connection state and the encryption indicator with it — presence had no
+  // touch affordance at all, since its only other entry point is the `S`
+  // keybinding and vim is force-disabled on mobile (#99). Reparenting rather
+  // than building a second bar keeps one component owning that state.
+  const placeStatusBar = (mobile: boolean): void => {
+    if (mobile) roomList.getElement().appendChild(statusBar.getElement());
+    else container.appendChild(statusBar.getElement());
+  };
+  placeStatusBar(isMobile());
+  onMobileChange(placeStatusBar);
 
   // Update banner (fixed top-center, floats over content; hidden until offered)
   container.appendChild(updateBanner.getElement());

@@ -44,7 +44,17 @@ export type Requirement =
   | "desktop";     // not available in mobile mode
 
 /** Context menus an action can appear in. */
-export type MenuSurface = "message" | "room" | "space" | "section";
+export type MenuSurface =
+  | "message"
+  | "room"
+  | "space"
+  | "section"
+  /**
+   * The mobile top bar's ⋮ menu. Mobile hides the desktop room header, which
+   * carried the only pointer affordance for search and pinned messages, so
+   * this surface is where that chrome went (#99).
+   */
+  | "overflow";
 
 /**
  * Non-menu places an action has a dedicated on-screen control. Declaring it
@@ -314,6 +324,7 @@ const ACTION_LITERALS = [
     // No `:` form, but a real user action — opt into the palette, which
     // otherwise lists only entries that carry a command.
     palette: true,
+    menus: [{ surface: "overflow", label: "Members", group: 2, order: 1 }],
   },
   {
     id: "open-profile",
@@ -337,7 +348,7 @@ const ACTION_LITERALS = [
     requires: ["room"],
     command: { name: "info" },
     bindings: [{ sequence: "I", context: "global" }],
-    menus: [{ surface: "room", label: "Room info", group: 2, order: 2 }],
+    menus: [{ surface: "room", label: "Room info", group: 2, order: 2 }, { surface: "overflow", label: "Room info", group: 1, order: 3 }],
   },
   {
     id: "open-room-settings",
@@ -363,6 +374,7 @@ const ACTION_LITERALS = [
     requires: ["room"],
     command: { name: "pinned" },
     chrome: ["room-header"],
+    menus: [{ surface: "overflow", label: "Pinned messages", group: 1, order: 2 }],
   },
   {
     id: "open-search",
@@ -370,6 +382,7 @@ const ACTION_LITERALS = [
     requires: ["room"],
     command: { name: "search", args: "[query]" },
     chrome: ["room-header"],
+    menus: [{ surface: "overflow", label: "Search messages", group: 1, order: 1 }],
   },
   {
     id: "open-directory",
@@ -387,6 +400,7 @@ const ACTION_LITERALS = [
     id: "help",
     description: "Show commands and keybindings",
     command: { name: "help" },
+    menus: [{ surface: "overflow", label: "Keys and commands", group: 3, order: 1 }],
   },
   {
     id: "edit-status",
