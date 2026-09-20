@@ -222,8 +222,6 @@ const ACTION_LITERALS = [
     id: "open-command-palette",
     description: "Search rooms and commands",
     requires: ["session"],
-    // Ctrl+K is currently hardcoded in keyboard.ts rather than resolved through
-    // the keymap; #103 moves it onto this binding.
     bindings: [{ sequence: "Ctrl-k", context: "global" }],
     chrome: ["drawer"],
     palette: false,
@@ -311,6 +309,53 @@ const ACTION_LITERALS = [
     id: "quote-selection",
     description: "Quote the selected text into the compose box",
     bindings: [{ sequence: ">", context: "global" }],
+    palette: false,
+  },
+
+  // ── Compose box ────────────────────────────────────────────────────────
+  {
+    id: "open-emoji-picker",
+    description: "Open the emoji / sticker picker",
+    requires: ["room"],
+    bindings: [{ sequence: "Ctrl-e", context: "insert" }],
+    chrome: ["compose"],
+    palette: true,
+  },
+  {
+    id: "open-gif-picker",
+    description: "Open the GIF picker",
+    requires: ["room"],
+    bindings: [{ sequence: "Ctrl-g", context: "insert" }],
+    chrome: ["compose"],
+    palette: true,
+  },
+  {
+    id: "format-bold",
+    description: "Bold the selected text",
+    requires: ["room"],
+    bindings: [{ sequence: "Ctrl-b", context: "insert" }],
+    palette: false,
+  },
+  {
+    id: "format-italic",
+    description: "Italicise the selected text",
+    requires: ["room"],
+    bindings: [{ sequence: "Ctrl-i", context: "insert" }],
+    palette: false,
+  },
+  {
+    id: "format-underline",
+    description: "Underline the selected text",
+    requires: ["room"],
+    bindings: [{ sequence: "Ctrl-u", context: "insert" }],
+    palette: false,
+  },
+  {
+    id: "format-strikethrough",
+    description: "Strike through the selected text",
+    requires: ["room"],
+    // Shift because there is no conventional bare chord for strikethrough.
+    bindings: [{ sequence: "Ctrl-Shift-x", context: "insert" }],
     palette: false,
   },
 
@@ -767,13 +812,6 @@ export function menuHint(id: string): string | undefined {
 export function registerDefaultBindings(): void {
   for (const entry of ACTIONS) {
     for (const binding of entry.bindings ?? []) {
-      // Modifier chords stay declarative for now. resolveKey only ever sees a
-      // bare `e.key` — keyboard.ts returns early on ctrl/meta — so registering
-      // "Ctrl-k" could not match, and would actively harm: resolveKey treats any
-      // registered sequence as a prefix candidate, so a bare "C" would come back
-      // `partial` and hang for the sequence timeout. #103 teaches the resolver
-      // modifier chords and drops this guard.
-      if (isModifierChord(binding.sequence)) continue;
       keymapManager.map(binding.context, binding.sequence, entry.id, false);
     }
   }
@@ -790,11 +828,6 @@ export function registerDefaultBindings(): void {
  */
 export function requiresArguments(entry: ActionEntry): boolean {
   return entry.command?.args?.includes("<") ?? false;
-}
-
-/** Whether a sequence is a modifier chord rather than a plain key run. */
-export function isModifierChord(sequence: string): boolean {
-  return /^(Ctrl|Alt|Meta|Cmd)-/i.test(sequence);
 }
 
 /** Help dialog MODE column: the binding's context, in the spec's vocabulary. */

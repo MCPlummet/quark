@@ -9,7 +9,6 @@ import {
   completeCommand,
   completeLine,
   isAvailable,
-  isModifierChord,
   liveSequences,
   menuEntries,
   menuHint,
@@ -215,13 +214,9 @@ describe("default bindings", () => {
     expect(liveSequences("select", "global")).toContain("o");
   });
 
-  // resolveKey only ever sees a bare `e.key`, so a registered "Ctrl-k" could
-  // never match — and worse, would make a bare "C" resolve as a partial
-  // sequence and hang for the timeout. #103 lands real chord support.
-  it("does not register modifier chords into the keymap", () => {
-    expect(isModifierChord("Ctrl-k")).toBe(true);
-    expect(isModifierChord("gg")).toBe(false);
-    expect(liveSequences("open-quick-nav")).toEqual([]);
+  it("registers modifier chords alongside plain keys", () => {
+    expect(liveSequences("open-command-palette")).toEqual(["Ctrl-k"]);
+    expect(liveSequences("open-emoji-picker", "insert")).toEqual(["Ctrl-e"]);
   });
 
   it("reports the first live sequence as the menu hint", () => {

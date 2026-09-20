@@ -1,7 +1,7 @@
 // Keyboard orchestration — wires vim mode + keymaps to action dispatcher
 
 import { modeManager, Mode } from "../vim/mode.js";
-import { keymapManager } from "../vim/keybindings.js";
+import { keymapManager, eventChord } from "../vim/keybindings.js";
 import { registerDefaultBindings } from "./registry.js";
 import { currentAvailability } from "./availability.js";
 import { buildMenu } from "./context_menus.js";
@@ -277,6 +277,36 @@ export function dispatchAction(action: string, components: AppComponents): void 
 
     case "open-settings":
       openSettings();
+      break;
+
+    case "open-emoji-picker":
+      modeManager.transition(Mode.Insert);
+      input.focus();
+      openEmojiPicker();
+      break;
+
+    case "open-gif-picker":
+      modeManager.transition(Mode.Insert);
+      input.focus();
+      openGifPicker();
+      break;
+
+    // Markdown wrappers. Previously a hardcoded chord ladder in
+    // handleInsertKeydown; they are actions now so a quarkrc can move them.
+    case "format-bold":
+      input.wrapSelection("**");
+      break;
+
+    case "format-italic":
+      input.wrapSelection("*");
+      break;
+
+    case "format-underline":
+      input.wrapSelection("__");
+      break;
+
+    case "format-strikethrough":
+      input.wrapSelection("~~");
       break;
 
     case "open-room-info":
@@ -735,34 +765,20 @@ function handleInsertKeydown(e: KeyboardEvent, components: AppComponents): void 
     if (consumed) return;
   }
 
-  // Ctrl-e → emoji picker
-  if (e.ctrlKey && e.key === "e") {
-    e.preventDefault();
-    openEmojiPicker();
-    return;
-  }
-
-  // Ctrl-g → GIF picker
-  if (e.ctrlKey && e.key === "g") {
-    e.preventDefault();
-    openGifPicker();
-    return;
-  }
-
-  // Rich-text formatting shortcuts (#54): wrap the selection in markdown
-  // markers. Cmd on macOS, Ctrl elsewhere. Bold/italic/underline are the bare
-  // chord; strikethrough is Shift+X (no conventional bare chord), and the
-  // mobile toolbar covers the rest.
-  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-    const key = e.key.toLowerCase();
-    let marker: string | null = null;
-    if (!e.shiftKey && key === "b") marker = "**";
-    else if (!e.shiftKey && key === "i") marker = "*";
-    else if (!e.shiftKey && key === "u") marker = "__";
-    else if (e.shiftKey && key === "x") marker = "~~";
-    if (marker) {
+  // Insert-mode chords (emoji/GIF pickers, the markdown wrappers) resolve
+  // through the keymap in the "insert" context, which is what finally makes
+  // `imap` mean something: the parser accepted imap directives and registered
+  // them, but nothing ever resolved that context, so a user's insert-mode
+  // mapping was silently ignored (#103).
+  //
+  // Only bindings that exist are claimed, so Ctrl+C / Ctrl+V / Ctrl+A keep
+  // reaching the browser untouched.
+  const insertChord = eventChord(e);
+  if (insertChord) {
+    const chordAction = keymapManager.actionForKey(insertChord, "insert");
+    if (chordAction) {
       e.preventDefault();
-      input.wrapSelection(marker);
+      dispatchAction(chordAction, components);
       return;
     }
   }
@@ -819,9 +835,25 @@ const MAP_TYPE_TO_CONTEXT: Readonly<Record<string, KeyContext>> = {
   visual: "visual",
 };
 
+/**
+ * Contexts no key handler consults, so a mapping into one can never fire.
+ *
+ * `insert` and `visual` used to be here too: the quarkrc parser accepted imap
+ * and vmap directives, registered them, and nothing ever resolved those
+ * contexts — the user's mapping was taken and silently dropped. Both are wired
+ * now. `command` remains because the command bar is a text field that handles
+ * its own structural keys (Enter, Tab, history) and has no action vocabulary to
+ * bind against; rather than accept cmap and ignore it, say so (#103).
+ */
+const UNSUPPORTED_CONTEXTS: ReadonlySet<KeyContext> = new Set<KeyContext>(["command"]);
+
 // applySetOptions lives in ./set_options.ts (pure, unit-tested).
 
 export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
+  // Collected rather than warned per-directive so a file with several gets one
+  // message instead of a stack of toasts.
+  const unsupportedMaps: string[] = [];
+
   // Read the config up front: `colorscheme` is subordinate to config.toml's
   // `general.theme` (#91), so that decision needs the config in hand before any
   // directive runs. A config we cannot read leaves `cfg` null, which lets the rc
@@ -835,6 +867,10 @@ export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
   for (const directive of rc.directives) {
     if (directive.type === "map") {
       const context = MAP_TYPE_TO_CONTEXT[directive.map_type];
+      if (context && UNSUPPORTED_CONTEXTS.has(context)) {
+        unsupportedMaps.push(`${directive.map_type}: ${directive.key}`);
+        continue;
+      }
       if (context) keymapManager.map(context, directive.key, directive.action, directive.noremap);
     } else if (directive.type === "unmap") {
       const context = MAP_TYPE_TO_CONTEXT[directive.map_type];
@@ -860,6 +896,14 @@ export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
   }
   if (rc.errors.length > 0) {
     console.warn("[quarkrc] parse errors:", rc.errors);
+  }
+
+  // A mapping that cannot fire is worse than a rejected one: the user believes
+  // it took. Say which, once.
+  if (unsupportedMaps.length > 0) {
+    const detail = unsupportedMaps.join(", ");
+    console.warn(`[quarkrc] ignored — command mode has no bindable actions: ${detail}`);
+    showToast(`quarkrc: cmap is not supported (${unsupportedMaps.length} ignored)`, "info");
   }
 
   const setDirectives = rc.directives.filter(
@@ -1332,14 +1376,19 @@ export function setupKeyboard(components: AppComponents): void {
       return;
     }
 
-    // Command palette — Ctrl+K opens from any mode, vim or not (no overlay
-    // open here). Deliberately above the vim branches: it is the one entry
-    // point that must not depend on modal editing.
-    if (e.ctrlKey && e.key === "k") {
-      if (AppState.get("loggedIn")) {
-        e.preventDefault();
-        commandPalette.show();
-        return;
+    // Global chords, resolved through the keymap so a quarkrc can move them.
+    // Runs above the vim branches because the palette is the one entry point
+    // that must not depend on modal editing — and only claims a chord that is
+    // actually bound, so browser copy/paste/select-all stay untouched.
+    if (AppState.get("loggedIn")) {
+      const chord = eventChord(e);
+      if (chord) {
+        const chordAction = keymapManager.actionForKey(chord, "global");
+        if (chordAction) {
+          e.preventDefault();
+          dispatchAction(chordAction, components);
+          return;
+        }
       }
     }
 
@@ -1406,9 +1455,11 @@ export function setupKeyboard(components: AppComponents): void {
       if (handleTextSelectKeydown(e, components)) return;
     }
 
-    // Normal / Visual — resolve through keymap
+    // Normal / Visual — resolve through keymap. Visual gets its own context so
+    // `vmap` applies; like `imap` it was parsed, registered, and never consulted.
     const panel = AppState.get("activePanel");
-    const activeContext: KeyContext = panel === "timeline" ? "timeline"
+    const activeContext: KeyContext = mode === Mode.Visual ? "visual"
+      : panel === "timeline" ? "timeline"
       : panel === "roomlist" ? "roomlist"
       : "global";
 

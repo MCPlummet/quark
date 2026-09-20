@@ -69,3 +69,19 @@ describe("dispatchAction — command palette", () => {
     expect(show).toHaveBeenCalledOnce();
   });
 });
+
+describe("dispatchAction — chord-bound actions", () => {
+  it("wraps the compose selection for each formatting action", () => {
+    const wrapSelection = vi.fn();
+    const components = { input: { wrapSelection } } as unknown as AppComponents;
+    for (const [action, marker] of [
+      ["format-bold", "**"],
+      ["format-italic", "*"],
+      ["format-underline", "__"],
+      ["format-strikethrough", "~~"],
+    ] as const) {
+      dispatchAction(action, components);
+      expect(wrapSelection).toHaveBeenLastCalledWith(marker);
+    }
+  });
+});

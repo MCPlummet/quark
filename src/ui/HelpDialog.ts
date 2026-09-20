@@ -82,9 +82,6 @@ function buildBindings(): BindingEntry[] {
  */
 const EXTRA_BINDINGS: BindingEntry[] = [
   { keys: "Enter", mode: "roomlist", description: "Open the selected room" },
-  { keys: "Ctrl-e", mode: "insert", description: "Open the emoji / sticker picker" },
-  { keys: "Ctrl-g", mode: "insert", description: "Open the GIF picker" },
-  { keys: "Ctrl-b / i / u", mode: "insert", description: "Bold / italic / underline the selection" },
   { keys: "Enter", mode: "insert", description: "Send the message (see send-key behaviour)" },
   { keys: "Ctrl-Enter", mode: "insert", description: "Send regardless of send-key behaviour" },
   { keys: ":word:", mode: "insert", description: "Shortcode emoji autocomplete" },

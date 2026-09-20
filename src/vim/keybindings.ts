@@ -32,6 +32,47 @@ export type ResolveResult =
   | { kind: "partial" }   // sequence is a valid prefix – wait for more keys
   | { kind: "none" };     // no match
 
+/**
+ * Whether a sequence is a modifier chord ("Ctrl-e") rather than a plain key
+ * run ("gg").
+ *
+ * Chords are atomic: they never participate in the pending-sequence grammar.
+ * Mixing them in would be actively wrong — every registered sequence is a
+ * prefix candidate, so a registered "Ctrl-k" would make a bare "C" resolve as
+ * `partial` and hang for the sequence timeout.
+ */
+export function isChordSequence(sequence: string): boolean {
+  return /^(Ctrl|Alt|Meta|Cmd|Shift)-/i.test(sequence);
+}
+
+/**
+ * Canonical chord string for a keyboard event, or null when no modifier is
+ * held (a bare key, which belongs to the sequence grammar instead).
+ *
+ * Modifier order is fixed so "Ctrl-Shift-x" is the only spelling of itself, and
+ * the key is lowercased because a chord's identity does not depend on whether
+ * Shift happened to change the character — Ctrl+Shift+X arrives as key "X".
+ */
+export function eventChord(e: {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}): string | null {
+  if (!e.ctrlKey && !e.metaKey && !e.altKey) return null;
+  if (e.key === "Control" || e.key === "Alt" || e.key === "Meta" || e.key === "Shift") return null;
+  const parts: string[] = [];
+  // Ctrl and Meta are folded together: a macOS user presses Cmd where everyone
+  // else presses Ctrl, and a keymap that distinguished them would need every
+  // binding written twice.
+  if (e.ctrlKey || e.metaKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  parts.push(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+  return parts.join("-");
+}
+
 function normaliseKey(raw: string, leaderKey: string): string {
   // Replace <leader> placeholder with actual leader key
   return raw.replace(/<leader>/gi, leaderKey);
@@ -118,9 +159,12 @@ export class KeymapManager {
     this._pendingSequence += key;
     const seq = this._pendingSequence;
 
-    // Build ordered candidate list: scoped entries first, then global
-    const scopedEntries = this._entries.filter((e) => e.context === activeContext);
-    const globalEntries = this._entries.filter((e) => e.context === "global");
+    // Build ordered candidate list: scoped entries first, then global. Chords
+    // are excluded — they are resolved atomically by {@link actionForKey}, and
+    // letting one into the prefix scan would strand the bare key it starts with.
+    const plain = this._entries.filter((e) => !isChordSequence(e.sequence));
+    const scopedEntries = plain.filter((e) => e.context === activeContext);
+    const globalEntries = plain.filter((e) => e.context === "global");
     const ordered = [...scopedEntries, ...globalEntries];
 
     // Check for exact match (scoped takes priority over global for same sequence)
@@ -149,6 +193,9 @@ export class KeymapManager {
    * motions itself — can't feed keys through {@link resolveKey} without
    * fighting its sequence buffering, but still need to know what a single
    * physical key is bound to so user remaps apply. Returns the action, or null.
+   *
+   * Also the resolution path for modifier chords, which are atomic for the same
+   * reason: "Ctrl-e" is one keystroke, not a sequence to accumulate.
    */
   actionForKey(key: string, activeContext: KeyContext): string | null {
     const scoped = this._entries.find(

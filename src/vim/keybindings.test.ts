@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { KeymapManager } from "./keybindings";
+import { KeymapManager, eventChord, isChordSequence } from "./keybindings";
 
 describe("KeymapManager", () => {
   let km: KeymapManager;
@@ -89,10 +89,26 @@ describe("KeymapManager", () => {
 
   // ── Modifier keys ─────────────────────────────────────────────────────
 
-  it("resolves modifier key chord like Ctrl-e", () => {
+  // Chords resolve atomically through actionForKey, never through resolveKey:
+  // the real handler feeds resolveKey a bare `e.key`, and letting a chord into
+  // the prefix scan would strand the bare key it starts with (see below).
+  it("resolves a modifier chord through actionForKey", () => {
     km.nmap("Ctrl-e", "scroll.down");
-    const result = km.resolveKey("Ctrl-e", "global");
-    expect(result).toEqual({ kind: "action", action: "scroll.down", noremap: false });
+    expect(km.actionForKey("Ctrl-e", "global")).toBe("scroll.down");
+  });
+
+  it("keeps chords out of the sequence grammar", () => {
+    km.nmap("Ctrl-k", "open-command-palette");
+    // Without the exclusion, "C" is a prefix of "Ctrl-k" and would come back
+    // `partial`, swallowing the key and hanging for the sequence timeout.
+    expect(km.resolveKey("C", "global")).toEqual({ kind: "none" });
+    expect(km.resolveKey("Ctrl-k", "global")).toEqual({ kind: "none" });
+  });
+
+  it("scopes chords like any other binding", () => {
+    km.imap("Ctrl-e", "open-emoji-picker");
+    expect(km.actionForKey("Ctrl-e", "insert")).toBe("open-emoji-picker");
+    expect(km.actionForKey("Ctrl-e", "timeline")).toBeNull();
   });
 
   // ── Scoped map precedence ─────────────────────────────────────────────
@@ -210,19 +226,67 @@ describe("KeymapManager", () => {
 
   it("imap registers in insert context", () => {
     km.imap("Ctrl-c", "insert.cancel");
-    const result = km.resolveKey("Ctrl-c", "insert");
-    expect(result).toEqual({ kind: "action", action: "insert.cancel", noremap: false });
+    expect(km.actionForKey("Ctrl-c", "insert")).toBe("insert.cancel");
   });
 
   it("cmap registers in command context", () => {
     km.cmap("Ctrl-p", "history.prev");
-    const result = km.resolveKey("Ctrl-p", "command");
-    expect(result).toEqual({ kind: "action", action: "history.prev", noremap: false });
+    expect(km.actionForKey("Ctrl-p", "command")).toBe("history.prev");
   });
 
   it("vmap registers in visual context", () => {
     km.vmap("y", "visual.yank");
     const result = km.resolveKey("y", "visual");
     expect(result).toEqual({ kind: "action", action: "visual.yank", noremap: false });
+  });
+});
+
+describe("eventChord", () => {
+  const ev = (over: Partial<Parameters<typeof eventChord>[0]> = {}) => ({
+    key: "e", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...over,
+  });
+
+  it("returns null for a bare key, which belongs to the sequence grammar", () => {
+    expect(eventChord(ev())).toBeNull();
+    expect(eventChord(ev({ shiftKey: true, key: "G" }))).toBeNull();
+  });
+
+  it("serialises a control chord", () => {
+    expect(eventChord(ev({ ctrlKey: true }))).toBe("Ctrl-e");
+  });
+
+  // A macOS user presses Cmd where everyone else presses Ctrl; a keymap that
+  // distinguished them would need every binding written twice.
+  it("folds Meta onto Ctrl", () => {
+    expect(eventChord(ev({ metaKey: true }))).toBe("Ctrl-e");
+  });
+
+  it("orders modifiers canonically", () => {
+    expect(eventChord(ev({ ctrlKey: true, altKey: true, shiftKey: true, key: "X" })))
+      .toBe("Ctrl-Alt-Shift-x");
+  });
+
+  // Ctrl+Shift+X arrives with key "X"; a chord's identity should not depend on
+  // whether Shift happened to change the character.
+  it("lowercases single characters", () => {
+    expect(eventChord(ev({ ctrlKey: true, shiftKey: true, key: "X" }))).toBe("Ctrl-Shift-x");
+  });
+
+  it("leaves named keys alone", () => {
+    expect(eventChord(ev({ ctrlKey: true, key: "Enter" }))).toBe("Ctrl-Enter");
+  });
+
+  it("ignores a bare modifier press", () => {
+    expect(eventChord(ev({ ctrlKey: true, key: "Control" }))).toBeNull();
+    expect(eventChord(ev({ altKey: true, key: "Alt" }))).toBeNull();
+  });
+});
+
+describe("isChordSequence", () => {
+  it("tells chords from plain key runs", () => {
+    expect(isChordSequence("Ctrl-k")).toBe(true);
+    expect(isChordSequence("Ctrl-Shift-x")).toBe(true);
+    expect(isChordSequence("gg")).toBe(false);
+    expect(isChordSequence("ArrowDown")).toBe(false);
   });
 });
