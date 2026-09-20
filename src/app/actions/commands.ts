@@ -34,7 +34,13 @@ import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js
 import packageJson from "../../../package.json";
 
 import { getComponents } from "./context.js";
-import { joinRoom, leaveRoomWithFeedback, openOrCreateDm, convertRoomDirectness } from "./rooms.js";
+import {
+  joinRoom,
+  leaveRoomWithFeedback,
+  openOrCreateDm,
+  convertRoomDirectness,
+  markRoomAsRead,
+} from "./rooms.js";
 import { logout } from "./session.js";
 import { loadTheme } from "./theme.js";
 import { openProfileDialog } from "./profile.js";
@@ -61,6 +67,7 @@ import { runUpdateCheck } from "../update_check.js";
  */
 const ROOM_ARG_COMMANDS = new Set([
   "leave-room",
+  "mark-room-read",
   "convert-to-dm",
   "convert-to-room",
   "mute-room",
@@ -250,6 +257,11 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
     case "check-for-updates": {
       showToast("Checking for updates…", "info");
       await runUpdateCheck(getComponents(), true);
+      break;
+    }
+
+    case "mark-room-read": {
+      markRoomAsRead(roomId);
       break;
     }
 

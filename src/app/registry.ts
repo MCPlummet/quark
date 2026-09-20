@@ -118,6 +118,15 @@ export interface ActionEntry {
   palette?: boolean;
   /** Mode label for the help dialog's MODE column. Derived when omitted. */
   mode?: string;
+  /**
+   * Why this action needs no pointer or touch affordance.
+   *
+   * The parity test (#104) fails any entry that is keyboard-only, so an action
+   * that genuinely cannot have one states its reason here and the reason
+   * travels with the entry rather than living in a list somewhere else. An
+   * empty string is not accepted: if you cannot say why, it is a gap.
+   */
+  parityExempt?: string;
 }
 
 // ── The registry ─────────────────────────────────────────────────────────────
@@ -129,18 +138,24 @@ const ACTION_LITERALS = [
     description: "Enter insert mode",
     bindings: [{ sequence: "i", context: "global" }],
     palette: false,
+    parityExempt:
+      "Vim mode transition; no meaning outside modal editing.",
   },
   {
     id: "mode-command",
     description: "Open the command bar",
     bindings: [{ sequence: ":", context: "global" }],
     palette: false,
+    parityExempt:
+      "Vim mode transition; no meaning outside modal editing.",
   },
   {
     id: "mode-visual",
     description: "Enter visual mode",
     bindings: [{ sequence: "v", context: "global" }],
     palette: false,
+    parityExempt:
+      "Vim mode transition; no meaning outside modal editing.",
   },
 
   // ── Navigation ─────────────────────────────────────────────────────────
@@ -152,6 +167,8 @@ const ACTION_LITERALS = [
       { sequence: "ArrowDown", context: "global" },
     ],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     id: "nav-up",
@@ -161,6 +178,8 @@ const ACTION_LITERALS = [
       { sequence: "ArrowUp", context: "global" },
     ],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     id: "nav-left",
@@ -170,6 +189,8 @@ const ACTION_LITERALS = [
       { sequence: "ArrowLeft", context: "global" },
     ],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     id: "nav-right",
@@ -179,18 +200,24 @@ const ACTION_LITERALS = [
       { sequence: "ArrowRight", context: "global" },
     ],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     id: "jump-top",
     description: "Jump to the first item",
     bindings: [{ sequence: "gg", context: "global" }],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     id: "jump-bottom",
     description: "Jump to the last item",
     bindings: [{ sequence: "G", context: "global" }],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     id: "select",
@@ -200,6 +227,8 @@ const ACTION_LITERALS = [
       { sequence: "o", context: "global" },
     ],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     // `o` in the timeline drops a caret into the selected message instead of
@@ -209,12 +238,16 @@ const ACTION_LITERALS = [
     requires: ["message"],
     bindings: [{ sequence: "o", context: "timeline" }],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     id: "close",
     description: "Clear selection / close the active panel",
     bindings: [{ sequence: "Escape", context: "global" }],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     // The palette itself — excluded from its own listing, and from the `:`
@@ -272,6 +305,8 @@ const ACTION_LITERALS = [
     requires: ["message"],
     menus: [{ surface: "message", label: "Select text", group: 2, order: 2 }],
     palette: false,
+    parityExempt:
+      "Keyboard users reach the same thing through enter-text-select (`o`), which is the richer form; this row exists because that path needs a caret and mobile has none.",
   },
   {
     id: "view-raw-event",
@@ -279,6 +314,8 @@ const ACTION_LITERALS = [
     requires: ["message"],
     menus: [{ surface: "message", label: "View raw event", group: 2, order: 3 }],
     palette: false,
+    parityExempt:
+      "`:debug $eventId` is the keyboard form, and `:debug` covers the room's state; this row is the pointer shortcut to the same viewer.",
   },
   {
     id: "edit",
@@ -304,12 +341,16 @@ const ACTION_LITERALS = [
     description: "Paste into the compose box",
     bindings: [{ sequence: "p", context: "global" }],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
   {
     id: "quote-selection",
     description: "Quote the selected text into the compose box",
     bindings: [{ sequence: ">", context: "global" }],
     palette: false,
+    parityExempt:
+      "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
 
   // ── Compose box ────────────────────────────────────────────────────────
@@ -348,6 +389,8 @@ const ACTION_LITERALS = [
     requires: ["room"],
     bindings: [{ sequence: "Ctrl-b", context: "insert" }],
     palette: false,
+    parityExempt:
+      "Keyboard-only by decision (#54): a custom mobile format bar duplicates the native selection callout poorly, and doing it properly needs native UIEditMenuInteraction / Android ActionMode work.",
   },
   {
     id: "format-italic",
@@ -355,6 +398,8 @@ const ACTION_LITERALS = [
     requires: ["room"],
     bindings: [{ sequence: "Ctrl-i", context: "insert" }],
     palette: false,
+    parityExempt:
+      "Keyboard-only by decision (#54): a custom mobile format bar duplicates the native selection callout poorly, and doing it properly needs native UIEditMenuInteraction / Android ActionMode work.",
   },
   {
     id: "format-underline",
@@ -362,6 +407,8 @@ const ACTION_LITERALS = [
     requires: ["room"],
     bindings: [{ sequence: "Ctrl-u", context: "insert" }],
     palette: false,
+    parityExempt:
+      "Keyboard-only by decision (#54): a custom mobile format bar duplicates the native selection callout poorly, and doing it properly needs native UIEditMenuInteraction / Android ActionMode work.",
   },
   {
     id: "format-strikethrough",
@@ -370,6 +417,8 @@ const ACTION_LITERALS = [
     // Shift because there is no conventional bare chord for strikethrough.
     bindings: [{ sequence: "Ctrl-Shift-x", context: "insert" }],
     palette: false,
+    parityExempt:
+      "Keyboard-only by decision (#54): a custom mobile format bar duplicates the native selection callout poorly, and doing it properly needs native UIEditMenuInteraction / Android ActionMode work.",
   },
 
   // ── Panels and dialogs ─────────────────────────────────────────────────
@@ -484,15 +533,18 @@ const ACTION_LITERALS = [
     description: "Open a room",
     menus: [{ surface: "room", label: "Open", group: 1, order: 1 }],
     palette: false,
+    parityExempt:
+      "`select` (Enter on the focused room) is the keyboard form; this row is the menu's explicit restatement of a plain click.",
   },
   {
     // Offered only when the room is unread — expressed by the caller passing a
     // handler conditionally, since `requires` describes app state rather than
     // the menu's target.
     id: "mark-room-read",
-    description: "Mark a room as read",
+    description: "Mark this room as read",
+    requires: ["room"],
+    command: { name: "read", args: "[room-id]" },
     menus: [{ surface: "room", label: "Mark as read", group: 3, order: 1 }],
-    palette: false,
   },
   {
     id: "leave-room",
@@ -508,6 +560,8 @@ const ACTION_LITERALS = [
     requires: ["room"],
     menus: [{ surface: "room", label: "Leave room", group: 4, order: 1, danger: true }],
     palette: false,
+    parityExempt:
+      "`:leave` is the keyboard form; this entry is the confirm-wrapped variant the menus and the room dialog use.",
   },
   {
     // Mute and unmute are separate entries rather than one toggle so each can
