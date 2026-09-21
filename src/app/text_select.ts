@@ -382,3 +382,72 @@ export function modifyComposeSelection(
     input.selectionDirection = newFocus >= anchorPos ? "forward" : "backward";
   }
 }
+
+// ── Touch text selection ──────────────────────────────────────────────────────
+
+/** Body element currently opted into native selection, if any. */
+let _touchSelectableEl: HTMLElement | null = null;
+let _touchSelectCleanup: (() => void) | null = null;
+
+/**
+ * Hand one message body over to the platform's own text selection (#100).
+ *
+ * On mobile, message bodies carry `user-select: none` so a long press opens the
+ * action sheet cleanly instead of racing the engine's selection — the sheet used
+ * to appear on top of a blue highlight nobody asked for. That trades away the
+ * ability to copy part of a message, so the sheet offers this instead: opt this
+ * one body back into selection, select its contents, and let the OS take over
+ * with its own drag handles and Copy callout.
+ *
+ * Deliberately *not* {@link enterMessageTextSelect}: that path sets
+ * contenteditable, which on a phone raises the soft keyboard over the message
+ * the user is trying to read. This only touches the selection.
+ */
+export function selectMessageTextForTouch(bodyEl: HTMLElement): void {
+  clearTouchTextSelection();
+
+  bodyEl.classList.add("message__body--selectable");
+  _touchSelectableEl = bodyEl;
+
+  const sel = window.getSelection();
+  if (sel) {
+    const range = document.createRange();
+    range.selectNodeContents(bodyEl);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // Drop the opt-in as soon as the user presses somewhere else, so exactly one
+  // message is selectable at a time and a later long press opens the sheet
+  // rather than extending this selection. Registered on the next frame: the
+  // touch that opened the sheet is still in flight and would cancel instantly.
+  const onOutside = (e: Event): void => {
+    const target = e.target instanceof Node ? e.target : null;
+    if (target && bodyEl.contains(target)) return;
+    clearTouchTextSelection();
+  };
+  const timer = setTimeout(() => {
+    document.addEventListener("touchstart", onOutside, { passive: true, capture: true });
+    document.addEventListener("mousedown", onOutside, { capture: true });
+  }, 0);
+
+  _touchSelectCleanup = () => {
+    clearTimeout(timer);
+    document.removeEventListener("touchstart", onOutside, { capture: true });
+    document.removeEventListener("mousedown", onOutside, { capture: true });
+  };
+}
+
+/** Revoke the native-selection opt-in, if one is active. */
+export function clearTouchTextSelection(): void {
+  _touchSelectCleanup?.();
+  _touchSelectCleanup = null;
+  if (!_touchSelectableEl) return;
+  _touchSelectableEl.classList.remove("message__body--selectable");
+  _touchSelectableEl = null;
+}
+
+/** The body currently opted into native selection. Exposed for testing. */
+export function touchSelectableElement(): HTMLElement | null {
+  return _touchSelectableEl;
+}

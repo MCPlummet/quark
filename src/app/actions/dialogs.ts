@@ -19,8 +19,7 @@ export function openSettings(): void {
  * Open the room info dialog for the current room.
  */
 export async function openRoomInfo(): Promise<void> {
-  const { roomInfoDialog } = getComponents();
-  await roomInfoDialog.show();
+  getComponents().roomDialog.show("info");
 }
 
 /**
@@ -62,8 +61,7 @@ export function openRoomDirectory(): void {
  * Open the room settings dialog for the current room.
  */
 export async function openRoomSettings(): Promise<void> {
-  const { roomSettingsDialog } = getComponents();
-  await roomSettingsDialog.show();
+  getComponents().roomDialog.show("settings");
 }
 
 /**

@@ -573,6 +573,29 @@ Adding chrome inside one of those containers needs no new `touch-action` rule. A
 
 ## UI Design
 
+### Interaction parity
+
+Every feature is reachable from the keyboard, from a pointer and by touch. That
+is asserted, not aspired to: `src/app/parity.ts` models how each registry action
+can be reached and `parity.test.ts` fails a build that leaves one unreachable.
+An action that genuinely cannot have a pointer or touch affordance carries a
+`parityExempt` reason on its registry entry — navigation, whose pointer
+equivalent is clicking the thing itself, and the markdown formatting chords,
+which are keyboard-only by the decision recorded in `Input.ts`.
+
+The model deliberately distinguishes surfaces that exist in only one modality.
+The desktop room header is `display: none` on mobile and the timeline's hover
+action bar has no hover to respond to, so neither counts as touch reach; the
+mobile top bar and its `⋮` menu do not count as pointer reach. Those four
+asymmetries are what the v0.20.0 audit found features hiding behind.
+
+Reachability "via the command palette" is tracked separately, because the
+palette lists nearly everything and an assertion that accepted it everywhere
+would pass vacuously. Actions whose only pointer or touch path is the palette
+are pinned as an explicit list, so that set stays a deliberate choice rather
+than absorbing every new action nobody got round to giving a home.
+
+
 ### Layout
 
 ```
@@ -653,26 +676,46 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Global        | `i`           | Enter insert mode             |
 | Global        | `Esc`         | Return to normal mode         |
 | Global        | `:`           | Open command bar              |
-| Room list     | `j/k`         | Move down/up                  |
-| Room list     | `Enter`       | Open room                     |
-| Room list     | `/`           | Search/filter rooms           |
-| Room list     | `gs`          | Go to spaces view             |
-| Timeline      | `j/k`         | Scroll down/up                |
-| Timeline      | `g/G`         | Jump to top/bottom            |
+| Global        | `Ctrl-k`      | Open the command palette      |
+| Global        | `j` / `↓`     | Select next item              |
+| Global        | `k` / `↑`     | Select previous item          |
+| Global        | `h` / `←`     | Focus the panel to the left   |
+| Global        | `l` / `→`     | Focus the panel to the right  |
+| Global        | `gg` / `G`    | Jump to first / last item     |
+| Global        | `Enter` / `o` | Open the focused item         |
+| Global        | `m`           | Toggle the member list        |
+| Global        | `P`           | Open your profile             |
+| Global        | `I`           | Open room info                |
+| Global        | `S`           | Set your presence status      |
+| Global        | `?`           | Open settings                 |
 | Timeline      | `r`           | Reply to selected message     |
 | Timeline      | `e`           | React to selected message     |
 | Timeline      | `t`           | Open/enter thread             |
 | Timeline      | `dd`          | Redact own message            |
 | Timeline      | `E` / `c`     | Edit own message              |
+| Timeline      | `y`           | Copy selected message         |
+| Timeline      | `o`           | Select text within the message|
+| Timeline      | `p`           | Paste into the compose box    |
+| Timeline      | `>`           | Quote selection into compose  |
 | Insert        | `Ctrl-e`      | Open emoji/sticker picker     |
 | Insert        | `Ctrl-g`      | Open GIF search               |
-| Insert        | `Tab`         | Autocomplete :shortcode:      |
-| Insert        | `Enter`       | Send staged image (typed text = caption) |
-| Insert        | `Esc`         | Discard staged image (first press)       |
+| Insert        | `Ctrl-b/i/u`  | Bold / italic / underline     |
+| Insert        | `Ctrl-Shift-x`| Strikethrough                 |
+| Insert        | `Enter`       | Send (see send-key behaviour) |
+| Insert        | `:word:`      | Autocomplete :shortcode:      |
 | Picker        | `j/k/h/l`     | Navigate grid                 |
 | Picker        | `Enter`       | Select emoji/sticker/GIF      |
-| Picker        | `/`           | Search within picker          |
-| Picker        | `Tab`         | Switch emoji ↔ sticker ↔ GIF  |
+
+Modifier chords are ordinary bindings: they resolve atomically rather than
+through the multi-key sequence grammar, and `Meta` folds onto `Ctrl` so a macOS
+user's Cmd and everyone else's Ctrl are one binding. Only a chord that is
+actually bound is claimed, so `Ctrl+C`/`Ctrl+V`/`Ctrl+A` reach the browser
+untouched.
+
+A chord is matched on what it means, not how it was typed: modifier case,
+modifier order and the key's own case are all folded, so `ctrl-e`, `Ctrl-E` and
+`shift-ctrl-x` all bind the chords you would expect. Plain sequences stay
+case-sensitive — `G` and `g` are different keys.
 
 **Compose box ↔ timeline:** with a draft in the compose box, `Esc` drops into
 Normal-mode editing of the draft (vim motions/operators on the text). The
@@ -750,32 +793,75 @@ Scoped maps (`tmap`, `rmap`, `pmap`) take precedence over global `nmap` when tha
 - `" comments` — lines starting with `"` are ignored
 - `autocmd` — hooks for events (e.g., `autocmd RoomEnter * set scrolloff=3`)
 
+**Map-type support.** `nmap` (normal/global), `tmap` (timeline), `rmap` (room
+list), `pmap` (pickers and dialogs), `imap` (insert mode) and `vmap` (visual
+mode) all resolve. `cmap` does not: the command bar is a text field that owns
+its structural keys (Enter, Tab, history) and has no action vocabulary to bind
+against, so a `cmap` directive is reported and ignored rather than silently
+dropped. `imap` and `vmap` were in that same silently-dropped state until
+v0.20.0 — accepted, registered, and never consulted.
+
 ### Commands
 
+Commands, keybindings, menu rows and the command palette all read from one
+table: `src/app/registry.ts`. Before it, the same action was described in four
+places that drifted apart — tab completion, the executor's switch, this
+document, and the inline context-menu literals — so `:room-settings` executed
+but never completed, and the help dialog advertised commands that did not exist
+while omitting fourteen that did. Adding a command to the registry without a
+handler is now a compile error, not a silent no-op.
+
 ```
-:join #room:server.org       Join a room
-:leave                       Leave current room
-:topic <text>                Set room topic
-:invite @user:server.org     Invite user
-:verify                      Start device verification
-:upload <path>               Upload file/image
-:theme <name>                Switch theme
-:keys                        Show/edit keybindings
-:stickers                    Browse sticker packs
-:emoji                       Manage emoji packs
-:gif <query>                 Search and send a GIF
-:search [query]              Search messages in the current room
-:source <path>               Reload quarkrc or source a file
-:roomsettings                Open room settings (name/topic/access/permissions)
-:converttodm                 Mark the current room as a DM (m.direct); any size
-:converttoroom               Unmark the current room as a DM
-:convert-to-dm               Alias for :converttodm
-:convert-to-room             Alias for :converttoroom
-:spacesettings               Open space settings (name/topic/children)
-:debug                       Open debug viewer for current room state events
-:debug $eventId              Open debug viewer for a specific event
-:version                     Show the current app version
+:emoji                                         Open the emoji / sticker picker
+:gif                                           Open the GIF picker
+:stickers                                      Browse sticker packs
+:profile                                       Open your profile
+:settings                                      Open settings
+:info                                          Open room info (Info tab)
+:roomsettings / :room-settings                 Open room settings (Settings tab)
+:spacesettings / :space-settings               Open space settings
+:pinned                                        Show pinned messages
+:search [query]                                Search messages in this room
+:directory                                     Browse the public room directory
+:debug [cache|$eventId]                        Open the debug viewer
+:help                                          Show commands and keybindings
+:join <room-id|alias>                          Join a room or space
+:read [room-id]                                Mark this room as read
+:leave [room-id]                               Leave a room
+:mute [room-id]                                Silence notifications for this room
+:unmute [room-id]                              Restore notifications for this room
+:msg <user-id>                                 Open or start a direct message
+:converttodm / :convert-to-dm [room-id]        Mark this room as a direct message
+:converttoroom / :convert-to-room [room-id]    Unmark this room as a direct message
+:topic <text>                                  Set the room topic
+:invite <user-id>                              Invite a user to this room
+:kick <user-id> [reason]                       Remove a user from this room
+:ban <user-id> [reason]                        Ban a user from this room
+:unban <user-id>                               Lift a ban on a user
+:nick <display-name>                           Set your display name
+:verify <user-id>                              Start verification with a user
+:cross-sign / :setup-cross-signing [password]  Set up cross-signing
+:logout                                        Log out
+:theme <name>                                  Switch to a colour theme
+:version                                       Show the running version
+:update                                        Check for updates (desktop only)
+:upload <path>                                 Upload a file — not yet implemented
+:quit / :q                                     Close Quark
 ```
+
+Arguments follow one grammar: `<required>` and `[optional]`. The command palette
+reads it to decide whether a row can run outright or must prefill the command
+bar for the user to finish — a palette row cannot supply `@user:server`.
+
+**The command palette** (`Ctrl+K`, the `⌕` button in the space strip, or a
+pull-down from the top of the open drawer on mobile) searches rooms and actions
+together. A leading `:` drops the rooms. A row that needs an argument prefills
+the command bar; a row whose action is irreversible goes through the same
+confirmation the menus use, so fuzzy-matching onto `:leave` cannot leave a room
+on one keystroke. It exists because `commandBar.show()`
+is reachable only through the `mode-command` action, which requires vim mode —
+and vim mode is force-disabled on mobile, so without the palette no `:` command
+could be run on a phone at all.
 
 A room's `m.direct` flag is the sole test for whether it appears under the
 **Direct Messages** pseudo-space rather than **Group Rooms** — member count does
@@ -804,6 +890,24 @@ behind it (a raw room ID for a name, no topic, member count or encryption
 state) and its timeline is requested for a room the account is not in. The user
 asked to message this person and the invite is that same DM, so accepting it is
 what the action means.
+
+### Room Dialog
+
+One tabbed dialog covers everything about a room: **Info** (read-only facts,
+mute, raw state, leave), **Settings** (name, topic, conversation type, access),
+**Members** (invite, and kick/ban where your power level permits) and
+**Permissions** (power levels). `:info` and `:roomsettings` are two doors into
+it; on mobile it shows the tab list first, like the settings dialog.
+
+It replaces a pair of dialogs that both stated name, topic, members, encryption
+and directness while only one could change any of it — and that kept mute, leave
+and raw state on the info side alone, which the mobile layout hid entirely.
+
+Moderation controls render against the account's own power level rather than
+unconditionally. Matrix requires strictly greater power to kick or ban and never
+permits acting on yourself, so a room where everyone sits at the default offers
+nothing — a button the homeserver will refuse is worse than no button, because
+the user cannot tell a permission problem from a bug.
 
 ### Settings Dialog
 

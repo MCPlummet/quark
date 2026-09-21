@@ -1,6 +1,7 @@
 // Room list panel
 
 import { attachResizeHandle } from "./ResizeHandle.js";
+import { attachLongPress } from "../app/long_press.js";
 
 export interface RoomEntry {
   id: string;
@@ -32,6 +33,8 @@ export class RoomList {
   private _onSelect: ((id: string) => void) | null = null;
   private _onContextMenu: ((roomId: string, x: number, y: number) => void) | null = null;
   private _onSectionContextMenu: ((spaceId: string, x: number, y: number) => void) | null = null;
+  private _directoryBtnEl: HTMLButtonElement;
+  private _onDirectoryClick: (() => void) | null = null;
 
   constructor() {
     this._el = document.createElement("div");
@@ -39,7 +42,23 @@ export class RoomList {
 
     this._headerEl = document.createElement("div");
     this._headerEl.className = "room-list__header";
-    this._headerEl.textContent = "Rooms";
+
+    const headerLabel = document.createElement("span");
+    headerLabel.className = "room-list__header-label";
+    headerLabel.textContent = "Rooms";
+    this._headerEl.appendChild(headerLabel);
+
+    // Joining a room was `:join` or `:directory` and nothing else — the
+    // directory dialog had no affordance anywhere in the UI (#102).
+    this._directoryBtnEl = document.createElement("button");
+    this._directoryBtnEl.type = "button";
+    this._directoryBtnEl.className = "room-list__header-btn";
+    this._directoryBtnEl.textContent = "+";
+    this._directoryBtnEl.title = "Browse the room directory (:directory)";
+    this._directoryBtnEl.setAttribute("aria-label", "Browse the room directory");
+    this._directoryBtnEl.addEventListener("click", () => this._onDirectoryClick?.());
+    this._headerEl.appendChild(this._directoryBtnEl);
+
     this._el.appendChild(this._headerEl);
 
     this._scrollEl = document.createElement("div");
@@ -50,6 +69,25 @@ export class RoomList {
 
     this._el.addEventListener("keydown", (e) => this._handleKeydown(e));
 
+    // Touch path to the same menus `contextmenu` gives a mouse. Attached to the
+    // scroll container rather than to each row, which is rebuilt on every
+    // render. Rooms and subspace section labels share the gesture and are told
+    // apart by which one the press resolved to.
+    attachLongPress(this._scrollEl, {
+      resolve: (target) => {
+        const label = target.closest<HTMLElement>(".room-list__section-label");
+        if (label?.dataset.sectionSpaceId) return `section:${label.dataset.sectionSpaceId}`;
+        const item = target.closest<HTMLElement>(".room-list__item");
+        return item?.dataset.roomId ? `room:${item.dataset.roomId}` : null;
+      },
+      onLongPress: (id, x, y) => {
+        const [kind, ...rest] = id.split(":");
+        const value = rest.join(":");
+        if (kind === "section") this._onSectionContextMenu?.(value, x, y);
+        else this._onContextMenu?.(value, x, y);
+      },
+    });
+
     // Drag-to-resize handle at the right edge
     attachResizeHandle(this._el, "--room-list-width", "right", 120, 500);
   }
@@ -57,6 +95,11 @@ export class RoomList {
   /** Header element exposed so callers can wire mobile drawer-close behaviour. */
   getHeaderElement(): HTMLElement {
     return this._headerEl;
+  }
+
+  /** Wire the header's room-directory button. */
+  onDirectoryClick(handler: () => void): void {
+    this._onDirectoryClick = handler;
   }
 
   getElement(): HTMLElement {
@@ -149,6 +192,10 @@ export class RoomList {
           if (section.spaceId) {
             const spaceId = section.spaceId;
             label.style.cursor = "context-menu";
+            // Recorded on the element so the container-level long press can
+            // resolve it; labels are rebuilt on every render, so a per-label
+            // gesture listener would accumulate.
+            label.dataset.sectionSpaceId = spaceId;
             label.addEventListener("contextmenu", (e) => {
               e.preventDefault();
               this._onSectionContextMenu?.(spaceId, e.clientX, e.clientY);
@@ -167,6 +214,28 @@ export class RoomList {
     }
 
     this._updateActive();
+  }
+
+  /**
+   * Repaint one room's muted styling in place.
+   *
+   * Mirrors updateRoomBadge, for the same reason: setRooms would rebuild from
+   * the full cache and lose the current space filter. Muting also changes how
+   * unread is drawn — a muted room shows neither the unread class nor the dot —
+   * so the badge is re-decided here too rather than left describing the state
+   * the room was in before it was silenced.
+   */
+  updateRoomMuted(id: string, muted: boolean): void {
+    const idx = this._rooms.findIndex((r) => r.id === id);
+    if (idx < 0) return;
+    this._rooms[idx] = { ...this._rooms[idx], muted };
+
+    const el = this._scrollEl.querySelector<HTMLElement>(`[data-room-id="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.classList.toggle("room-list__item--muted", muted);
+
+    const entry = this._rooms[idx];
+    this.updateRoomBadge(id, entry.unreadCount ?? 0, entry.mentionCount ?? 0);
   }
 
   private _createItem(room: RoomEntry): HTMLElement {

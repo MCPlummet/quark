@@ -41,6 +41,7 @@ export {
 // Room & space navigation, pagination, joins, DMs, member loading.
 export {
   selectRoom,
+  markRoomAsRead,
   jumpToMessage,
   jumpToLatest,
   reloadCurrentRoomTimeline,
@@ -50,6 +51,7 @@ export {
   joinRoom,
   leaveRoomWithFeedback,
   confirmAndLeaveRoom,
+  setRoomMuted,
   refreshRooms,
   bumpRoomActivity,
   applyLocalRoomMeta,

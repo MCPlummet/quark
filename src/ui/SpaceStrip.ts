@@ -2,6 +2,7 @@
 
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { PSEUDO_SPACES, isPseudoSpace } from "../app/pseudo_spaces.js";
+import { attachLongPress } from "../app/long_press.js";
 
 export interface SpaceItem {
   id: string;
@@ -35,6 +36,7 @@ export class SpaceStrip {
   private _onSettings: (() => void) | null = null;
   private _onProfile: (() => void) | null = null;
   private _onContextMenu: ((spaceId: string, x: number, y: number) => void) | null = null;
+  private _onSearch: (() => void) | null = null;
   private _ownAvatarUrl: string | null = null;
   private _ownInitial: string = "?";
 
@@ -44,6 +46,19 @@ export class SpaceStrip {
     this._el.setAttribute("role", "listbox");
     this._el.setAttribute("aria-label", "Spaces");
 
+    // Touch path to the space context menu (#99). Container-level, since items
+    // are rebuilt on every render. Pseudo-spaces (Home, DMs) have no menu, and
+    // carry no data-space-id-backed entry here for the same reason the
+    // right-click handler skips them.
+    attachLongPress(this._el, {
+      resolve: (target) => {
+        const item = target.closest<HTMLElement>(".space-strip__item");
+        const id = item?.dataset.spaceId;
+        return id && !isPseudoSpace(id) ? id : null;
+      },
+      onLongPress: (spaceId, x, y) => this._onContextMenu?.(spaceId, x, y),
+    });
+
   }
 
   getElement(): HTMLElement {
@@ -52,6 +67,11 @@ export class SpaceStrip {
 
   onSelect(handler: (id: string) => void): void {
     this._onSelect = handler;
+  }
+
+  /** Wire the search button to the command palette. */
+  onSearchClick(handler: () => void): void {
+    this._onSearch = handler;
   }
 
   onSettingsClick(handler: () => void): void {
@@ -210,6 +230,26 @@ export class SpaceStrip {
     spacer.className = "space-strip__spacer";
     spacer.setAttribute("aria-hidden", "true");
     this._el.appendChild(spacer);
+
+    // Search button — the command palette's visible affordance. It sits with
+    // the other app-level controls at the foot of the strip rather than in the
+    // room-list header, where it read as a filter for the list beneath it
+    // instead of a search across rooms *and* commands.
+    const searchBtn = document.createElement("div");
+    searchBtn.className = "space-strip__settings-btn space-strip__search-btn";
+    searchBtn.setAttribute("role", "button");
+    searchBtn.setAttribute("tabindex", "0");
+    searchBtn.setAttribute("aria-label", "Search rooms and commands");
+    searchBtn.title = "Search rooms and commands (Ctrl+K)";
+    searchBtn.textContent = "⌕";
+    searchBtn.addEventListener("click", () => this._onSearch?.());
+    searchBtn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        this._onSearch?.();
+      }
+    });
+    this._el.appendChild(searchBtn);
 
     // Settings button — sits above the profile button so the profile (your
     // identity) is the very last item, closest to the screen edge / thumb.

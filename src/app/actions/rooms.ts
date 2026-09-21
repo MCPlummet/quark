@@ -26,6 +26,7 @@ import {
 
 import { getPseudoSpace, sortByRecency } from "../pseudo_spaces.js";
 import { clearRoomNotificationsIpc } from "../../ipc/notifications.js";
+import { muteRoom, unmuteRoom } from "../notifications.js";
 import { enterHomeView, exitHomeView } from "./home.js";
 
 import type { RoomMember, TimelineEvent, EventContextPage } from "../../ipc/types.js";
@@ -58,6 +59,7 @@ import {
   _downloadMemberAvatars,
   ensureSenderAvatarDownloaded,
   isInContextView,
+  setContextView,
   setMediaCacheLimit,
 } from "./context.js";
 import { closeThread } from "./threads.js";
@@ -186,6 +188,39 @@ export function swapComposeDraft(prevRoom: string | null, nextRoom: string): voi
 /**
  * Select a room: fetch timeline, update header, mark read.
  */
+/**
+ * Send the read markers for a room: the receipt other devices see, and the
+ * local notification dismissal they do not.
+ *
+ * Split out of selectRoom so "Mark as read" can be a real action. The room-list
+ * menu item used to call selectRoom, which meant it *opened* the room — a no-op
+ * if it was already open, and never what the label promised (#102).
+ */
+export function sendReadMarkers(roomId: string): void {
+  void markRoomRead(roomId).catch(() => {/* non-fatal: badge already cleared locally */});
+  // Dismiss this room's OS notifications immediately; the read-receipt echo
+  // from markRoomRead covers other devices, this covers the local one.
+  void clearRoomNotificationsIpc(roomId).catch(() => {/* non-fatal */});
+}
+
+/**
+ * Mark a room read without opening it.
+ *
+ * Clears the badge in the cache and in the list (updateRoomBadge, not setRooms,
+ * so the active space filter survives) and sends the markers.
+ */
+export function markRoomAsRead(roomId: string): void {
+  const { roomList } = getComponents();
+  AppState.set(
+    "roomListCache",
+    AppState.get("roomListCache").map((r) =>
+      r.room_id === roomId ? { ...r, unread_count: 0, notification_count: 0 } : r,
+    ),
+  );
+  roomList.updateRoomBadge(roomId, 0, 0);
+  sendReadMarkers(roomId);
+}
+
 export async function selectRoom(
   roomId: string,
   opts: { keepPanelFocus?: boolean } = {},
@@ -224,7 +259,7 @@ export async function selectRoom(
   paginationState.prevBatch = null;
   paginationState.nextBatch = null;
   paginationState.reachedStart = false;
-  paginationState.inContextView = false;
+  setContextView(false);
   paginationState.contextFocusEventId = null;
   paginationState.paginationLoading = false;
   paginationState.paginationLoadingForward = false;
@@ -255,10 +290,7 @@ export async function selectRoom(
     );
     roomList.updateRoomBadge(roomId, 0, 0);
   }
-  void markRoomRead(roomId).catch(() => {/* non-fatal: badge already cleared locally */});
-  // Dismiss this room's OS notifications immediately; the read-receipt echo
-  // from markRoomRead covers other devices, this covers the local one.
-  void clearRoomNotificationsIpc(roomId).catch(() => {/* non-fatal */});
+  sendReadMarkers(roomId);
 
   // Find room info in cache (re-read after potential update above)
   const updatedCache = AppState.get("roomListCache");
@@ -499,7 +531,7 @@ async function loadMoreMessages(): Promise<void> {
   // the raw `getTimeline`/`prevBatch` token path; the live timeline uses the
   // cache-backed `loadOlderTimeline`/`reachedStart` path. They're mutually
   // exclusive — `inContextView` is fixed for the duration of this load.
-  const inCtx = paginationState.inContextView;
+  const inCtx = isInContextView();
   if (inCtx) {
     if (!paginationState.prevBatch) return;
   } else if (paginationState.reachedStart) {
@@ -579,7 +611,7 @@ async function loadMoreMessages(): Promise<void> {
  * view so subsequent sync messages append normally.
  */
 async function loadMoreMessagesForward(): Promise<void> {
-  if (paginationState.paginationLoadingForward || !paginationState.inContextView || !paginationState.nextBatch) return;
+  if (paginationState.paginationLoadingForward || !isInContextView() || !paginationState.nextBatch) return;
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
@@ -625,8 +657,7 @@ async function loadMoreMessagesForward(): Promise<void> {
     // Reaching `next_batch === null` means the live tail has been reached.
     // Drop out of context view so future sync messages append at the bottom.
     if (paginationState.nextBatch === null) {
-      paginationState.inContextView = false;
-      timeline.setContextView(false);
+      setContextView(false);
     }
   } catch (err) {
     showError(`Failed to load more messages: ${err instanceof Error ? err.message : String(err)}`);
@@ -676,7 +707,7 @@ function _renderContextPage(
 
   paginationState.prevBatch = ctx.prev_batch;
   paginationState.nextBatch = ctx.next_batch;
-  paginationState.inContextView = ctx.next_batch !== null;
+  setContextView(ctx.next_batch !== null);
 
   AppState.set("currentTimeline", ctx.events);
   const threadRootCounts = _buildThreadRootCounts(ctx.events);
@@ -692,7 +723,6 @@ function _renderContextPage(
   } else {
     timeline.setMessages(messages, { preserveScroll: true });
   }
-  timeline.setContextView(paginationState.inContextView);
 
   _downloadMessageImages(ctx.events, timeline);
   _downloadInlineEmoji(timeline);
@@ -751,7 +781,7 @@ export async function jumpToLatest(): Promise<void> {
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
 
-  if (!paginationState.inContextView) {
+  if (!isInContextView()) {
     // Not in context view — just scroll to the bottom of what's loaded
     timeline.selectLast();
     return;
@@ -763,7 +793,7 @@ export async function jumpToLatest(): Promise<void> {
     paginationState.prevBatch = null;
     paginationState.nextBatch = null;
     paginationState.reachedStart = page.reached_start;
-    paginationState.inContextView = false;
+    setContextView(false);
     paginationState.contextFocusEventId = null;
 
     AppState.set("currentTimeline", page.events);
@@ -772,7 +802,6 @@ export async function jumpToLatest(): Promise<void> {
     const mainEvents = _applyEdits(page.events).filter((e) => !e.thread_root);
     const messages = mainEvents.map((e) => timelineEventToMessage(e, page.events, threadRootCounts));
     timeline.setMessages(messages);
-    timeline.setContextView(false);
     timeline.selectLast();
 
     _downloadMessageImages(page.events, timeline);
@@ -1194,6 +1223,39 @@ export async function convertRoomDirectness(roomId: string, isDirect: boolean): 
   } catch (err) {
     showError(`Failed to convert to ${verb}: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * Mute or unmute a room, and reflect the result everywhere the user can see it.
+ *
+ * Every surface offering muting needs the same four steps — write the rule, and
+ * only if the account's ruleset actually changed, patch the cached RoomInfo,
+ * repaint the room-list row, and say so. The surfaces that existed had each
+ * implemented a different subset: the `:mute` command and the room dialog's
+ * Info tab patched the cache, while the room-list context menu and the mobile
+ * overflow menu called muteRoom and dropped the outcome on the floor — so the
+ * row they had just muted kept its unmuted styling, went on counting unread the
+ * loud way, and went on offering "Mute" until the next room-list refresh.
+ *
+ * Returns the muted state now in effect, which is the state it started in when
+ * the homeserver did not take the rule. That case is not an error and not
+ * silent: muteRoom/unmuteRoom raise the backend's own warning for it, and
+ * patching anything on the strength of a write the server refused is what #82
+ * was.
+ */
+export async function setRoomMuted(roomId: string, muted: boolean): Promise<boolean> {
+  const outcome = muted ? await muteRoom(roomId) : await unmuteRoom(roomId);
+  if (!outcome.synced) return !muted;
+
+  AppState.set(
+    "roomListCache",
+    AppState.get("roomListCache").map((r) =>
+      r.room_id === roomId ? { ...r, muted } : r,
+    ),
+  );
+  getComponents().roomList.updateRoomMuted(roomId, muted);
+  showSuccess(muted ? "Room muted" : "Room unmuted");
+  return muted;
 }
 
 // ── Live recency re-sort ─────────────────────────────────────────────────────

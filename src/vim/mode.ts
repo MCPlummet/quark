@@ -10,10 +10,19 @@ export enum Mode {
 export type ModeChangeListener = (from: Mode, to: Mode) => void;
 
 // Valid mode transitions. Key = from, Value = set of allowed to-modes.
+//
+// Insert ↔ Command is not a vim transition, and Quark allows it because Quark
+// has a state vim does not: vim mode off, where the app sits in Insert
+// permanently and Normal is unreachable. The command bar still has to open (the
+// palette prefills it for commands needing an argument) and still has to close
+// again, and routing either leg through Normal would strand the user in a mode
+// nothing routes keys for. See resolveModeRoute in app/keyboard.ts, which makes
+// the same point from the keydown side: an open command bar owns the keys
+// whatever the editing model is.
 const VALID_TRANSITIONS: Record<Mode, Set<Mode>> = {
   [Mode.Normal]: new Set([Mode.Insert, Mode.Command, Mode.Visual]),
-  [Mode.Insert]: new Set([Mode.Normal]),
-  [Mode.Command]: new Set([Mode.Normal]),
+  [Mode.Insert]: new Set([Mode.Normal, Mode.Command]),
+  [Mode.Command]: new Set([Mode.Normal, Mode.Insert]),
   [Mode.Visual]: new Set([Mode.Normal]),
 };
 

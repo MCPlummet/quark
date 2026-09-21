@@ -91,8 +91,6 @@ export const paginationState = {
   /** Live (cache-backed) path: true once back-pagination has reached the start
    *  of the room's history. Replaces the `prevBatch === null` signal there. */
   reachedStart: false,
-  /** True when the timeline is showing a context window around a jumped-to message, not the live end. */
-  inContextView: false,
   /** Event ID the context window is centered on (the jumped-to message). Set
    *  when entering context view; used to re-fetch the same window when room
    *  keys arrive so undecryptable events in it can re-decrypt. Null when live. */
@@ -103,6 +101,26 @@ export const paginationState = {
   paginationLoadingForward: false,
 };
 
+// ── Context view ──────────────────────────────────────────────────────────────
+//
+// Deliberately NOT a field on paginationState.
+//
+// The timeline keeps its own copy of this flag (it gates the jump-to-latest
+// button and the forward-pagination trigger), so the two have to move together.
+// While it was a plain mutable field, four places reset it and one of them —
+// selectRoom — forgot the matching timeline.setContextView(false). A room
+// switch after any jump-to-message therefore left the timeline believing it was
+// still in a context window: the jump-to-latest button was pinned on and could
+// not be dismissed (clicking it recomputed `_inContextView || _scrolledUp` to
+// true), and scrolling to the bottom fired forward-pagination fetches for a
+// room that had never been in context view.
+//
+// So the field is gone. The only way to change this state is setContextView
+// below, which drives both — and `paginationState.inContextView = x` is now a
+// compile error rather than a half-update.
+
+let _inContextView = false;
+
 /** True when the timeline is showing a window in the middle of history rather
  *  than at the live tail. Used by the sync handler to suppress appending new
  *  live messages while the user is reading older context — the user would
@@ -110,7 +128,21 @@ export const paginationState = {
  *  the live tail. The skipped messages will arrive when the user paginates
  *  forward to them or clicks "jump to latest". */
 export function isInContextView(): boolean {
-  return paginationState.inContextView;
+  return _inContextView;
+}
+
+/**
+ * Enter or leave context view, updating the timeline with it.
+ *
+ * The timeline is optional-chained and the call is guarded: this runs during
+ * selectRoom, which a test may reach with a partial component mock, and losing
+ * the flag update because the UI is absent would be worse than skipping the
+ * UI update.
+ */
+export function setContextView(inContext: boolean): void {
+  _inContextView = inContext;
+  if (!_components) return;
+  _components.timeline?.setContextView?.(inContext);
 }
 
 // ── Member caches ─────────────────────────────────────────────────────────────

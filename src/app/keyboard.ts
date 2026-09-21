@@ -1,17 +1,20 @@
 // Keyboard orchestration — wires vim mode + keymaps to action dispatcher
 
 import { modeManager, Mode } from "../vim/mode.js";
-import { keymapManager } from "../vim/keybindings.js";
+import { keymapManager, eventChord } from "../vim/keybindings.js";
+import { registerDefaultBindings } from "./registry.js";
+import { currentAvailability } from "./availability.js";
+import { buildMenu } from "./context_menus.js";
 import { ComposeNormalEditor } from "../vim/compose_normal.js";
 import { modalManager } from "../ui/ModalManager.js";
 import type { AppComponents } from "../ui/App.js";
-import type { ContextMenuEntry } from "../ui/ContextMenu.js";
 import {
   sendMessage,
   sendReaction,
   cancelReply,
   openEmojiPicker,
   openGifPicker,
+  openStickerPicker,
   openProfileDialog,
   openSettings,
   openRoomInfo,
@@ -43,7 +46,9 @@ import {
   loadTheme,
   configThemeOverridesRc,
   selectRoom,
+  markRoomAsRead,
   confirmAndLeaveRoom,
+  setRoomMuted,
   startVerification,
   setupCrossSigning,
   logout,
@@ -53,6 +58,7 @@ import { resolveComposeSubmit } from "./compose_submit.js";
 import {
   enterMessageTextSelect,
   enterComposeTextSelect,
+  selectMessageTextForTouch,
   exitTextSelect,
   copyTextSelection,
   quoteTextSelectionIntoCompose,
@@ -69,9 +75,10 @@ import { getAppConfig, setAppConfig } from "../ipc/app_config.js";
 import type { KeyContext } from "../vim/keybindings.js";
 import { BUILTIN_EMOJI } from "../data/unicode-emoji.js";
 import { _shortcodeToMxc } from "./actions/context.js";
-import { onMobileChange } from "./mobile.js";
+import { onMobileChange, isMobile } from "./mobile.js";
 import { effectiveSendOnEnter, shouldShowSendButton } from "./send_behavior.js";
-import { showToast } from "../ui/NotificationToast.js";
+import { showToast, showError } from "../ui/NotificationToast.js";
+import { runUpdateCheck } from "./update_check.js";
 import { filterShortcodes, type ShortcodeEntry } from "../ui/ShortcodePreview.js";
 import { filterMembers, type MentionEntry } from "../ui/MentionPreview.js";
 import { getEmojiPacks } from "../ipc/emoji.js";
@@ -80,52 +87,32 @@ import { getRoomMembers } from "../ipc/rooms.js";
 import { extractShortcodeQuery, extractMentionQuery } from "./autocomplete_query.js";
 import { applySetOptions } from "./set_options.js";
 
-// ── Default keybindings ───────────────────────────────────────────────────────
+// ── Mode routing ──────────────────────────────────────────────────────────────
 
-function registerDefaultBindings(): void {
-  // Normal mode — global
-  keymapManager.nmap("i", "mode-insert");
-  keymapManager.nmap(":", "mode-command");
-  keymapManager.nmap("v", "mode-visual");
-  keymapManager.nmap("j", "nav-down");
-  keymapManager.nmap("k", "nav-up");
-  keymapManager.nmap("h", "nav-left");
-  keymapManager.nmap("l", "nav-right");
-  keymapManager.nmap("ArrowLeft", "nav-left");
-  keymapManager.nmap("ArrowRight", "nav-right");
-  keymapManager.nmap("ArrowUp", "nav-up");
-  keymapManager.nmap("ArrowDown", "nav-down");
-  keymapManager.nmap("gg", "jump-top");
-  keymapManager.nmap("G", "jump-bottom");
-  keymapManager.nmap("r", "reply");
-  keymapManager.nmap("e", "react");
-  keymapManager.nmap("dd", "redact");
-  keymapManager.nmap("E", "edit");
-  keymapManager.nmap("c", "edit");
-  keymapManager.nmap("t", "open-thread");
-  keymapManager.nmap("m", "toggle-members");
-  keymapManager.nmap("P", "open-profile");
-  keymapManager.nmap("S", "edit-status");
-  keymapManager.nmap("?", "open-settings");
-  keymapManager.nmap("I", "open-room-info");
+/** Which handler owns a keystroke, once modals and Escape have had their say. */
+export type ModeRoute = "insert" | "command" | "vim";
 
-  // select — activates the focused item in panels that support it (roomlist, spaces)
-  keymapManager.nmap("Enter", "select");
-  keymapManager.nmap("o", "select");
-  // In the timeline, `o` enters text-select mode on the selected message rather
-  // than the generic "select" action. Other panels keep `o` as a select alias.
-  keymapManager.tmap("o", "enter-text-select");
-
-  // copy / paste
-  keymapManager.nmap("y", "copy-message");
-  keymapManager.nmap("p", "paste-to-input");
-
-  // Quote-selection — text-select Visual mode only. Outside text-select the
-  // action is unhandled (no-op), so binding it globally costs nothing.
-  keymapManager.nmap(">", "quote-selection");
-
-  // close — clears selection / reply / thread for the active panel
-  keymapManager.nmap("Escape", "close");
+/**
+ * Decide which handler a keystroke belongs to.
+ *
+ * Extracted from the global keydown ladder because the ordering is load-bearing
+ * and was wrong: the vim-off fallback used to be tested before Command mode, so
+ * with vim disabled every keystroke meant for the command bar was routed into
+ * the compose box instead. That never surfaced while the command bar was
+ * reachable only through the `mode-command` action — which requires vim — but
+ * the palette now opens it to finish a command that needs arguments, and on
+ * mobile vim is always off (#98).
+ *
+ * Command mode therefore outranks the vim-mode question: if the command bar is
+ * open, it owns the keys, whatever the editing model is.
+ */
+export function resolveModeRoute(mode: Mode, vimMode: boolean): ModeRoute {
+  if (mode === Mode.Insert) return "insert";
+  if (mode === Mode.Command) return "command";
+  // Normal/Visual are unreachable with vim disabled; treat anything that gets
+  // here as Insert rather than letting it fall through to the vim keymap.
+  if (!vimMode) return "insert";
+  return "vim";
 }
 
 // ── Action dispatcher ─────────────────────────────────────────────────────────
@@ -295,6 +282,36 @@ export function dispatchAction(action: string, components: AppComponents): void 
       openSettings();
       break;
 
+    case "open-emoji-picker":
+      modeManager.transition(Mode.Insert);
+      input.focus();
+      openEmojiPicker();
+      break;
+
+    case "open-gif-picker":
+      modeManager.transition(Mode.Insert);
+      input.focus();
+      openGifPicker();
+      break;
+
+    // Markdown wrappers. Previously a hardcoded chord ladder in
+    // handleInsertKeydown; they are actions now so a quarkrc can move them.
+    case "format-bold":
+      input.wrapSelection("**");
+      break;
+
+    case "format-italic":
+      input.wrapSelection("*");
+      break;
+
+    case "format-underline":
+      input.wrapSelection("__");
+      break;
+
+    case "format-strikethrough":
+      input.wrapSelection("~~");
+      break;
+
     case "open-room-info":
       void openRoomInfo();
       break;
@@ -309,6 +326,23 @@ export function dispatchAction(action: string, components: AppComponents): void 
 
     case "open-debug":
       void openDebugViewer();
+      break;
+
+    case "open-directory":
+      openRoomDirectory();
+      break;
+
+    case "open-sticker-picker":
+      modeManager.transition(Mode.Insert);
+      input.focus();
+      openStickerPicker();
+      break;
+
+    // Settings → About's [check now]. The `:update` path goes through
+    // executeCommand; this is the same work reached from a button.
+    case "check-for-updates":
+      showToast("Checking for updates…", "info");
+      void runUpdateCheck(components, true);
       break;
 
     case "edit-status":
@@ -334,8 +368,8 @@ export function dispatchAction(action: string, components: AppComponents): void 
       void logout();
       break;
 
-    case "open-quick-nav":
-      components.quickNavPalette.show();
+    case "open-command-palette":
+      components.commandPalette.show();
       break;
 
     case "close":
@@ -751,34 +785,20 @@ function handleInsertKeydown(e: KeyboardEvent, components: AppComponents): void 
     if (consumed) return;
   }
 
-  // Ctrl-e → emoji picker
-  if (e.ctrlKey && e.key === "e") {
-    e.preventDefault();
-    openEmojiPicker();
-    return;
-  }
-
-  // Ctrl-g → GIF picker
-  if (e.ctrlKey && e.key === "g") {
-    e.preventDefault();
-    openGifPicker();
-    return;
-  }
-
-  // Rich-text formatting shortcuts (#54): wrap the selection in markdown
-  // markers. Cmd on macOS, Ctrl elsewhere. Bold/italic/underline are the bare
-  // chord; strikethrough is Shift+X (no conventional bare chord), and the
-  // mobile toolbar covers the rest.
-  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-    const key = e.key.toLowerCase();
-    let marker: string | null = null;
-    if (!e.shiftKey && key === "b") marker = "**";
-    else if (!e.shiftKey && key === "i") marker = "*";
-    else if (!e.shiftKey && key === "u") marker = "__";
-    else if (e.shiftKey && key === "x") marker = "~~";
-    if (marker) {
+  // Insert-mode chords (emoji/GIF pickers, the markdown wrappers) resolve
+  // through the keymap in the "insert" context, which is what finally makes
+  // `imap` mean something: the parser accepted imap directives and registered
+  // them, but nothing ever resolved that context, so a user's insert-mode
+  // mapping was silently ignored (#103).
+  //
+  // Only bindings that exist are claimed, so Ctrl+C / Ctrl+V / Ctrl+A keep
+  // reaching the browser untouched.
+  const insertChord = eventChord(e);
+  if (insertChord) {
+    const chordAction = keymapManager.actionForKey(insertChord, "insert");
+    if (chordAction) {
       e.preventDefault();
-      input.wrapSelection(marker);
+      dispatchAction(chordAction, components);
       return;
     }
   }
@@ -835,9 +855,25 @@ const MAP_TYPE_TO_CONTEXT: Readonly<Record<string, KeyContext>> = {
   visual: "visual",
 };
 
+/**
+ * Contexts no key handler consults, so a mapping into one can never fire.
+ *
+ * `insert` and `visual` used to be here too: the quarkrc parser accepted imap
+ * and vmap directives, registered them, and nothing ever resolved those
+ * contexts — the user's mapping was taken and silently dropped. Both are wired
+ * now. `command` remains because the command bar is a text field that handles
+ * its own structural keys (Enter, Tab, history) and has no action vocabulary to
+ * bind against; rather than accept cmap and ignore it, say so (#103).
+ */
+const UNSUPPORTED_CONTEXTS: ReadonlySet<KeyContext> = new Set<KeyContext>(["command"]);
+
 // applySetOptions lives in ./set_options.ts (pure, unit-tested).
 
 export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
+  // Collected rather than warned per-directive so a file with several gets one
+  // message instead of a stack of toasts.
+  const unsupportedMaps: string[] = [];
+
   // Read the config up front: `colorscheme` is subordinate to config.toml's
   // `general.theme` (#91), so that decision needs the config in hand before any
   // directive runs. A config we cannot read leaves `cfg` null, which lets the rc
@@ -851,6 +887,10 @@ export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
   for (const directive of rc.directives) {
     if (directive.type === "map") {
       const context = MAP_TYPE_TO_CONTEXT[directive.map_type];
+      if (context && UNSUPPORTED_CONTEXTS.has(context)) {
+        unsupportedMaps.push(`${directive.map_type}: ${directive.key}`);
+        continue;
+      }
       if (context) keymapManager.map(context, directive.key, directive.action, directive.noremap);
     } else if (directive.type === "unmap") {
       const context = MAP_TYPE_TO_CONTEXT[directive.map_type];
@@ -878,6 +918,14 @@ export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
     console.warn("[quarkrc] parse errors:", rc.errors);
   }
 
+  // A mapping that cannot fire is worse than a rejected one: the user believes
+  // it took. Say which, once.
+  if (unsupportedMaps.length > 0) {
+    const detail = unsupportedMaps.join(", ");
+    console.warn(`[quarkrc] ignored — command mode has no bindable actions: ${detail}`);
+    showToast(`quarkrc: cmap is not supported (${unsupportedMaps.length} ignored)`, "info");
+  }
+
   const setDirectives = rc.directives.filter(
     (d): d is Extract<typeof d, { type: "set" }> => d.type === "set"
   );
@@ -890,6 +938,21 @@ export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
   }
 }
 
+/**
+ * Mute or unmute from a menu row.
+ *
+ * A row handler returns void, so the rejection has nowhere to propagate to and
+ * would surface as an unhandled promise rather than as anything the user sees.
+ * setRoomMuted reports a rule the *homeserver* refused itself; this is the other
+ * failure — the write never completing at all.
+ */
+function toggleMute(roomId: string, muted: boolean): void {
+  void setRoomMuted(roomId, muted).catch((err) => {
+    const verb = muted ? "mute" : "unmute";
+    showError(`Failed to ${verb} room: ${err instanceof Error ? err.message : String(err)}`);
+  });
+}
+
 // ── Global keydown handler ────────────────────────────────────────────────────
 
 export function setupKeyboard(components: AppComponents): void {
@@ -898,7 +961,7 @@ export function setupKeyboard(components: AppComponents): void {
   // are destructured.
   const { input, commandBar, shortcodePreview, mentionPreview, timeline,
           quickReactPicker, pinnedMessagesDialog, searchDialog, revisionHistoryDialog,
-          roomHeader, imageLightbox, quickNavPalette, contextMenu,
+          roomHeader, imageLightbox, commandPalette, contextMenu,
           spaceStrip, roomList } = components;
 
   registerDefaultBindings();
@@ -965,6 +1028,19 @@ export function setupKeyboard(components: AppComponents): void {
     revisionHistoryDialog.show(eventId, originalBody);
   });
 
+  // ── Context menus ────────────────────────────────────────────────────────
+  // Rows, order and grouping come from the registry; hints come from the live
+  // keymap. Only behaviour is wired here, keyed by action id — and an id with
+  // no handler is dropped, which is how "Mark as read" appears on unread rooms
+  // alone without the registry needing to model that.
+
+  // The hover bar's ⋯ button opens the same menu right-click and long-press do,
+  // so all three routes to a message offer the same capabilities.
+  document.addEventListener("quark:msg-menu" as keyof DocumentEventMap, (e: Event) => {
+    const { eventId, x, y } = (e as CustomEvent<{ eventId: string; x: number; y: number }>).detail;
+    if (eventId) timeline.emitContextMenu(eventId, x, y);
+  });
+
   // Right-click / long-press context menu for messages
   timeline.onContextMenu((eventId, x, y) => {
     const events = AppState.get("currentTimeline");
@@ -972,125 +1048,141 @@ export function setupKeyboard(components: AppComponents): void {
     const ownUserId = AppState.get("ownUserId");
     const isOwn = !!evt && !!ownUserId && evt.sender === ownUserId;
 
-    const entries: ContextMenuEntry[] = [
-      {
-        label: "Reply",
-        hint: "r",
-        action: () => {
-          if (evt) {
-            startReply(eventId, evt.sender, evt.body.slice(0, 80));
-            input.focus();
+    // Both the desktop right-click menu and the mobile long-press sheet flow
+    // through this callback, so this is the single place that gives
+    // finger-input users a way to edit or delete.
+    const ctx = currentAvailability({
+      selectedMessageId: eventId,
+      selectedMessageIsOwn: isOwn,
+    });
+
+    contextMenu.show(x, y, buildMenu("message", ctx, {
+      "reply": () => {
+        if (!evt) return;
+        startReply(eventId, evt.sender, evt.body.slice(0, 80));
+        input.focus();
+      },
+      "react": () => openQuickReactPicker(eventId),
+      "open-thread": () => void openThread(eventId),
+      "copy-message": () => {
+        void navigator.clipboard.writeText(evt?.body ?? "");
+      },
+      // Mobile only. On desktop you select text by dragging, so the row would
+      // be noise; withholding the handler is what keeps it out of the menu.
+      "select-message-text": isMobile()
+        ? () => {
+            const bodyEl = timeline.getMessageBodyElementById(eventId);
+            if (bodyEl) selectMessageTextForTouch(bodyEl);
           }
-        },
+        : undefined,
+      "view-raw-event": () => void openDebugViewerForEvent(eventId),
+      "edit": () => {
+        // Prefer the MessageData body (reflects applied edits) over the raw
+        // timeline event.
+        const body = timeline.getMessageBodyById(eventId) ?? evt?.body ?? "";
+        startEdit(eventId, body);
+        modeManager.transition(Mode.Insert);
+        input.focus();
       },
-      {
-        label: "React",
-        hint: "e",
-        action: () => openQuickReactPicker(eventId),
-      },
-      {
-        label: "Thread",
-        hint: "t",
-        action: () => void openThread(eventId),
-      },
-      { separator: true },
-      {
-        label: "Copy message text",
-        hint: "y",
-        action: () => {
-          const text = evt?.body ?? "";
-          void navigator.clipboard.writeText(text);
-        },
-      },
-      {
-        label: "View raw event",
-        action: () => void openDebugViewerForEvent(eventId),
-      },
-    ];
-
-    // Own-message actions: edit and delete. Both the desktop right-click menu
-    // and the mobile long-press sheet flow through this callback, so this is
-    // the single place that gives finger-input users a way to delete/edit.
-    if (isOwn) {
-      entries.push(
-        { separator: true },
-        {
-          label: "Edit",
-          hint: "E",
-          action: () => {
-            // Prefer the MessageData body (reflects applied edits) over the
-            // raw timeline event.
-            const body = timeline.getMessageBodyById(eventId) ?? evt?.body ?? "";
-            startEdit(eventId, body);
-            modeManager.transition(Mode.Insert);
-            input.focus();
-          },
-        },
-        {
-          label: "Delete",
-          hint: "dd",
-          action: () => void redactMessage(eventId),
-        },
-      );
-    }
-
-    contextMenu.show(x, y, entries);
+      "redact": () => void redactMessage(eventId),
+    }));
   });
 
   // Right-click context menu for rooms in the room list
   roomList.onContextMenu((roomId, x, y) => {
-    const rooms = AppState.get("roomListCache");
-    const room = rooms.find((r) => r.room_id === roomId);
-    contextMenu.show(x, y, [
-      {
-        label: "Open",
-        action: () => void selectRoom(roomId),
-      },
-      { separator: true },
-      {
-        label: "Room settings",
-        action: () => void selectRoom(roomId).then(() => openRoomSettings()),
-      },
-      {
-        label: "Room info",
-        action: () => void selectRoom(roomId).then(() => openRoomInfo()),
-      },
-      ...(room && room.unread_count > 0 ? [
-        { separator: true } as const,
-        {
-          label: "Mark as read",
-          action: () => void selectRoom(roomId),
-        },
-      ] : []),
-    ]);
+    const room = AppState.get("roomListCache").find((r) => r.room_id === roomId);
+    // The menu targets the room under the cursor, which is not necessarily the
+    // one that is open — so the room requirement is evaluated against that
+    // target rather than against AppState's current room.
+    const ctx = currentAvailability({ roomId });
+
+    contextMenu.show(x, y, buildMenu("room", ctx, {
+      "open-room": () => void selectRoom(roomId),
+      "open-room-settings": () => void selectRoom(roomId).then(() => openRoomSettings()),
+      "open-room-info": () => void selectRoom(roomId).then(() => openRoomInfo()),
+      // Unread rooms only; see the note above buildMenu's handler map. Marks
+      // read *without* opening — it used to call selectRoom, so the item both
+      // did the wrong thing and did nothing at all on the open room (#102).
+      "mark-room-read": room && room.unread_count > 0
+        ? () => markRoomAsRead(roomId)
+        : undefined,
+      // Exactly one of these is applicable, so exactly one gets a handler.
+      // `muted` is undefined before the room has synced, which reads as unmuted
+      // — the same fallback the Info tab uses.
+      "mute-room": room?.muted ? undefined : () => toggleMute(roomId, true),
+      "unmute-room": room?.muted ? () => toggleMute(roomId, false) : undefined,
+      "leave-room-confirm": () => void selectRoom(roomId).then(() => confirmAndLeaveRoom()),
+    }));
   });
 
   // Right-click context menu for subspace section labels in the room list
   roomList.onSectionContextMenu((spaceId, x, y) => {
-    contextMenu.show(x, y, [
-      {
-        label: "Space settings",
-        action: () => void openSpaceSettings(spaceId),
-      },
-    ]);
+    contextMenu.show(x, y, buildMenu("section", currentAvailability({ spaceId }), {
+      "open-space-settings": () => void openSpaceSettings(spaceId),
+    }));
+  });
+
+  // Mobile top bar's ⋮ menu — the room-scoped chrome the hidden desktop header
+  // used to carry. Same registry rows, same builder, rendered by ContextMenu as
+  // a bottom sheet in mobile mode.
+  components.mobileTopBar.onOverflowClick((x, y) => {
+    contextMenu.show(x, y, buildMenu("overflow", currentAvailability(), {
+      "open-search": () => openSearch(),
+      "open-pinned": () => void openPinnedMessages(),
+      "open-room-info": () => void openRoomInfo(),
+      "toggle-members": () => toggleMemberList(),
+      "help": () => components.helpDialog.show(),
+      ...(() => {
+        const id = AppState.get("currentRoomId");
+        const current = AppState.get("roomListCache").find((r) => r.room_id === id);
+        return id && current?.muted
+          ? { "unmute-room": () => toggleMute(id, false) }
+          : id
+            ? { "mute-room": () => toggleMute(id, true) }
+            : {};
+      })(),
+    }));
   });
 
   // Right-click context menu for spaces in the space strip
   spaceStrip.onContextMenu((spaceId, x, y) => {
-    contextMenu.show(x, y, [
-      {
-        label: "Space settings",
-        action: () => void openSpaceSettings(spaceId),
-      },
-    ]);
+    contextMenu.show(x, y, buildMenu("space", currentAvailability({ spaceId }), {
+      "open-space-settings": () => void openSpaceSettings(spaceId),
+    }));
   });
 
   // ── User keybindings ──────────────────────────────────────────────────────
   void loadQuarkrc().then(applyRcDirectives).catch(() => { /* no rc file is fine */ });
 
   // Wire quick nav palette → selectRoom
-  quickNavPalette.onSelect((roomId) => {
+  // Visible palette affordance in the space strip, beside the other app-level
+  // controls. The strip is inside the drawer on mobile, so the palette still
+  // does not depend on knowing Ctrl+K or finding the pull-down gesture.
+  spaceStrip.onSearchClick(() => commandPalette.show());
+  roomList.onDirectoryClick(() => openRoomDirectory());
+
+  commandPalette.onSelectRoom((roomId) => {
     void selectRoom(roomId);
+  });
+
+  // Action rows. The registry's arg grammar decides which of the three routes
+  // a row takes; see invocationFor in CommandPalette.ts.
+  commandPalette.onInvoke((invocation) => {
+    switch (invocation.kind) {
+      case "dispatch":
+        dispatchAction(invocation.actionId, components);
+        break;
+      case "run":
+        void executeCommand({ name: invocation.command, args: [], raw: `:${invocation.command}` });
+        break;
+      case "prefill":
+        // The command needs an argument the palette cannot supply, so hand the
+        // user the command bar with the line started. This is the one path that
+        // needs Command mode to work without vim — see the keydown ordering.
+        modeManager.transition(Mode.Command);
+        commandBar.show(invocation.line);
+        break;
+    }
   });
 
   // Wire quick react picker → sendReaction
@@ -1199,14 +1291,24 @@ export function setupKeyboard(components: AppComponents): void {
   });
 
   // Command bar wiring
+  // Where the command bar returns to depends on whether there *is* a Normal
+  // mode to return to. With vim off, dropping the user into Normal would strand
+  // them in a mode the rest of the app refuses to route keys for.
+  const leaveCommandMode = (): void => {
+    if (AppState.get("vimMode")) {
+      modeManager.transition(Mode.Normal);
+    } else {
+      modeManager.transition(Mode.Insert);
+      input.focus();
+    }
+  };
+
   commandBar.onExecute((parsed) => {
-    modeManager.transition(Mode.Normal);
+    leaveCommandMode();
     void executeCommand(parsed);
   });
 
-  commandBar.onCancel(() => {
-    modeManager.transition(Mode.Normal);
-  });
+  commandBar.onCancel(leaveCommandMode);
 
   // Reply preview dismiss → cancel reply
   components.replyPreview.onDismiss(() => {
@@ -1319,12 +1421,19 @@ export function setupKeyboard(components: AppComponents): void {
       return;
     }
 
-    // Quick nav palette — Ctrl+K opens from any mode (no overlay open here).
-    if (e.ctrlKey && e.key === "k") {
-      if (AppState.get("loggedIn")) {
-        e.preventDefault();
-        quickNavPalette.show();
-        return;
+    // Global chords, resolved through the keymap so a quarkrc can move them.
+    // Runs above the vim branches because the palette is the one entry point
+    // that must not depend on modal editing — and only claims a chord that is
+    // actually bound, so browser copy/paste/select-all stay untouched.
+    if (AppState.get("loggedIn")) {
+      const chord = eventChord(e);
+      if (chord) {
+        const chordAction = keymapManager.actionForKey(chord, "global");
+        if (chordAction) {
+          e.preventDefault();
+          dispatchAction(chordAction, components);
+          return;
+        }
       }
     }
 
@@ -1366,19 +1475,12 @@ export function setupKeyboard(components: AppComponents): void {
     // Only intercept when logged in
     if (!AppState.get("loggedIn")) return;
 
-    if (mode === Mode.Insert) {
+    const route = resolveModeRoute(mode, AppState.get("vimMode"));
+    if (route === "insert") {
       handleInsertKeydown(e, components);
       return;
     }
-
-    // When vim mode is disabled we should never reach Normal/Visual/Command,
-    // but guard just in case — treat everything as Insert.
-    if (!AppState.get("vimMode")) {
-      handleInsertKeydown(e, components);
-      return;
-    }
-
-    if (mode === Mode.Command) {
+    if (route === "command") {
       // Command bar handles its own keydown — nothing to do here
       return;
     }
@@ -1398,9 +1500,11 @@ export function setupKeyboard(components: AppComponents): void {
       if (handleTextSelectKeydown(e, components)) return;
     }
 
-    // Normal / Visual — resolve through keymap
+    // Normal / Visual — resolve through keymap. Visual gets its own context so
+    // `vmap` applies; like `imap` it was parsed, registered, and never consulted.
     const panel = AppState.get("activePanel");
-    const activeContext: KeyContext = panel === "timeline" ? "timeline"
+    const activeContext: KeyContext = mode === Mode.Visual ? "visual"
+      : panel === "timeline" ? "timeline"
       : panel === "roomlist" ? "roomlist"
       : "global";
 

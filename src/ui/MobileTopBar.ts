@@ -1,8 +1,10 @@
 // Slim top bar shown only in mobile mode.
-// Layout: [≡ hamburger] [room avatar — tap to open settings] [room name] [@ members]
+// Layout: [≡ hamburger] [room avatar — tap to open settings] [room name] [@ members] [⋮ more]
 //
 // On mobile the desktop `.room-header` is hidden (it'd duplicate the room
-// name and member count), so this bar carries the contextual room info too.
+// name and member count), so this bar carries the contextual room info too —
+// and, since hiding that header also removed the only pointer affordance for
+// search and pinned messages, the ⋮ menu is where they now live (#99).
 
 import { hashColor } from "./avatarColors.js";
 
@@ -12,9 +14,11 @@ export class MobileTopBar {
   private _hamburgerEl: HTMLButtonElement;
   private _avatarBtnEl: HTMLButtonElement;
   private _membersBtnEl: HTMLButtonElement;
+  private _overflowBtnEl: HTMLButtonElement;
   private _onHamburger: (() => void) | null = null;
   private _onAvatar: (() => void) | null = null;
   private _onMembers: (() => void) | null = null;
+  private _onOverflow: ((x: number, y: number) => void) | null = null;
 
   constructor() {
     this._el = document.createElement("div");
@@ -53,10 +57,27 @@ export class MobileTopBar {
     this._membersBtnEl.textContent = "@";
     this._membersBtnEl.addEventListener("click", () => this._onMembers?.());
 
+    // Overflow menu — the room-scoped actions the hidden desktop header used
+    // to carry (search, pinned, room info), plus members and help.
+    this._overflowBtnEl = document.createElement("button");
+    this._overflowBtnEl.type = "button";
+    this._overflowBtnEl.className = "mobile-top-bar__btn mobile-top-bar__overflow";
+    this._overflowBtnEl.setAttribute("aria-label", "More actions");
+    this._overflowBtnEl.setAttribute("aria-haspopup", "menu");
+    this._overflowBtnEl.textContent = "⋮";
+    this._overflowBtnEl.addEventListener("click", () => {
+      // Anchor from the button so the desktop-width fallback has somewhere
+      // sane to sit; in mobile mode ContextMenu docks to the viewport edge and
+      // ignores these coordinates entirely.
+      const r = this._overflowBtnEl.getBoundingClientRect();
+      this._onOverflow?.(r.left, r.bottom);
+    });
+
     this._el.appendChild(this._hamburgerEl);
     this._el.appendChild(this._avatarBtnEl);
     this._el.appendChild(this._titleEl);
     this._el.appendChild(this._membersBtnEl);
+    this._el.appendChild(this._overflowBtnEl);
   }
 
   getElement(): HTMLElement {
@@ -109,5 +130,10 @@ export class MobileTopBar {
   /** Wire what happens when the user taps the @ members button. */
   onMembersClick(handler: () => void): void {
     this._onMembers = handler;
+  }
+
+  /** Wire the ⋮ overflow menu. Receives anchor coordinates for the menu. */
+  onOverflowClick(handler: (x: number, y: number) => void): void {
+    this._onOverflow = handler;
   }
 }

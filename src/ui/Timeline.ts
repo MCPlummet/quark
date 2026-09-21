@@ -1,6 +1,7 @@
 // Message timeline
 
 import { createReactionBar, updateReactionBar, type ReactionGroup } from "./Reactions.js";
+import { attachLongPress } from "../app/long_press.js";
 import { invoke } from "../ipc/invoke.js";
 import type { SearchResult } from "../ipc/types.js";
 import { type ThreadMessageData } from "./ThreadView.js";
@@ -656,9 +657,34 @@ function buildMessageElement(msg: MessageData): HTMLElement {
       );
     });
 
+    // The hover bar offers react/reply/thread while the context menu also has
+    // copy, raw, edit and delete — so the same message exposed different
+    // capabilities depending on how you reached it (#102). Rather than widen
+    // the bar (and re-solve "which of these apply to this message"), the last
+    // button opens the menu that already answers that.
+    const moreBtn = document.createElement("button");
+    moreBtn.className = "message__action-btn";
+    moreBtn.textContent = "⋯";
+    moreBtn.title = "More actions";
+    moreBtn.setAttribute("aria-label", "More actions for this message");
+    moreBtn.setAttribute("tabindex", "-1");
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      // Anchored to the button rather than the pointer: it is a click on a
+      // known element, not a right-click at an arbitrary point.
+      const r = moreBtn.getBoundingClientRect();
+      row.dispatchEvent(
+        new CustomEvent("quark:msg-menu", {
+          bubbles: true,
+          detail: { eventId: msg.id, x: r.left, y: r.bottom },
+        }),
+      );
+    });
+
     actions.appendChild(reactBtn);
     actions.appendChild(replyBtn);
     actions.appendChild(threadBtn);
+    actions.appendChild(moreBtn);
     row.appendChild(actions);
   }
 
@@ -1071,9 +1097,15 @@ export class Timeline {
     });
 
     // Long-press → context menu for touch input (mobile). The hover toolbar
-    // doesn't reach finger-input users, so a 500ms press on a message opens
-    // the full action menu instead. Cancelled by any move/scroll/end.
-    this._setupLongPress();
+    // doesn't reach finger-input users, so a press on a message opens the full
+    // action sheet instead. Shared with the room list and space strip, which
+    // had no touch path to their menus at all (#99).
+    attachLongPress(this._el, {
+      ignoreSelector: "a, button, img, .message__link, .message__edited-marker",
+      resolve: (target) =>
+        target.closest<HTMLElement>("[data-message-id]")?.dataset.messageId ?? null,
+      onLongPress: (eventId, x, y) => this._onContextMenuCallback?.(eventId, x, y),
+    });
 
     this._scheduleDayRollover();
   }
@@ -1106,78 +1138,6 @@ export class Timeline {
       this._refreshSeparatorLabels();
       this._scheduleDayRollover();
     }, delay);
-  }
-
-  private _setupLongPress(): void {
-    const LONG_PRESS_MS = 500;
-    const MOVE_TOLERANCE_PX = 10;
-    let timer: number | null = null;
-    let startX = 0;
-    let startY = 0;
-    let startEl: HTMLElement | null = null;
-    let fired = false;
-
-    const cancel = (): void => {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-        timer = null;
-      }
-      startEl = null;
-    };
-
-    this._el.addEventListener("touchstart", (e) => {
-      // Single-finger only; ignore taps on interactive children
-      if (e.touches.length !== 1) {
-        cancel();
-        return;
-      }
-      const target = e.target as HTMLElement;
-      if (target.closest("a, button, img, .message__link, .message__edited-marker")) return;
-
-      const msgEl = target.closest<HTMLElement>("[data-message-id]");
-      if (!msgEl?.dataset.messageId) return;
-
-      const touch = e.touches[0];
-      startX = touch.clientX;
-      startY = touch.clientY;
-      startEl = msgEl;
-      fired = false;
-      timer = window.setTimeout(() => {
-        if (!startEl) return;
-        const eventId = startEl.dataset.messageId!;
-        fired = true;
-        // Haptic feedback hint on iOS via brief vibration if available
-        if (typeof navigator.vibrate === "function") navigator.vibrate(10);
-        this._onContextMenuCallback?.(eventId, startX, startY);
-        startEl = null;
-      }, LONG_PRESS_MS);
-    }, { passive: true });
-
-    this._el.addEventListener("touchmove", (e) => {
-      const touch = e.touches[0];
-      if (!touch) return cancel();
-      if (Math.abs(touch.clientX - startX) > MOVE_TOLERANCE_PX ||
-          Math.abs(touch.clientY - startY) > MOVE_TOLERANCE_PX) {
-        cancel();
-      }
-    }, { passive: true });
-
-    this._el.addEventListener("touchend", () => {
-      cancel();
-    }, { passive: true });
-
-    this._el.addEventListener("touchcancel", () => {
-      cancel();
-    }, { passive: true });
-
-    // Suppress the click that follows a long-press so we don't also select-and-act.
-    this._el.addEventListener("click", (e) => {
-      if (fired) {
-        fired = false;
-        e.stopPropagation();
-        e.preventDefault();
-      }
-    }, true);
   }
 
   getElement(): HTMLElement {
@@ -1244,6 +1204,16 @@ export class Timeline {
   /** Register a callback fired when the user right-clicks a message — passes (eventId, x, y). */
   onContextMenu(cb: (eventId: string, x: number, y: number) => void): void {
     this._onContextMenuCallback = cb;
+  }
+
+  /**
+   * Open the message context menu programmatically, at the given anchor.
+   *
+   * The hover bar's ⋯ button routes here so the pointer, right-click and
+   * long-press paths all raise one menu built from one place.
+   */
+  emitContextMenu(eventId: string, x: number, y: number): void {
+    this._onContextMenuCallback?.(eventId, x, y);
   }
 
   /**
@@ -2539,6 +2509,13 @@ export class Timeline {
     el.style.background = color;
     el.setAttribute("aria-hidden", "true");
     return el;
+  }
+
+  /** Returns the `.message__body` element for a message by event ID, or null.
+   *  The long-press sheet works from an event ID rather than the selection,
+   *  since a press does not move the timeline's selected index. */
+  getMessageBodyElementById(eventId: string): HTMLElement | null {
+    return this.getMessageElementById(eventId)?.querySelector<HTMLElement>(".message__body") ?? null;
   }
 
   /** Returns the `.message__body` element for the currently selected message, or null. */

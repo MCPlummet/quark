@@ -23,14 +23,13 @@ import { QuickReactPicker } from "./QuickReactPicker.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { ProfileEditDialog } from "./ProfileEditDialog.js";
 import { SettingsDialog } from "./SettingsDialog.js";
-import { RoomInfoDialog } from "./RoomInfoDialog.js";
 import { PinnedMessagesDialog } from "./PinnedMessagesDialog.js";
 import { SearchDialog } from "./SearchDialog.js";
 import { RoomDirectoryDialog } from "./RoomDirectoryDialog.js";
 import { ImageLightbox } from "./ImageLightbox.js";
-import { QuickNavPalette } from "./QuickNavPalette.js";
+import { CommandPalette } from "./CommandPalette.js";
 import { MentionPreview } from "./MentionPreview.js";
-import { RoomSettingsDialog } from "./RoomSettingsDialog.js";
+import { RoomDialog } from "./RoomDialog.js";
 import { SpaceSettingsDialog } from "./SpaceSettingsDialog.js";
 import { DebugViewer } from "./DebugViewer.js";
 import { RevisionHistoryDialog } from "./RevisionHistoryDialog.js";
@@ -78,14 +77,13 @@ export interface AppComponents {
   profileDialog: ProfileDialog;
   profileEditDialog: ProfileEditDialog;
   settingsDialog: SettingsDialog;
-  roomInfoDialog: RoomInfoDialog;
   pinnedMessagesDialog: PinnedMessagesDialog;
   searchDialog: SearchDialog;
   roomDirectoryDialog: RoomDirectoryDialog;
   imageLightbox: ImageLightbox;
-  quickNavPalette: QuickNavPalette;
+  commandPalette: CommandPalette;
   mentionPreview: MentionPreview;
-  roomSettingsDialog: RoomSettingsDialog;
+  roomDialog: RoomDialog;
   spaceSettingsDialog: SpaceSettingsDialog;
   debugViewer: DebugViewer;
   revisionHistoryDialog: RevisionHistoryDialog;
@@ -139,14 +137,13 @@ export function mountApp(container: HTMLElement): AppComponents {
   const profileDialog = new ProfileDialog();
   const profileEditDialog = new ProfileEditDialog();
   const settingsDialog = new SettingsDialog();
-  const roomInfoDialog = new RoomInfoDialog();
   const pinnedMessagesDialog = new PinnedMessagesDialog();
   const searchDialog = new SearchDialog(timeline);
   const roomDirectoryDialog = new RoomDirectoryDialog();
   const imageLightbox = new ImageLightbox();
-  const quickNavPalette = new QuickNavPalette();
+  const commandPalette = new CommandPalette();
   const mentionPreview = new MentionPreview();
-  const roomSettingsDialog = new RoomSettingsDialog();
+  const roomDialog = new RoomDialog();
   const spaceSettingsDialog = new SpaceSettingsDialog();
   const debugViewer = new DebugViewer();
   const revisionHistoryDialog = new RevisionHistoryDialog();
@@ -229,12 +226,15 @@ export function mountApp(container: HTMLElement): AppComponents {
   input.setSendButtonVisible(shouldShowSendButton());
   setupTouchGestures(mainLayout, {
     scrollEl: roomList.getScrollElement(),
-    // The quick-nav palette (Ctrl+K on desktop) is unreachable by touch. Pulling
-    // down from the top of the room list opens it; close the drawer first so the
-    // palette is visible and focused. (mobile quick-nav access)
+    // The command palette (Ctrl+K on desktop) is unreachable by touch, and with
+    // vim mode force-disabled on mobile it is the only route to a `:` command
+    // at all. Pulling down from the top of the room list opens it; close the
+    // drawer first so the palette is visible and focused.
     onPullDown: () => {
       closeDrawer();
-      document.dispatchEvent(new CustomEvent("quark:action", { detail: { action: "open-quick-nav" } }));
+      document.dispatchEvent(
+        new CustomEvent("quark:action", { detail: { action: "open-command-palette" } }),
+      );
     },
   });
   mobileTopBar.onHamburgerClick(() => toggleDrawer());
@@ -308,8 +308,21 @@ export function mountApp(container: HTMLElement): AppComponents {
   syncComposeRight();
   new ResizeObserver(syncComposeRight).observe(timelineEl);
 
-  // ── Status bar (fixed bottom-right, floats over content) ─────────────────
-  container.appendChild(statusBar.getElement());
+  // ── Status bar ───────────────────────────────────────────────────────────
+  // Desktop: fixed bottom-right, floating over content. Mobile: reparented into
+  // the room-list drawer as a footer row.
+  //
+  // Mobile used to simply `display: none` it, which took presence status,
+  // connection state and the encryption indicator with it — presence had no
+  // touch affordance at all, since its only other entry point is the `S`
+  // keybinding and vim is force-disabled on mobile (#99). Reparenting rather
+  // than building a second bar keeps one component owning that state.
+  const placeStatusBar = (mobile: boolean): void => {
+    if (mobile) roomList.getElement().appendChild(statusBar.getElement());
+    else container.appendChild(statusBar.getElement());
+  };
+  placeStatusBar(isMobile());
+  onMobileChange(placeStatusBar);
 
   // Update banner (fixed top-center, floats over content; hidden until offered)
   container.appendChild(updateBanner.getElement());
@@ -325,13 +338,12 @@ export function mountApp(container: HTMLElement): AppComponents {
   mountOverlay(profileDialog.getElement());
   mountOverlay(profileEditDialog.getElement());
   mountOverlay(settingsDialog.getElement());
-  mountOverlay(roomInfoDialog.getElement());
   mountOverlay(pinnedMessagesDialog.getElement());
   mountOverlay(searchDialog.getElement());
   mountOverlay(roomDirectoryDialog.getElement());
   mountOverlay(imageLightbox.getElement());
-  mountOverlay(quickNavPalette.getElement());
-  mountOverlay(roomSettingsDialog.getElement());
+  mountOverlay(commandPalette.getElement());
+  mountOverlay(roomDialog.getElement());
   mountOverlay(spaceSettingsDialog.getElement());
   mountOverlay(debugViewer.getElement());
   mountOverlay(revisionHistoryDialog.getElement());
@@ -361,14 +373,13 @@ export function mountApp(container: HTMLElement): AppComponents {
     profileDialog,
     profileEditDialog,
     settingsDialog,
-    roomInfoDialog,
     pinnedMessagesDialog,
     searchDialog,
     roomDirectoryDialog,
     imageLightbox,
-    quickNavPalette,
+    commandPalette,
     mentionPreview,
-    roomSettingsDialog,
+    roomDialog,
     spaceSettingsDialog,
     debugViewer,
     revisionHistoryDialog,
