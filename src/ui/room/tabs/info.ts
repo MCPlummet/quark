@@ -10,8 +10,8 @@
 // one row on this tab a user reaches for repeatedly.
 
 import type { RoomTab, RoomTabContext } from "../types.js";
-import { muteRoom, unmuteRoom, getConfig } from "../../../app/notifications.js";
-import { AppState } from "../../../app/state.js";
+import { getConfig } from "../../../app/notifications.js";
+import { setRoomMuted } from "../../../app/actions/rooms.js";
 
 /**
  * Whether the room is muted.
@@ -62,22 +62,13 @@ export const infoTab: RoomTab = {
     muteBtn.addEventListener("click", async () => {
       muteBtn.disabled = true;
       try {
-        const outcome = muted ? await unmuteRoom(roomId) : await muteRoom(roomId);
-        // Patch the cached RoomInfo so reopening before the next room-list
-        // refresh doesn't show the state we just changed away from — but only
-        // once the account's ruleset actually changed. These resolve on a failed
-        // rule write too, and patching regardless reported a mute the server
-        // never got until the next get_rooms flipped it back (#82). The warning
-        // toast is raised by muteRoom/unmuteRoom themselves.
-        if (outcome.synced) {
-          muted = !muted;
-          AppState.set(
-            "roomListCache",
-            AppState.get("roomListCache").map((r) =>
-              r.room_id === roomId ? { ...r, muted } : r,
-            ),
-          );
-        }
+        // setRoomMuted patches the cached RoomInfo and repaints the room-list
+        // row, and does neither unless the account's ruleset actually changed —
+        // it resolves on a refused rule write too, and patching regardless
+        // reported a mute the server never got until the next get_rooms flipped
+        // it back (#82). It returns the state now in effect, so the button
+        // follows the server rather than the click.
+        muted = await setRoomMuted(roomId, !muted);
         renderMute();
       } catch {
         muteBtn.textContent = "[error]";

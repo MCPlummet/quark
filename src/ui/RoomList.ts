@@ -216,6 +216,28 @@ export class RoomList {
     this._updateActive();
   }
 
+  /**
+   * Repaint one room's muted styling in place.
+   *
+   * Mirrors updateRoomBadge, for the same reason: setRooms would rebuild from
+   * the full cache and lose the current space filter. Muting also changes how
+   * unread is drawn — a muted room shows neither the unread class nor the dot —
+   * so the badge is re-decided here too rather than left describing the state
+   * the room was in before it was silenced.
+   */
+  updateRoomMuted(id: string, muted: boolean): void {
+    const idx = this._rooms.findIndex((r) => r.id === id);
+    if (idx < 0) return;
+    this._rooms[idx] = { ...this._rooms[idx], muted };
+
+    const el = this._scrollEl.querySelector<HTMLElement>(`[data-room-id="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.classList.toggle("room-list__item--muted", muted);
+
+    const entry = this._rooms[idx];
+    this.updateRoomBadge(id, entry.unreadCount ?? 0, entry.mentionCount ?? 0);
+  }
+
   private _createItem(room: RoomEntry): HTMLElement {
     const el = document.createElement("div");
     el.className = "room-list__item";

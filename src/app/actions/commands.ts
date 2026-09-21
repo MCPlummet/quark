@@ -27,8 +27,6 @@ import {
   type AvailabilityContext,
 } from "../registry.js";
 import { currentAvailability } from "../availability.js";
-import { AppState } from "../state.js";
-import { muteRoom, unmuteRoom } from "../notifications.js";
 
 import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js";
 import packageJson from "../../../package.json";
@@ -40,6 +38,7 @@ import {
   openOrCreateDm,
   convertRoomDirectness,
   markRoomAsRead,
+  setRoomMuted,
 } from "./rooms.js";
 import { logout } from "./session.js";
 import { loadTheme } from "./theme.js";
@@ -294,21 +293,10 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
 
     case "mute-room":
     case "unmute-room": {
-      // muteRoom/unmuteRoom raise their own toast on a ruleset write the server
-      // did not take, so there is nothing to report here beyond the outcome.
-      const outcome = entry.id === "mute-room"
-        ? await muteRoom(roomId)
-        : await unmuteRoom(roomId);
-      if (outcome.synced) {
-        const muted = entry.id === "mute-room";
-        AppState.set(
-          "roomListCache",
-          AppState.get("roomListCache").map((r) =>
-            r.room_id === roomId ? { ...r, muted } : r,
-          ),
-        );
-        showSuccess(muted ? "Room muted" : "Room unmuted");
-      }
+      // setRoomMuted owns the whole flow, including the toast and the case where
+      // the homeserver refuses the rule — the room-list menu used to skip most
+      // of it, so the two disagreed about what a mute looks like afterwards.
+      await setRoomMuted(roomId, entry.id === "mute-room");
       break;
     }
 

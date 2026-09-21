@@ -48,6 +48,7 @@ import {
   selectRoom,
   markRoomAsRead,
   confirmAndLeaveRoom,
+  setRoomMuted,
   startVerification,
   setupCrossSigning,
   logout,
@@ -76,9 +77,8 @@ import { BUILTIN_EMOJI } from "../data/unicode-emoji.js";
 import { _shortcodeToMxc } from "./actions/context.js";
 import { onMobileChange, isMobile } from "./mobile.js";
 import { effectiveSendOnEnter, shouldShowSendButton } from "./send_behavior.js";
-import { showToast } from "../ui/NotificationToast.js";
+import { showToast, showError } from "../ui/NotificationToast.js";
 import { runUpdateCheck } from "./update_check.js";
-import { muteRoom as muteRoomAction, unmuteRoom as unmuteRoomAction } from "./notifications.js";
 import { filterShortcodes, type ShortcodeEntry } from "../ui/ShortcodePreview.js";
 import { filterMembers, type MentionEntry } from "../ui/MentionPreview.js";
 import { getEmojiPacks } from "../ipc/emoji.js";
@@ -938,6 +938,21 @@ export async function applyRcDirectives(rc: ParsedRc): Promise<void> {
   }
 }
 
+/**
+ * Mute or unmute from a menu row.
+ *
+ * A row handler returns void, so the rejection has nowhere to propagate to and
+ * would surface as an unhandled promise rather than as anything the user sees.
+ * setRoomMuted reports a rule the *homeserver* refused itself; this is the other
+ * failure — the write never completing at all.
+ */
+function toggleMute(roomId: string, muted: boolean): void {
+  void setRoomMuted(roomId, muted).catch((err) => {
+    const verb = muted ? "mute" : "unmute";
+    showError(`Failed to ${verb} room: ${err instanceof Error ? err.message : String(err)}`);
+  });
+}
+
 // ── Global keydown handler ────────────────────────────────────────────────────
 
 export function setupKeyboard(components: AppComponents): void {
@@ -1094,8 +1109,8 @@ export function setupKeyboard(components: AppComponents): void {
       // Exactly one of these is applicable, so exactly one gets a handler.
       // `muted` is undefined before the room has synced, which reads as unmuted
       // — the same fallback the Info tab uses.
-      "mute-room": room?.muted ? undefined : () => void muteRoomAction(roomId),
-      "unmute-room": room?.muted ? () => void unmuteRoomAction(roomId) : undefined,
+      "mute-room": room?.muted ? undefined : () => toggleMute(roomId, true),
+      "unmute-room": room?.muted ? () => toggleMute(roomId, false) : undefined,
       "leave-room-confirm": () => void selectRoom(roomId).then(() => confirmAndLeaveRoom()),
     }));
   });
@@ -1121,9 +1136,9 @@ export function setupKeyboard(components: AppComponents): void {
         const id = AppState.get("currentRoomId");
         const current = AppState.get("roomListCache").find((r) => r.room_id === id);
         return id && current?.muted
-          ? { "unmute-room": () => void unmuteRoomAction(id) }
+          ? { "unmute-room": () => toggleMute(id, false) }
           : id
-            ? { "mute-room": () => void muteRoomAction(id) }
+            ? { "mute-room": () => toggleMute(id, true) }
             : {};
       })(),
     }));

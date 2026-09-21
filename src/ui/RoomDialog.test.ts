@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { AppState } from "../app/state.js";
+import { setComponents } from "../app/actions/context.js";
+import type { AppComponents } from "./App.js";
 import type { RoomInfo } from "../ipc/types.js";
 
 // The mute button must reflect the *push rule* (carried on RoomInfo by the
@@ -66,8 +68,16 @@ function muteButton(d: Dialog): HTMLButtonElement {
 }
 
 let d: Dialog;
+/**
+ * Muting repaints the room-list row in place, so the action layer needs its
+ * components. Without this the mute path threw behind the Info tab's catch and
+ * these tests passed on the cache patch alone, never seeing the button.
+ */
+const roomList = { updateRoomMuted: vi.fn() };
 
 beforeEach(() => {
+  setComponents({ roomList } as unknown as AppComponents);
+  roomList.updateRoomMuted.mockReset();
   mocks.getConfig.mockReset();
   // muteRoom/unmuteRoom resolve with the backend's MuteOutcome — they resolve
   // on a *failed* rule write too, which is the whole point of the flag (#82).
@@ -124,6 +134,42 @@ describe("RoomDialog", () => {
     d.show();
     expect(text(d)).toBe("No room selected.");
   });
+
+  // Tab builders are async — Info awaits the notification config to resolve the
+  // mute state — so a build suspended at an `await` when the user switches tabs
+  // used to resume and append its rows into the element now showing a different
+  // tab: open on Info before getConfig() had cached, press Tab, and Info's
+  // Notifications and Actions rows appeared inside Settings.
+  it("does not let a suspended tab build append into the tab that replaced it", async () => {
+    // Info can only suspend when the cache has no answer for it, which is what
+    // sends resolveMuted to getConfig.
+    AppState.set("roomListCache", [makeRoom({ muted: undefined })]);
+    let releaseConfig: () => void = () => {};
+    mocks.getConfig.mockReturnValue(
+      new Promise((resolve) => {
+        releaseConfig = () => resolve({ mute_rooms: [] });
+      }),
+    );
+
+    d.show("info");
+    await vi.waitFor(() => expect(mocks.getConfig).toHaveBeenCalled());
+    // The element Info's build captured, held so the assertion can wait for that
+    // build to finish rather than racing it.
+    const captured = d.getElement().querySelector<HTMLElement>(".settings-dialog__content")!;
+
+    d.getElement().dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+    expect(activeTab(d)).toBe("Settings");
+
+    releaseConfig();
+    // Info's build has now resumed and written its rows into the element it
+    // captured. That element must no longer be the one on screen.
+    await vi.waitFor(() => expect(captured.textContent).toContain("mute room"));
+    expect(captured.isConnected).toBe(false);
+    expect(text(d)).not.toContain("mute room");
+    expect(text(d)).not.toContain("leave room");
+  });
 });
 
 describe("RoomDialog mute state", () => {
@@ -155,6 +201,10 @@ describe("RoomDialog mute state", () => {
     muteButton(d).click();
     await vi.waitFor(() => expect(mocks.muteRoom).toHaveBeenCalledWith("!r:x"));
     await vi.waitFor(() => expect(AppState.get("roomListCache")[0].muted).toBe(true));
+    // The row in the room list is repainted too — the context menus used to skip
+    // this and leave a muted room styled as unmuted.
+    expect(roomList.updateRoomMuted).toHaveBeenCalledWith("!r:x", true);
+    await vi.waitFor(() => expect(muteButton(d).textContent).toBe("[unmute room]"));
   });
 
   it("unmutes a room the push rule reports as muted", async () => {
@@ -180,6 +230,8 @@ describe("RoomDialog mute state", () => {
     muteButton(d).click();
     await vi.waitFor(() => expect(mocks.muteRoom).toHaveBeenCalledWith("!r:x"));
     expect(AppState.get("roomListCache")[0].muted).toBe(false);
+    expect(roomList.updateRoomMuted).not.toHaveBeenCalled();
+    expect(muteButton(d).textContent).toBe("[mute room]");
   });
 
   it("leaves the cached room alone when the unmute never reached the server", async () => {

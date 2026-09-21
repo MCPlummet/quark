@@ -26,6 +26,7 @@ import {
 
 import { getPseudoSpace, sortByRecency } from "../pseudo_spaces.js";
 import { clearRoomNotificationsIpc } from "../../ipc/notifications.js";
+import { muteRoom, unmuteRoom } from "../notifications.js";
 import { enterHomeView, exitHomeView } from "./home.js";
 
 import type { RoomMember, TimelineEvent, EventContextPage } from "../../ipc/types.js";
@@ -1222,6 +1223,39 @@ export async function convertRoomDirectness(roomId: string, isDirect: boolean): 
   } catch (err) {
     showError(`Failed to convert to ${verb}: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/**
+ * Mute or unmute a room, and reflect the result everywhere the user can see it.
+ *
+ * Every surface offering muting needs the same four steps — write the rule, and
+ * only if the account's ruleset actually changed, patch the cached RoomInfo,
+ * repaint the room-list row, and say so. The surfaces that existed had each
+ * implemented a different subset: the `:mute` command and the room dialog's
+ * Info tab patched the cache, while the room-list context menu and the mobile
+ * overflow menu called muteRoom and dropped the outcome on the floor — so the
+ * row they had just muted kept its unmuted styling, went on counting unread the
+ * loud way, and went on offering "Mute" until the next room-list refresh.
+ *
+ * Returns the muted state now in effect, which is the state it started in when
+ * the homeserver did not take the rule. That case is not an error and not
+ * silent: muteRoom/unmuteRoom raise the backend's own warning for it, and
+ * patching anything on the strength of a write the server refused is what #82
+ * was.
+ */
+export async function setRoomMuted(roomId: string, muted: boolean): Promise<boolean> {
+  const outcome = muted ? await muteRoom(roomId) : await unmuteRoom(roomId);
+  if (!outcome.synced) return !muted;
+
+  AppState.set(
+    "roomListCache",
+    AppState.get("roomListCache").map((r) =>
+      r.room_id === roomId ? { ...r, muted } : r,
+    ),
+  );
+  getComponents().roomList.updateRoomMuted(roomId, muted);
+  showSuccess(muted ? "Room muted" : "Room unmuted");
+  return muted;
 }
 
 // ── Live recency re-sort ─────────────────────────────────────────────────────

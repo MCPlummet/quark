@@ -51,6 +51,7 @@ export {
   joinRoom,
   leaveRoomWithFeedback,
   confirmAndLeaveRoom,
+  setRoomMuted,
   refreshRooms,
   bumpRoomActivity,
   applyLocalRoomMeta,
