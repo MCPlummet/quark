@@ -13,12 +13,14 @@
 // Discoverable affordances on top of it (#99, #102) are what a normal user
 // actually finds; this is what guarantees the thing is *there* to be found.
 //
-// Three ways to invoke a row, decided by the registry's arg grammar:
+// How a row is invoked, decided by the registry's arg grammar:
 //   • no command behind it          → dispatch the action id
-//   • command, no required argument → run it outright
 //   • command with `<required>`     → prefill the command bar and let the user
 //     finish the line, because a palette row cannot supply `@user:server`
-// That last case makes the palette a discovery path *into* the command bar
+//   • command with `confirmVia`     → dispatch the confirm-wrapped variant, so
+//     fuzzy-matching your way onto `:leave` cannot leave a room on one Enter
+//   • anything else                 → run it outright
+// The prefill case makes the palette a discovery path *into* the command bar
 // rather than a replacement that quietly drops half the vocabulary.
 
 import { AppState } from "../app/state.js";
@@ -54,6 +56,11 @@ export type InvokeCallback = (invocation: Invocation) => void;
 export function invocationFor(entry: ActionEntry): Invocation {
   if (!entry.command) return { kind: "dispatch", actionId: entry.id };
   if (requiresArguments(entry)) return { kind: "prefill", line: `:${entry.command.name} ` };
+  // An irreversible action goes through its confirm-wrapped variant. Running it
+  // outright is fine for the typed `:` form but not from here: a palette row is
+  // reached by fuzzy match, so `:le` focuses `:leave` and one Enter would have
+  // left the room with no prompt — a faster path to it than any menu offers.
+  if (entry.confirmVia) return { kind: "dispatch", actionId: entry.confirmVia };
   return { kind: "run", command: entry.command.name };
 }
 

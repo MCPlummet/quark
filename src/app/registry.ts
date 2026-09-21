@@ -119,6 +119,18 @@ export interface ActionEntry {
   /** Mode label for the help dialog's MODE column. Derived when omitted. */
   mode?: string;
   /**
+   * Id of a confirm-wrapped variant to invoke in place of running this action's
+   * command outright.
+   *
+   * The `:` form is typed deliberately, character by character, and is allowed
+   * to act at once. A palette row is not: it is reached by fuzzy match, so `:le`
+   * focuses `:leave` and a single Enter would leave the room irreversibly. The
+   * confirm-wrapped ids already exist for the menus — this points the palette at
+   * the same one rather than giving it a faster path to the destructive thing
+   * than any other surface has.
+   */
+  confirmVia?: string;
+  /**
    * Why this action needs no pointer or touch affordance.
    *
    * The parity test (#104) fails any entry that is keyboard-only, so an action
@@ -499,6 +511,10 @@ const ACTION_LITERALS = [
     chrome: ["drawer"],
   },
   {
+    // The room requirement describes the bare form, which dumps the open room's
+    // state. `:debug cache` reports on the app-wide event cache and has no room
+    // to be scoped to — see ROOM_FREE_SUBCOMMANDS in actions/commands.ts, which
+    // is what lets that one spelling past the gate.
     id: "open-debug",
     description: "Open the debug viewer for this room",
     requires: ["room"],
@@ -551,6 +567,7 @@ const ACTION_LITERALS = [
     description: "Leave a room",
     requires: ["room"],
     command: { name: "leave", args: "[room-id]" },
+    confirmVia: "leave-room-confirm",
   },
   {
     // The confirm-then-leave flow the room-info dialog fires; the bare
@@ -561,7 +578,7 @@ const ACTION_LITERALS = [
     menus: [{ surface: "room", label: "Leave room", group: 4, order: 1, danger: true }],
     palette: false,
     parityExempt:
-      "`:leave` is the keyboard form; this entry is the confirm-wrapped variant the menus and the room dialog use.",
+      "`:leave` is the keyboard form; this entry is the confirm-wrapped variant the menus, the room dialog and the palette use.",
   },
   {
     // Mute and unmute are separate entries rather than one toggle so each can

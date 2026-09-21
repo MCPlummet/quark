@@ -74,10 +74,35 @@ const ROOM_ARG_COMMANDS = new Set([
   "unmute-room",
 ]);
 
+/**
+ * Subcommands that lift their action's "room" requirement.
+ *
+ * `:debug` dumps the open room's state, so open-debug declares `requires:
+ * ["room"]` — which is right for the bare form, for the palette and for the
+ * usage error. `:debug cache` reports on the app-wide event cache and has no
+ * room to be scoped to; it ran fine until the requirement was declared and then
+ * started failing with "No room selected". Naming the spelling here keeps the
+ * requirement honest about the common case instead of dropping it for all three.
+ */
+const ROOM_FREE_SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
+  "open-debug": new Set(["cache"]),
+};
+
 /** "Usage: :kick <user-id> [reason]", built from the registry's args spec. */
 function usageError(entry: ActionEntry): void {
   const { name, args } = entry.command!;
   showError(args ? `Usage: :${name} ${args}` : `Usage: :${name}`);
+}
+
+/**
+ * The entry to check requirements against, with any requirement this particular
+ * spelling escapes dropped. The registry entry itself is unchanged — the palette
+ * and the help text still read the requirement as declared.
+ */
+function gateFor(entry: ActionEntry, firstArg: string | undefined): ActionEntry {
+  if (firstArg === undefined) return entry;
+  if (!ROOM_FREE_SUBCOMMANDS[entry.id]?.has(firstArg)) return entry;
+  return { ...entry, requires: entry.requires?.filter((r) => r !== "room") };
 }
 
 /** Why an action can't run right now, in the user's terms. */
@@ -106,14 +131,16 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
   // !other:server` is meaningful with nothing open.
   const explicitRoom = ROOM_ARG_COMMANDS.has(entry.id) ? parsed.args[0] : undefined;
   const ctx = currentAvailability(explicitRoom ? { roomId: explicitRoom } : {});
-  if (!isAvailable(entry, ctx)) {
+  if (!isAvailable(gateFor(entry, parsed.args[0]), ctx)) {
     showError(unavailableReason(entry, ctx));
     return;
   }
 
   // Gated above: anything declaring `requires: ["room"]` has reached this line
   // with a room in hand, so this is the gate's guarantee rather than an
-  // assumption. Commands with no room requirement never read it.
+  // assumption. Commands with no room requirement never read it — and neither
+  // does the one branch a ROOM_FREE_SUBCOMMANDS spelling reaches, which is the
+  // only way past the gate without a room.
   const roomId = ctx.roomId!;
 
   switch (entry.id) {

@@ -80,14 +80,19 @@ describe("invocationFor", () => {
     });
   });
 
-  // `[optional]` args still run bare — :search opens the dialog empty and
-  // :leave falls back to the open room.
+  // `[optional]` args still run bare — :search opens the dialog empty.
   it("runs a command whose arguments are all optional", () => {
     expect(invocationFor(actionById("open-search")!)).toEqual({
       kind: "run", command: "search",
     });
+  });
+
+  // Typing `:le` focuses :leave, so running it outright would leave the room on
+  // one Enter with no prompt. The menus' confirm-wrapped variant is the one the
+  // palette invokes instead.
+  it("routes a destructive command through its confirm-wrapped variant", () => {
     expect(invocationFor(actionById("leave-room")!)).toEqual({
-      kind: "run", command: "leave",
+      kind: "dispatch", actionId: "leave-room-confirm",
     });
   });
 
