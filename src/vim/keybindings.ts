@@ -46,6 +46,63 @@ export function isChordSequence(sequence: string): boolean {
 }
 
 /**
+ * A chord reduced to its meaning, for comparing two spellings of it.
+ *
+ * Chords are the one part of the keymap where the written form and the form
+ * {@link eventChord} reports are produced by different hands — the defaults and
+ * a user's quarkrc on one side, a live KeyboardEvent on the other — so they have
+ * to be compared on something other than the exact string. `imap ctrl-e …` used
+ * to be a binding that could never fire: {@link isChordSequence} matched it
+ * case-insensitively and so kept it out of the sequence grammar, while
+ * actionForKey compared it against "Ctrl-e" with `===` and never matched it
+ * there either. It was accepted, registered, and wholly inert.
+ *
+ * Folded here: modifier case, modifier order, the Cmd/Meta spellings of Ctrl
+ * (which eventChord already folds, for the macOS reason given there), and the
+ * key's own case — Quark's chords are case-insensitive in the key because Shift
+ * is spelled as a modifier, so "Ctrl-Shift-x" and "Ctrl-Shift-X" are one binding
+ * rather than two, only one of which a keyboard can produce.
+ *
+ * The accepted modifier spellings are exactly the ones {@link isChordSequence}
+ * recognises — a spelling this folded but that one rejected would be a binding
+ * parsed as a nine-key sequence, which is the bug again in a new place.
+ *
+ * Plain sequences are deliberately *not* run through this: "G" and "g" are two
+ * different bindings there, and lowercasing them would collapse jump-bottom onto
+ * a motion.
+ */
+export function canonicalChord(sequence: string): string {
+  const parts = sequence.split("-");
+  const key = parts.pop() ?? "";
+  const mods = new Set<string>();
+  for (const part of parts) {
+    switch (part.toLowerCase()) {
+      case "ctrl": case "cmd": case "meta":
+        mods.add("ctrl"); break;
+      case "alt":
+        mods.add("alt"); break;
+      case "shift":
+        mods.add("shift"); break;
+      default:
+        // Not a modifier we know. Kept verbatim so an unrecognised spelling
+        // fails to match rather than quietly matching something else.
+        mods.add(part.toLowerCase()); break;
+    }
+  }
+  const KNOWN = ["ctrl", "alt", "shift"];
+  const known = KNOWN.filter((m) => mods.has(m));
+  const unknown = [...mods].filter((m) => !KNOWN.includes(m)).sort();
+  return [...known, ...unknown, key.toLowerCase()].join("-");
+}
+
+/** Whether two registered/reported sequences denote the same keystroke. */
+function sameSequence(a: string, b: string): boolean {
+  return isChordSequence(a) && isChordSequence(b)
+    ? canonicalChord(a) === canonicalChord(b)
+    : a === b;
+}
+
+/**
  * Canonical chord string for a keyboard event, or null when no modifier is
  * held (a bare key, which belongs to the sequence grammar instead).
  *
@@ -107,9 +164,11 @@ export class KeymapManager {
 
   map(context: KeyContext, sequence: string, action: string, noremap = false): void {
     const normalised = normaliseKey(sequence, this._leaderKey);
-    // Remove any existing mapping for same context+sequence
+    // Remove any existing mapping for the same context+keystroke. Compared by
+    // meaning so `imap ctrl-e …` *replaces* the default Ctrl-e rather than
+    // sitting beside it as a second entry for the same physical chord.
     this._entries = this._entries.filter(
-      (e) => !(e.context === context && e.sequence === normalised)
+      (e) => !(e.context === context && sameSequence(e.sequence, normalised))
     );
     this._entries.push({ sequence: normalised, action, noremap, context });
   }
@@ -138,7 +197,7 @@ export class KeymapManager {
   unmap(context: KeyContext, sequence: string): void {
     const normalised = normaliseKey(sequence, this._leaderKey);
     this._entries = this._entries.filter(
-      (e) => !(e.context === context && e.sequence === normalised)
+      (e) => !(e.context === context && sameSequence(e.sequence, normalised))
     );
   }
 
@@ -199,11 +258,11 @@ export class KeymapManager {
    */
   actionForKey(key: string, activeContext: KeyContext): string | null {
     const scoped = this._entries.find(
-      (e) => e.context === activeContext && e.sequence === key
+      (e) => e.context === activeContext && sameSequence(e.sequence, key)
     );
     if (scoped) return scoped.action;
     const global = this._entries.find(
-      (e) => e.context === "global" && e.sequence === key
+      (e) => e.context === "global" && sameSequence(e.sequence, key)
     );
     return global ? global.action : null;
   }

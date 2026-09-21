@@ -111,6 +111,53 @@ describe("KeymapManager", () => {
     expect(km.actionForKey("Ctrl-e", "timeline")).toBeNull();
   });
 
+  // A lowercase chord in a quarkrc used to be wholly inert: isChordSequence
+  // matched it case-insensitively and so kept it out of the sequence grammar,
+  // while actionForKey compared it against the "Ctrl-e" eventChord reports using
+  // `===` and never matched it there either.
+  it("matches a chord however the binding spelled it", () => {
+    km.imap("ctrl-e", "open-emoji-picker");
+    expect(km.actionForKey("Ctrl-e", "insert")).toBe("open-emoji-picker");
+  });
+
+  it("matches a chord whose modifiers were written in another order", () => {
+    km.nmap("shift-ctrl-x", "strikethrough");
+    expect(km.actionForKey("Ctrl-Shift-x", "global")).toBe("strikethrough");
+  });
+
+  it("accepts the Cmd and Meta spellings of Ctrl", () => {
+    km.nmap("Cmd-k", "open-command-palette");
+    expect(km.actionForKey("Ctrl-k", "global")).toBe("open-command-palette");
+  });
+
+  it("matches a named key in a chord case-insensitively", () => {
+    km.imap("ctrl-enter", "send-message");
+    expect(km.actionForKey("Ctrl-Enter", "insert")).toBe("send-message");
+  });
+
+  // Otherwise a user's remap sits beside the default as a second entry for the
+  // same physical chord, and whichever was registered first keeps winning.
+  it("replaces a differently-spelled binding for the same chord", () => {
+    km.imap("Ctrl-e", "open-emoji-picker");
+    km.imap("ctrl-e", "open-gif-picker");
+    expect(km.actionForKey("Ctrl-e", "insert")).toBe("open-gif-picker");
+    expect(km.getEntries().filter((entry) => entry.context === "insert")).toHaveLength(1);
+  });
+
+  it("unmaps a chord however the directive spelled it", () => {
+    km.imap("Ctrl-e", "open-emoji-picker");
+    km.unmap("insert", "ctrl-e");
+    expect(km.actionForKey("Ctrl-e", "insert")).toBeNull();
+  });
+
+  // Plain sequences are case-sensitive and must stay so: G is jump-bottom and g
+  // starts the `gg` sequence.
+  it("keeps plain sequences case-sensitive", () => {
+    km.nmap("G", "jump-bottom");
+    expect(km.actionForKey("g", "global")).toBeNull();
+    expect(km.actionForKey("G", "global")).toBe("jump-bottom");
+  });
+
   // ── Scoped map precedence ─────────────────────────────────────────────
 
   it("scoped map takes precedence over global map for the same sequence", () => {
