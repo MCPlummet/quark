@@ -40,6 +40,16 @@ export interface LongPressOptions {
 
 const LONG_PRESS_MS = 500;
 const MOVE_TOLERANCE_PX = 10;
+/**
+ * How long to keep watching for the click the engine synthesises from a tap.
+ *
+ * It follows touchend within a frame or two, so the window only has to be longer
+ * than that — and has to *expire*, because the click is not guaranteed: a press
+ * the browser has already resolved as a gesture may produce none, and a swallow
+ * left armed would eat the user's next genuine tap, which is the failure it is
+ * there to prevent.
+ */
+const SYNTH_CLICK_WINDOW_MS = 500;
 
 /**
  * Attach a long-press gesture to `el`.
@@ -54,6 +64,40 @@ export function attachLongPress(el: HTMLElement, opts: LongPressOptions): () => 
   let startY = 0;
   let startId: string | null = null;
   let fired = false;
+  let swallow: ((e: MouseEvent) => void) | null = null;
+  let swallowExpiry: number | null = null;
+
+  const stopSwallowing = (): void => {
+    if (swallow) {
+      document.removeEventListener("click", swallow, true);
+      swallow = null;
+    }
+    if (swallowExpiry !== null) {
+      window.clearTimeout(swallowExpiry);
+      swallowExpiry = null;
+    }
+  };
+
+  /**
+   * Swallow the synthesised click wherever it lands, not only on `el`.
+   *
+   * Watching `el` alone was not enough: the menu a press opens docks to the
+   * bottom of the viewport in mobile mode, so for a press low on the screen the
+   * sheet is drawn *over* the press point and the click arrives on the sheet.
+   * Nothing on `el` saw it — so the guard never disarmed and went on to swallow
+   * the user's next real tap, while the click itself activated whichever sheet
+   * row happened to be under the finger.
+   */
+  const swallowNextClick = (): void => {
+    stopSwallowing();
+    swallow = (e: MouseEvent): void => {
+      stopSwallowing();
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    document.addEventListener("click", swallow, true);
+    swallowExpiry = window.setTimeout(stopSwallowing, SYNTH_CLICK_WINDOW_MS);
+  };
 
   const cancel = (): void => {
     if (timer !== null) {
@@ -64,6 +108,10 @@ export function attachLongPress(el: HTMLElement, opts: LongPressOptions): () => 
   };
 
   const onTouchStart = (e: TouchEvent): void => {
+    // Reset before anything can return early, so a press that ends on an
+    // ignored element cannot leave either piece of state set.
+    fired = false;
+    stopSwallowing();
     // Desktop pointers get `contextmenu`; only mobile mode gets the sheet.
     if (!isMobile()) return;
     // Single-finger only — a second finger means a pinch or a two-finger scroll.
@@ -81,7 +129,6 @@ export function attachLongPress(el: HTMLElement, opts: LongPressOptions): () => 
     startX = touch.clientX;
     startY = touch.clientY;
     startId = id;
-    fired = false;
     timer = window.setTimeout(() => {
       if (startId === null) return;
       const resolved = startId;
@@ -104,25 +151,26 @@ export function attachLongPress(el: HTMLElement, opts: LongPressOptions): () => 
     }
   };
 
-  const onClickCapture = (e: MouseEvent): void => {
-    if (!fired) return;
-    fired = false;
-    e.stopPropagation();
-    e.preventDefault();
+  const onTouchEnd = (): void => {
+    // Armed here rather than when the press fired: the synthesised click follows
+    // touchend, so this keeps the watch window short however long the finger
+    // stayed down after the menu appeared.
+    if (fired) swallowNextClick();
+    cancel();
   };
 
   el.addEventListener("touchstart", onTouchStart, { passive: true });
   el.addEventListener("touchmove", onTouchMove, { passive: true });
-  el.addEventListener("touchend", cancel, { passive: true });
+  el.addEventListener("touchend", onTouchEnd, { passive: true });
+  // A cancelled touch synthesises no click, so there is nothing to swallow.
   el.addEventListener("touchcancel", cancel, { passive: true });
-  el.addEventListener("click", onClickCapture, true);
 
   return () => {
     cancel();
+    stopSwallowing();
     el.removeEventListener("touchstart", onTouchStart);
     el.removeEventListener("touchmove", onTouchMove);
-    el.removeEventListener("touchend", cancel);
+    el.removeEventListener("touchend", onTouchEnd);
     el.removeEventListener("touchcancel", cancel);
-    el.removeEventListener("click", onClickCapture, true);
   };
 }

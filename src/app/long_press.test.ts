@@ -3,6 +3,9 @@ import { attachLongPress } from "./long_press";
 import * as mobile from "./mobile";
 
 const LONG_PRESS_MS = 500;
+const SYNTH_CLICK_WINDOW_MS = 500;
+
+const click = (): MouseEvent => new MouseEvent("click", { bubbles: true, cancelable: true });
 
 /** Build a TouchEvent jsdom will carry clientX/clientY through. */
 const touchEvent = (type: string, x: number, y: number, count = 1): Event => {
@@ -112,14 +115,70 @@ describe("attachLongPress", () => {
     row.addEventListener("click", () => { clicked = true; });
     row.dispatchEvent(touchEvent("touchstart", 10, 20));
     vi.advanceTimersByTime(LONG_PRESS_MS);
-    row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    row.dispatchEvent(touchEvent("touchend", 10, 20));
+    row.dispatchEvent(click());
     expect(clicked).toBe(false);
+  });
+
+  // The sheet docks to the bottom of the viewport, so for a press low on the
+  // screen it is drawn over the press point and the synthesised click lands on
+  // the sheet rather than on the pressed element. Watching only the pressed
+  // element meant that click activated a menu row.
+  it("swallows the click even when it lands outside the pressed element", () => {
+    const elsewhere = document.createElement("div");
+    document.body.appendChild(elsewhere);
+    let clicked = false;
+    elsewhere.addEventListener("click", () => { clicked = true; });
+
+    row.dispatchEvent(touchEvent("touchstart", 10, 20));
+    vi.advanceTimersByTime(LONG_PRESS_MS);
+    row.dispatchEvent(touchEvent("touchend", 10, 20));
+    elsewhere.dispatchEvent(click());
+
+    expect(clicked).toBe(false);
+    elsewhere.remove();
+  });
+
+  // The other half of the same bug: "a press completed" was only ever cleared
+  // where the press had resolved a target, so once a completed press left it set
+  // — which is what happened when its click went to the sheet instead — the next
+  // tap on an *ignored* child (a link, a button) inherited it and was swallowed.
+  it("does not eat a later tap that starts on an ignored child", () => {
+    const link = row.querySelector("a")!;
+    let clicked = false;
+    link.addEventListener("click", () => { clicked = true; });
+
+    // A completed press whose synthesised click never arrives.
+    row.dispatchEvent(touchEvent("touchstart", 10, 20));
+    vi.advanceTimersByTime(LONG_PRESS_MS);
+    row.dispatchEvent(touchEvent("touchend", 10, 20));
+    vi.advanceTimersByTime(SYNTH_CLICK_WINDOW_MS + 1);
+
+    // An ordinary tap on the link, which the gesture ignores entirely.
+    link.dispatchEvent(touchEvent("touchstart", 10, 20));
+    link.dispatchEvent(touchEvent("touchend", 10, 20));
+    link.dispatchEvent(click());
+
+    expect(clicked).toBe(true);
+  });
+
+  // A press the browser has already resolved as a gesture may synthesise no
+  // click at all, so the watch has to expire rather than wait for one.
+  it("stops watching once the synthesised-click window has passed", () => {
+    let clicked = false;
+    row.addEventListener("click", () => { clicked = true; });
+    row.dispatchEvent(touchEvent("touchstart", 10, 20));
+    vi.advanceTimersByTime(LONG_PRESS_MS);
+    row.dispatchEvent(touchEvent("touchend", 10, 20));
+    vi.advanceTimersByTime(SYNTH_CLICK_WINDOW_MS + 1);
+    row.dispatchEvent(click());
+    expect(clicked).toBe(true);
   });
 
   it("lets an ordinary click through when no press completed", () => {
     let clicked = false;
     row.addEventListener("click", () => { clicked = true; });
-    row.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    row.dispatchEvent(click());
     expect(clicked).toBe(true);
   });
 
