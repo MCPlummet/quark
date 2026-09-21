@@ -133,6 +133,26 @@ export class RoomDialog extends DialogBase {
     if (this._mobile) this._enterDetail(TITLE);
   }
 
+  /**
+   * Swap in a fresh content element for the tab about to be built.
+   *
+   * Emptying the shared one is not enough: a tab builder is async — Info awaits
+   * the notification config to resolve the mute state, Members and Permissions
+   * await IPC — so a build suspended at an `await` when the user switches tabs
+   * resumes afterwards and appends its rows into whatever element it captured.
+   * That was the element now showing a different tab, so opening the dialog on
+   * Info and pressing Tab before the config had cached put Info's Notifications
+   * and Actions rows inside Settings. Replacing the element instead leaves the
+   * stale build writing into a detached node, where nothing can see it, and the
+   * replacement keeps the same class and parent so the styling is untouched.
+   */
+  private _resetContent(): void {
+    const fresh = document.createElement("div");
+    fresh.className = "settings-dialog__content";
+    this._contentEl.replaceWith(fresh);
+    this._contentEl = fresh;
+  }
+
   private _switchTab(id: string): void {
     this._activeId = id;
 
@@ -142,7 +162,7 @@ export class RoomDialog extends DialogBase {
       el.setAttribute("aria-selected", String(active));
     }
 
-    this._contentEl.innerHTML = "";
+    this._resetContent();
 
     const tab = this._tabs.find((t) => t.id === id);
     if (!tab) return;
