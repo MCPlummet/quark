@@ -49,24 +49,28 @@ describe("ModeManager", () => {
     expect(manager.current).toBe(Mode.Normal);
   });
 
+  // Not vim transitions. With vim mode off the app lives in Insert and Normal is
+  // unreachable, so the command bar the palette prefills has to open from Insert
+  // and return to it — see the note on VALID_TRANSITIONS.
+  it("transitions Insert -> Command, for the vim-off command bar", () => {
+    manager.transition(Mode.Insert);
+    expect(manager.transition(Mode.Command)).toBe(true);
+    expect(manager.current).toBe(Mode.Command);
+  });
+
+  it("transitions Command -> Insert, for the vim-off command bar", () => {
+    manager.transition(Mode.Insert);
+    manager.transition(Mode.Command);
+    expect(manager.transition(Mode.Insert)).toBe(true);
+    expect(manager.current).toBe(Mode.Insert);
+  });
+
   // ── Invalid transitions ───────────────────────────────────────────────
 
   it("rejects Command -> Visual", () => {
     manager.transition(Mode.Command);
     expect(manager.transition(Mode.Visual)).toBe(false);
     expect(manager.current).toBe(Mode.Command);
-  });
-
-  it("rejects Command -> Insert", () => {
-    manager.transition(Mode.Command);
-    expect(manager.transition(Mode.Insert)).toBe(false);
-    expect(manager.current).toBe(Mode.Command);
-  });
-
-  it("rejects Insert -> Command", () => {
-    manager.transition(Mode.Insert);
-    expect(manager.transition(Mode.Command)).toBe(false);
-    expect(manager.current).toBe(Mode.Insert);
   });
 
   it("rejects Insert -> Visual", () => {

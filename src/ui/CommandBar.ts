@@ -97,45 +97,70 @@ export class CommandBar {
 
   // ── Private ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Claim a key for the command bar: suppress the default *and* stop the event
+   * before it reaches the document.
+   *
+   * preventDefault alone is not enough. Enter and Escape both change the mode on
+   * the way out, and the global keydown handler re-reads `modeManager.current`
+   * rather than the mode the keystroke arrived in — so the same Enter that ran a
+   * command would be handled a second time under the mode the command bar just
+   * left. With vim on that meant Enter on any `:` command also dispatched
+   * `select`, opening the focused room or message; with vim off it submitted the
+   * compose box, sending a message (or committing an in-progress edit, or
+   * uploading a staged image) behind the command the user actually asked for.
+   */
+  private _claim(e: KeyboardEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
   private _handleKeydown(e: KeyboardEvent): void {
     // Ctrl+[ is the vim equivalent of Escape — cancel command entry.
     if (e.ctrlKey && e.key === "[") {
-      e.preventDefault();
+      this._claim(e);
       this._cancel();
       return;
     }
     switch (e.key) {
       case "Enter": {
-        e.preventDefault();
+        this._claim(e);
         this._execute();
         break;
       }
 
       case "Escape": {
-        e.preventDefault();
+        this._claim(e);
         this._cancel();
         break;
       }
 
       case "Tab": {
-        e.preventDefault();
+        this._claim(e);
         this._cycleCompletion(e.shiftKey ? -1 : 1);
         break;
       }
 
       case "ArrowUp": {
-        e.preventDefault();
+        this._claim(e);
         this._historyPrev();
         break;
       }
 
       case "ArrowDown": {
-        e.preventDefault();
+        this._claim(e);
         this._historyNext();
         break;
       }
 
       default:
+        // Everything else is ordinary text entry, which the input handles
+        // itself — but it must not reach the document handler either, or a bare
+        // character typed into the command line is also read as a global
+        // binding. Command mode routes to "command" precisely so that nothing
+        // downstream acts on these; stopping here is belt to that brace, and is
+        // what holds if the mode transition ever fails.
+        e.stopPropagation();
         // Reset history cursor when user edits freely (not via arrows)
         if (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete") {
           this._history.resetCursor();
