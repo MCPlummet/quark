@@ -712,6 +712,11 @@ user's Cmd and everyone else's Ctrl are one binding. Only a chord that is
 actually bound is claimed, so `Ctrl+C`/`Ctrl+V`/`Ctrl+A` reach the browser
 untouched.
 
+A chord is matched on what it means, not how it was typed: modifier case,
+modifier order and the key's own case are all folded, so `ctrl-e`, `Ctrl-E` and
+`shift-ctrl-x` all bind the chords you would expect. Plain sequences stay
+case-sensitive — `G` and `g` are different keys.
+
 **Compose box ↔ timeline:** with a draft in the compose box, `Esc` drops into
 Normal-mode editing of the draft (vim motions/operators on the text). The
 compose box then behaves like the message just below the timeline — pressing the
@@ -848,9 +853,12 @@ Arguments follow one grammar: `<required>` and `[optional]`. The command palette
 reads it to decide whether a row can run outright or must prefill the command
 bar for the user to finish — a palette row cannot supply `@user:server`.
 
-**The command palette** (`Ctrl+K`, the `⌕` button in the room-list header, or a
+**The command palette** (`Ctrl+K`, the `⌕` button in the space strip, or a
 pull-down from the top of the open drawer on mobile) searches rooms and actions
-together. A leading `:` drops the rooms. It exists because `commandBar.show()`
+together. A leading `:` drops the rooms. A row that needs an argument prefills
+the command bar; a row whose action is irreversible goes through the same
+confirmation the menus use, so fuzzy-matching onto `:leave` cannot leave a room
+on one keystroke. It exists because `commandBar.show()`
 is reachable only through the `mode-command` action, which requires vim mode —
 and vim mode is force-disabled on mobile, so without the palette no `:` command
 could be run on a phone at all.
