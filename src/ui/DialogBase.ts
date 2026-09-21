@@ -150,6 +150,31 @@ export abstract class DialogBase implements Modal {
     return btn;
   }
 
+  /**
+   * Swap `pane` for a fresh, empty element with the same class and position, and
+   * return the replacement.
+   *
+   * For a dialog whose tab builders are async — they await IPC before appending
+   * their rows — emptying one shared content element is not enough. A build
+   * suspended at an `await` when the user switches tabs resumes afterwards and
+   * appends into whatever element it captured, which by then is the element
+   * showing a different tab: opening the room dialog on Info before the
+   * notification config had cached and pressing Tab put Info's rows inside
+   * Settings. Replacing the element instead leaves the stale build writing into a
+   * detached node, where nothing can see it, and the replacement keeps the same
+   * class and parent so the styling is untouched.
+   *
+   * Lives here because both tabbed dialogs need it and the reasoning is the same
+   * for each; they are otherwise deliberately parallel (same chrome, controls and
+   * stylesheet).
+   */
+  protected replaceContentPane(pane: HTMLElement): HTMLElement {
+    const fresh = document.createElement("div");
+    fresh.className = pane.className;
+    pane.replaceWith(fresh);
+    return fresh;
+  }
+
   // ── Modal interface ────────────────────────────────────────────────────────
 
   getElement(): HTMLElement {

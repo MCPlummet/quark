@@ -135,7 +135,9 @@ export class SettingsDialog extends DialogBase {
       }
     }
 
-    this._contentEl.innerHTML = "";
+    // A fresh pane per build, not an emptied shared one — six of the eight tabs
+    // await IPC before appending, and see replaceContentPane for what that costs.
+    this._contentEl = this.replaceContentPane(this._contentEl);
 
     const tab = this._tabs.find((t) => t.id === id);
     if (!tab) return;
