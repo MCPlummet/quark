@@ -254,6 +254,38 @@ describe("Timeline", () => {
       expect(replyBody?.textContent).toBe("Original message");
     });
 
+    // #106: the click that jumped to the original used to bubble on to the
+    // timeline's own click handler, which re-selected the *reply* and scrolled
+    // it back into view — undoing the jump whenever the two were far apart.
+    it("clicking the preview leaves the original selected, not the reply", () => {
+      Element.prototype.scrollIntoView ??= () => {};
+      timeline.setMessages([
+        makeMsg({ id: "$orig", body: "Original message" }),
+        makeMsg({
+          id: "$reply",
+          senderName: "Bob",
+          body: "Answer",
+          replyTo: { eventId: "$orig", senderName: "Alice", body: "Original message" },
+        }),
+      ]);
+      const reply = timeline.getElement().querySelector<HTMLElement>(".reply-preview")!;
+      reply.click();
+      expect(timeline.selectedMessageId).toBe("$orig");
+    });
+
+    it("clicking the preview of an unloaded original asks for a fetch", () => {
+      const onJump = vi.fn();
+      timeline.onJumpToMessage(onJump);
+      timeline.setMessages([
+        makeMsg({
+          id: "$reply",
+          replyTo: { eventId: "$gone", senderName: "Alice", body: "Old" },
+        }),
+      ]);
+      timeline.getElement().querySelector<HTMLElement>(".reply-preview")!.click();
+      expect(onJump).toHaveBeenCalledWith("$gone");
+    });
+
     it("does not render reply preview when replyTo is absent", () => {
       timeline.setMessages([makeMsg()]);
 

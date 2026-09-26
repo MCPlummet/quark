@@ -1078,6 +1078,12 @@ export class Timeline {
         return;
       }
 
+      // A reply preview's own click handler has already jumped to (and
+      // selected) the original. Selecting the reply here as well would scroll
+      // it straight back into view, undoing the jump whenever the two are more
+      // than a screen apart (#106).
+      if (target.closest(".reply-preview")) return;
+
       const msgEl = target.closest<HTMLElement>("[data-message-id]");
       if (msgEl) {
         const eventId = msgEl.dataset.messageId;
