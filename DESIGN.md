@@ -853,7 +853,7 @@ Arguments follow one grammar: `<required>` and `[optional]`. The command palette
 reads it to decide whether a row can run outright or must prefill the command
 bar for the user to finish — a palette row cannot supply `@user:server`.
 
-**The command palette** (`Ctrl+K`, the `⌕` button in the space strip, or a
+**The command palette** (`Ctrl+K`, the search (magnifier) button in the space strip, or a
 pull-down from the top of the open drawer on mobile) searches rooms and actions
 together. A leading `:` drops the rooms. A row that needs an argument prefills
 the command bar; a row whose action is irreversible goes through the same

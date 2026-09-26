@@ -2,6 +2,7 @@
 
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { hashColor } from "./avatarColors.js";
+import { searchIcon } from "./icons.js";
 
 function _roomColor(name: string): string {
   return hashColor(name);
@@ -79,7 +80,7 @@ export class RoomHeader {
     this._searchBtnEl.className = "room-header__search-btn";
     this._searchBtnEl.title = "Search messages (:search)";
     this._searchBtnEl.setAttribute("aria-label", "Search messages in room");
-    this._searchBtnEl.textContent = "🔍 search";
+    this._searchBtnEl.append(searchIcon(), "search");
     this._metaEl.appendChild(this._searchBtnEl);
 
     const searchSep = document.createElement("span");

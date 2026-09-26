@@ -6821,6 +6821,21 @@ body.quark-mobile textarea {
   font-size: calc(var(--font-size) + 4px);
 }
 
+/* Inline SVG icons (src/ui/icons.ts). Sized by the host's font-size and drawn
+ * in its text colour, so a button's hover/focus colour carries over. */
+.icon {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  display: block;
+}
+
+.room-header__search-btn .icon {
+  display: inline-block;
+  vertical-align: -0.125em;
+  margin-right: 0.35em;
+}
+
 body.quark-mobile .space-strip__item,
 body.quark-mobile .space-strip__settings-btn {
   width: 56px;
