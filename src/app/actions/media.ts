@@ -28,10 +28,11 @@ import type { AttachmentProgressHandle } from "../../ui/AttachmentProgress.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
-import type { MessageTarget } from "../../ipc/types.js";
+import type { MessageTarget, SentMessage } from "../../ipc/types.js";
 
 import { getComponents, prepareOutgoingBody } from "./context.js";
 import { withSniffedType } from "../file_type.js";
+import { showSentEvent } from "./live.js";
 import { openQuickReactPicker } from "./reactions.js";
 import { startReply, cancelReply } from "./messages.js";
 import { openThread } from "./threads.js";
@@ -157,7 +158,7 @@ async function runAttachment(
   blob: Blob,
   filename: string,
   roomId: string,
-  send: (dataBase64: string, uploadId: string) => Promise<unknown>,
+  send: (dataBase64: string, uploadId: string) => Promise<SentMessage>,
 ): Promise<boolean> {
   const total = blob.size;
 
@@ -200,8 +201,9 @@ async function runAttachment(
       row?.setProgress(p.transferred, p.total);
     });
 
-    await send(dataBase64, uploadId);
+    const sent = await send(dataBase64, uploadId);
     row?.succeed();
+    paintSent(roomId, sent);
     return true;
   } catch (err) {
     if (err instanceof AttachmentCancelled) {
@@ -216,6 +218,28 @@ async function runAttachment(
     return false;
   } finally {
     unlisten?.();
+  }
+}
+
+/**
+ * Put a just-sent attachment on screen from the event the send returned (#112).
+ *
+ * Until this, an attachment appeared only when the sync loop echoed it back —
+ * the one send path with no local echo. On Android that could mean not at all
+ * until the room was reopened: picking the file backgrounds the app, and the
+ * loop comes back from that stuck in a long-poll or a backoff sleep while the
+ * progress row has long since ticked.
+ *
+ * Guarded because the send has already happened: a rendering failure here must
+ * not surface as a failed attachment, which would put the image back in the
+ * composer for the user to send twice. The sync echo still follows either way.
+ */
+function paintSent(roomId: string, sent: SentMessage): void {
+  if (!sent.echo) return;
+  try {
+    showSentEvent(roomId, sent.echo);
+  } catch (err) {
+    console.warn("[quark] local echo of a sent attachment failed", err);
   }
 }
 

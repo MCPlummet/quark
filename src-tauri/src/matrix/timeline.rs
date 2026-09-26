@@ -1321,7 +1321,7 @@ pub async fn send_image(
     width: Option<u64>,
     height: Option<u64>,
     target: SendTarget<'_>,
-) -> Result<String, String> {
+) -> Result<SentMessage, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
         .get_room(&room_id)
@@ -1333,14 +1333,77 @@ pub async fn send_image(
     let mut msg_content = RoomMessageEventContent::new(MessageType::Image(img_content));
     msg_content.relates_to = target.relation()?;
 
-    let response = room
-        .send(msg_content)
-        .await
-        .map_err(|e| format!("Failed to send image: {e}"))?;
+    send_with_echo(client, &room, msg_content, "image").await
+}
 
-    let event_id = response.event_id.to_string();
-    info!(event_id = %event_id, "Image sent");
-    Ok(event_id)
+/// What an attachment send hands back: the new event's id, and the event itself
+/// as the timeline will show it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SentMessage {
+    pub event_id: String,
+    /// The sent event, converted exactly as its sync echo will be. The frontend
+    /// paints this the moment the send returns rather than waiting on the sync
+    /// loop to bring it back (#112). `None` only if the conversion somehow
+    /// failed — the send itself still succeeded, and the sync echo still comes.
+    pub echo: Option<TimelineEvent>,
+}
+
+/// Send `content` to `room` and return it as a [`SentMessage`].
+async fn send_with_echo(
+    client: &Client,
+    room: &matrix_sdk::Room,
+    content: RoomMessageEventContent,
+    what: &str,
+) -> Result<SentMessage, String> {
+    let echo_content = content.clone();
+    let response = room
+        .send(content)
+        .await
+        .map_err(|e| format!("Failed to send {what}: {e}"))?;
+    let event_id = response.event_id;
+    info!(event_id = %event_id, "Sent {what}");
+
+    let echo = match client.user_id() {
+        Some(own) => sent_echo(
+            own,
+            &event_id,
+            echo_content,
+            matrix_sdk::ruma::MilliSecondsSinceUnixEpoch::now(),
+        ),
+        None => Err("no own user id".to_owned()),
+    };
+    let echo = echo
+        .map_err(|e| tracing::warn!("No local echo for sent {what} {event_id}: {e}"))
+        .ok();
+    Ok(SentMessage { event_id: event_id.to_string(), echo })
+}
+
+/// The event this device just sent, as its sync echo will be converted.
+///
+/// Built by the same converter the sync handler uses, fed the event the
+/// homeserver will send back — same content, same id, our own sender — so the
+/// local echo and the real one cannot drift apart. The timestamp is this
+/// device's clock rather than the server's; nothing keys on it, and the id the
+/// two share is what the frontend deduplicates by.
+pub(crate) fn sent_echo(
+    own_user_id: &matrix_sdk::ruma::UserId,
+    event_id: &EventId,
+    content: RoomMessageEventContent,
+    origin_server_ts: matrix_sdk::ruma::MilliSecondsSinceUnixEpoch,
+) -> Result<TimelineEvent, String> {
+    // Through JSON rather than a struct literal: ruma's event structs are not
+    // ours to construct field by field, and this is the shape sync delivers.
+    let raw = serde_json::json!({
+        "type": "m.room.message",
+        "event_id": event_id,
+        "sender": own_user_id,
+        "origin_server_ts": origin_server_ts,
+        "content": content,
+    });
+    let event: OriginalSyncRoomMessageEvent =
+        serde_json::from_value(raw).map_err(|e| format!("Unreadable sent event: {e}"))?;
+    crate::events::convert_room_message_event(event)
+        .ok_or_else(|| "Sent event did not convert".to_owned())
 }
 
 /// Build the `m.file` content for a media source. See `build_image_content`.
@@ -1369,7 +1432,7 @@ pub async fn send_file(
     mime_type: &str,
     file_size: Option<u64>,
     target: SendTarget<'_>,
-) -> Result<String, String> {
+) -> Result<SentMessage, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
         .get_room(&room_id)
@@ -1380,14 +1443,7 @@ pub async fn send_file(
     let mut msg_content = RoomMessageEventContent::new(MessageType::File(file_content));
     msg_content.relates_to = target.relation()?;
 
-    let response = room
-        .send(msg_content)
-        .await
-        .map_err(|e| format!("Failed to send file: {e}"))?;
-
-    let event_id = response.event_id.to_string();
-    info!(event_id = %event_id, "File sent");
-    Ok(event_id)
+    send_with_echo(client, &room, msg_content, "file").await
 }
 
 /// Build the `m.video` content for a media source. See `build_image_content`.
@@ -1427,7 +1483,7 @@ pub async fn send_video(
     duration_ms: Option<u64>,
     file_size: Option<u64>,
     target: SendTarget<'_>,
-) -> Result<String, String> {
+) -> Result<SentMessage, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
         .get_room(&room_id)
@@ -1440,14 +1496,7 @@ pub async fn send_video(
     let mut msg_content = RoomMessageEventContent::new(MessageType::Video(video_content));
     msg_content.relates_to = target.relation()?;
 
-    let response = room
-        .send(msg_content)
-        .await
-        .map_err(|e| format!("Failed to send video: {e}"))?;
-
-    let event_id = response.event_id.to_string();
-    info!(event_id = %event_id, "Video sent");
-    Ok(event_id)
+    send_with_echo(client, &room, msg_content, "video").await
 }
 
 /// Fetch events surrounding a specific event using the Matrix /context endpoint.
@@ -1594,6 +1643,58 @@ pub async fn redact_message(
 mod tests {
     use super::*;
     use serde_json;
+
+    // ── Local echo of a sent attachment (#112) ────────────────────────────────
+
+    fn echo_of(content: RoomMessageEventContent) -> TimelineEvent {
+        let own = matrix_sdk::ruma::user_id!("@me:example.com");
+        let event_id = matrix_sdk::ruma::event_id!("$sent:example.com");
+        let ts = matrix_sdk::ruma::MilliSecondsSinceUnixEpoch(UInt::new(1_700_000_000_000).expect("in range"));
+        sent_echo(own, event_id, content, ts).expect("a sent event converts")
+    }
+
+    #[test]
+    fn a_sent_image_echoes_as_the_image_sync_would_deliver() {
+        let image = build_image_content(
+            "cat.png",
+            Caption { body: Some("look"), formatted: None },
+            MediaSource::Plain("mxc://example.com/cat".into()),
+            "image/png",
+            Some(640),
+            Some(480),
+        );
+        let echo = echo_of(RoomMessageEventContent::new(MessageType::Image(image)));
+
+        assert_eq!(echo.event_id, "$sent:example.com");
+        assert_eq!(echo.sender, "@me:example.com");
+        assert_eq!(echo.msg_type, "m.image");
+        assert_eq!(echo.media_url.as_deref(), Some("mxc://example.com/cat"));
+        assert_eq!(echo.media_mimetype.as_deref(), Some("image/png"));
+        assert_eq!((echo.media_width, echo.media_height), (Some(640), Some(480)));
+        assert_eq!(echo.caption.as_deref(), Some("look"));
+        assert_eq!(echo.filename.as_deref(), Some("cat.png"));
+        assert_eq!(echo.thread_root, None);
+    }
+
+    #[test]
+    fn a_sent_file_into_a_thread_echoes_with_its_thread() {
+        // The frontend routes an echo by `thread_root` exactly as it routes a
+        // synced event, so the relation has to survive the conversion.
+        let file = build_file_content(
+            "notes.pdf",
+            MediaSource::Plain("mxc://example.com/notes".into()),
+            "application/pdf",
+            Some(1234),
+        );
+        let mut content = RoomMessageEventContent::new(MessageType::File(file));
+        content.relates_to = SendTarget { thread_root: Some("$root:example.com"), in_reply_to: None }
+            .relation()
+            .expect("thread relation");
+        let echo = echo_of(content);
+
+        assert_eq!(echo.msg_type, "m.file");
+        assert_eq!(echo.thread_root.as_deref(), Some("$root:example.com"));
+    }
 
     // ── Filename extraction ───────────────────────────────────────────────────
 

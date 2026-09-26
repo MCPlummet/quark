@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { AppComponents } from "../../ui/App.js";
-import type { TimelineEvent } from "../../ipc/types.js";
+import type { SentMessage, TimelineEvent } from "../../ipc/types.js";
 
 // Mock the IPC surface so no real invoke happens; capture the send call.
 // Typed with the real signature so `.mock.calls[n]` destructures cleanly under
@@ -21,7 +21,7 @@ type Sent = {
   durationMs?: number;
 };
 
-const sendPastedImage = vi.fn<(send: Sent) => Promise<string>>(async () => "$sent");
+const sendPastedImage = vi.fn<(send: Sent) => Promise<SentMessage>>(async () => ({ event_id: "$sent", echo: null }));
 vi.mock("../../ipc/index.js", () => ({
   sendPastedImage: (...args: Parameters<typeof sendPastedImage>) => sendPastedImage(...args),
   // Referenced elsewhere in media.ts's module scope; stubbed to no-ops.
@@ -35,9 +35,9 @@ vi.mock("../../ipc/index.js", () => ({
   sendVideo: (...args: Parameters<typeof sendVideo>) => sendVideo(...args),
 }));
 
-const sendFile = vi.fn<(send: Sent) => Promise<string>>(async () => "$file");
+const sendFile = vi.fn<(send: Sent) => Promise<SentMessage>>(async () => ({ event_id: "$file", echo: null }));
 
-const sendVideo = vi.fn<(send: Sent) => Promise<string>>(async () => "$video");
+const sendVideo = vi.fn<(send: Sent) => Promise<SentMessage>>(async () => ({ event_id: "$video", echo: null }));
 
 // Upload-progress channel: capture the subscriber so tests can drive the row.
 let progressHandler: ((p: { upload_id: string; transferred: number; total: number }) => void) | null =
@@ -64,6 +64,13 @@ const cancelReply = vi.fn();
 vi.mock("./messages.js", () => ({
   startReply: vi.fn(),
   cancelReply: () => cancelReply(),
+}));
+
+// The local echo (#112): recorded rather than rendered — `live.test.ts` covers
+// what painting it does.
+const showSentEvent = vi.fn<(roomId: string, event: TimelineEvent) => void>();
+vi.mock("./live.js", () => ({
+  showSentEvent: (...args: Parameters<typeof showSentEvent>) => showSentEvent(...args),
 }));
 
 import { sendPendingImage, handleFilePick, attachFiles } from "./media.js";
@@ -203,7 +210,7 @@ describe("attachment progress (#63)", () => {
     sendFile.mockImplementationOnce(async () => {
       progressHandler?.({ upload_id: "someone-else", transferred: 1, total: 100 });
       progressHandler?.({ upload_id: "upload-1", transferred: 40, total: 100 });
-      return "$file";
+      return { event_id: "$file", echo: null };
     });
 
     await handleFilePick(file());
@@ -215,7 +222,7 @@ describe("attachment progress (#63)", () => {
   it("moves to sending once the last byte is out", async () => {
     sendFile.mockImplementationOnce(async () => {
       progressHandler?.({ upload_id: "upload-1", transferred: 100, total: 100 });
-      return "$file";
+      return { event_id: "$file", echo: null };
     });
 
     await handleFilePick(file());
@@ -519,6 +526,81 @@ describe("image captions expand emoji like any other message (#84)", () => {
     await sendPendingImage(blob(), "cat.png", "look :smile:");
 
     expect(setValue).toHaveBeenCalledWith("look :smile:");
+  });
+});
+
+// #112: an attachment used to appear only when the sync loop echoed it back,
+// which on Android could be never, until the room was reopened.
+describe("a sent attachment paints at once (#112)", () => {
+  const echo = (id: string): TimelineEvent =>
+    ({ event_id: id, sender: "@me:x", msg_type: "m.image" }) as TimelineEvent;
+
+  it("paints a sent image from the event the send returned", async () => {
+    const event = echo("$img");
+    sendPastedImage.mockResolvedValueOnce({ event_id: "$img", echo: event });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(showSentEvent).toHaveBeenCalledWith("!room:x", event);
+  });
+
+  it("paints a sent file and video the same way", async () => {
+    const f = echo("$f");
+    sendFile.mockResolvedValueOnce({ event_id: "$f", echo: f });
+    await handleFilePick(new File(["hello"], "notes.txt", { type: "text/plain" }));
+    expect(showSentEvent).toHaveBeenLastCalledWith("!room:x", f);
+
+    const v = echo("$v");
+    sendVideo.mockResolvedValueOnce({ event_id: "$v", echo: v });
+    const restore = stubVideoProbe();
+    try {
+      await handleFilePick(new File(["v"], "clip.mp4", { type: "video/mp4" }));
+    } finally {
+      restore();
+    }
+    expect(showSentEvent).toHaveBeenLastCalledWith("!room:x", v);
+  });
+
+  it("paints into the room it was sent to, even if the user has moved on", async () => {
+    // `showSentEvent` decides whether that room is on screen; the send must
+    // not re-read the current room after the await and misfile it.
+    const event = echo("$img");
+    sendPastedImage.mockImplementationOnce(async () => {
+      AppState.set("currentRoomId", "!elsewhere:x");
+      return { event_id: "$img", echo: event };
+    });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(showSentEvent).toHaveBeenCalledWith("!room:x", event);
+  });
+
+  it("leaves it to sync when the backend had no echo to give", async () => {
+    await sendPendingImage(blob(), "cat.png");
+    expect(showSentEvent).not.toHaveBeenCalled();
+    expect(rowApi.succeed).toHaveBeenCalled();
+  });
+
+  it("does not report a sent attachment as failed when painting it throws", async () => {
+    // A restore here would put the image back in the composer to be sent twice.
+    sendPastedImage.mockResolvedValueOnce({ event_id: "$img", echo: echo("$img") });
+    showSentEvent.mockImplementationOnce(() => {
+      throw new Error("render blew up");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(rowApi.succeed).toHaveBeenCalled();
+    expect(rowApi.fail).not.toHaveBeenCalled();
+    expect(showImagePreview).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("paints nothing when the send fails", async () => {
+    sendPastedImage.mockRejectedValueOnce(new Error("boom"));
+    await sendPendingImage(blob(), "cat.png");
+    expect(showSentEvent).not.toHaveBeenCalled();
   });
 });
 

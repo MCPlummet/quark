@@ -381,23 +381,85 @@ fn spawn_room_key_listener(client: Client, app_handle: tauri::AppHandle) {
     });
 }
 
+/// The right to sync on this process's Matrix client.
+///
+/// `JoinHandle::abort` only *requests* cancellation: the aborted task is
+/// dropped the next time the runtime gets to it, and until then a `/sync` (and
+/// the E2EE outgoing-request flush either side of it) may still be in flight.
+/// Spawning the replacement straight after the abort therefore left a window
+/// with two syncers on one `Client` — the duplicate-flush shape `start_sync`
+/// exists to prevent. Every syncer holds this for as long as it syncs, so a new
+/// loop — or a push wake — begins only once the previous holder has actually
+/// been dropped.
+///
+/// Process-wide rather than per-client: there is only ever one app client, and
+/// the cold push client exists only when there is no app, so the two never
+/// contend for real.
+static SYNC_TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Wait for, and take, the right to sync. See [`SYNC_TURN`].
+pub async fn take_sync_turn() -> tokio::sync::MutexGuard<'static, ()> {
+    if let Ok(turn) = SYNC_TURN.try_lock() {
+        return turn;
+    }
+    info!("Waiting for the previous syncer to stand down");
+    SYNC_TURN.lock().await
+}
+
 pub async fn start_sync(
     client: Client,
     app_handle: Option<tauri::AppHandle>,
     sync_state: &SyncState,
 ) {
-    // Abort any existing sync loop before starting a new one.
-    {
-        let mut guard = sync_state.handle.lock().expect("SyncState lock poisoned");
-        if let Some(prev) = guard.take() {
-            warn!("Aborting previous sync loop before starting a new one");
-            prev.abort();
-        }
-    }
+    spawn_sync_loop(client, app_handle, sync_state, false);
+}
 
+/// Tear down a running sync loop and start a fresh one in its place — the
+/// supervision answer to a loop that has stopped delivering (#52).
+///
+/// Runs on Tauri's runtime whatever runtime calls it. The caller that needs this
+/// is a push wake, which runs on a runtime its JNI entry point builds and drops
+/// per call; a loop spawned there would die with it.
+///
+/// Returns `false`, and starts nothing, when no loop is running: a loop that was
+/// stopped — by logout, above all — is not the supervisor's to bring back.
+pub async fn restart_sync(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn(async move {
+        let client = app
+            .try_state::<MatrixState>()
+            .and_then(|state| state.0.lock().ok().and_then(|guard| guard.clone()))
+            .ok_or("Not logged in")?;
+        let sync_state = app.try_state::<SyncState>().ok_or("No sync state")?;
+        Ok(spawn_sync_loop(client, Some(app.clone()), &sync_state, true))
+    })
+    .await
+    .map_err(|e| format!("Sync restart task failed: {e}"))?
+}
+
+/// Replace whatever sync loop is running with a new one.
+///
+/// With `only_if_running`, does nothing (and returns `false`) when there is no
+/// loop to replace. The check, the abort and the spawn all happen under the
+/// `SyncState` lock, which is also what `logout` takes to stop the loop — so a
+/// restart and a logout cannot interleave into a loop running on a logged-out
+/// client.
+fn spawn_sync_loop(
+    client: Client,
+    app_handle: Option<tauri::AppHandle>,
+    sync_state: &SyncState,
+    only_if_running: bool,
+) -> bool {
     // Only register event handlers once per client lifetime — add_event_handler
     // accumulates, so calling it again would produce duplicate callbacks for
     // every sync event (duplicate messages, notifications, etc.).
+    //
+    // A restart checks for a running loop first so it never touches a client
+    // that is being logged out; the check is repeated under the lock below,
+    // which is the one that counts.
+    if only_if_running && sync_state.handle.lock().expect("SyncState lock poisoned").is_none() {
+        return false;
+    }
     if let Some(ref handle) = app_handle {
         let mut registered = sync_state.handlers_registered.lock().expect("SyncState lock poisoned");
         if !*registered {
@@ -420,7 +482,21 @@ pub async fn start_sync(
         warn!("Failed to enable event cache storage: {e}");
     }
 
+    // Held from here until the new handle is stored: see `only_if_running`.
+    let mut guard = sync_state.handle.lock().expect("SyncState lock poisoned");
+    if only_if_running && guard.is_none() {
+        return false;
+    }
+    // Abort any existing sync loop before starting a new one. The new task
+    // cannot overlap it: it waits for `SYNC_TURN`, which the old task holds
+    // until it has actually been dropped.
+    if let Some(prev) = guard.take() {
+        warn!("Aborting previous sync loop before starting a new one");
+        prev.abort();
+    }
+
     let handle = tokio::spawn(async move {
+        let _turn = take_sync_turn().await;
         // Use Unavailable so Synapse does not write a presence update on every
         // sync poll — avoids lock contention on the presence table.
         let base_settings = SyncSettings::default()
@@ -491,19 +567,44 @@ pub async fn start_sync(
     });
 
     // Store the handle so future calls can abort this loop.
-    let mut guard = sync_state.handle.lock().expect("SyncState lock poisoned");
     *guard = Some(handle);
 
     // Tell the push path this process is already syncing. A push that wakes us
     // now must stand down rather than open a second connection to the
     // homeserver — the service runs in this same process but has no AppHandle
     // to discover that through, so it reads a process-wide flag instead.
+    // Stamping it also restarts the liveness window, which is what stops a burst
+    // of pushes restarting a freshly restarted loop again.
     crate::push_wake::set_warm_sync_active(true);
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_replacement_syncer_waits_for_the_aborted_one_to_be_dropped() {
+        // #52 and the duplicate-loop guard both rest on this: `abort` only asks,
+        // so the next syncer must be held off until the old one is really gone.
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+        let old = tokio::spawn(async move {
+            let _turn = take_sync_turn().await;
+            let _ = held_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        held_rx.await.expect("old syncer took its turn");
+
+        let next = tokio::spawn(take_sync_turn());
+        tokio::task::yield_now().await;
+        assert!(!next.is_finished(), "no second syncer while the first is alive");
+
+        old.abort();
+        let _turn = tokio::time::timeout(std::time::Duration::from_secs(5), next)
+            .await
+            .expect("the turn passes once the aborted syncer is dropped")
+            .expect("next syncer task");
+    }
 
     #[test]
     fn a_cursor_presents_the_token_it_started_with() {

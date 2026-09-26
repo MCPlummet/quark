@@ -322,7 +322,7 @@ The foreground-service placeholder ("Checking for new messages") carries a
 launch intent: it sits in the shade beside the real row on every push, and
 without one a tap on it closed the shade and did nothing.
 
-Three guards matter here, all of them against work this app has previously
+Several guards matter here, all of them against work this app has previously
 overwhelmed its own homeserver with:
 
 - **A warm app wins — while it is actually working.** `push_wake` keeps a
@@ -340,7 +340,8 @@ overwhelmed its own homeserver with:
   does not stand down flat: it **hands off** (`WakePlan::HandOff`), waiting up
   to `WARM_HANDOFF` (10 s) for the warm handler to report that it has processed
   that very event id (`note_warm_event`, stamped at the end of
-  `events::maybe_notify`), and syncs itself only if it never does. Standing
+  `events::maybe_notify`). A loop that stays silent through the handoff is
+  restarted, exactly like a stalled one below — never raced. Standing
   down outright lost the event in the commonest Android state of all — a
   resident process the OS has frozen. The clock was stamped just before the
   freeze and read as live; the push service stopped at once, and the process
@@ -348,6 +349,23 @@ overwhelmed its own homeserver with:
   keeps it thawed: the service holds the foreground, which also exempts it from
   Doze's network cut, for as long as the loop needs. Counts-only pushes still
   stand down, since a warm app clears the room from the receipt itself.
+- **A stalled loop is restarted, never raced.** An event push that finds the
+  loop running but stalled (`WarmSync::Stalled`) does not sync beside it: the
+  wake would be handed the app's own `Client`, and two syncs on one client are
+  two concurrent E2EE outgoing-request flushes from one device (#52). Instead
+  `client::restart_sync` aborts the loop and spawns a fresh one — on Tauri's
+  runtime, since the wake's JNI runtime dies when it returns — and the wake
+  waits, within its budget, for the new loop's first completed sync, which
+  delivers the event through the warm handlers. A restart never revives a loop
+  that was stopped: the "is one running?" check, the abort and the spawn all
+  happen under the `SyncState` lock logout also takes. Restarting stamps the
+  liveness clock, so a burst restarts the loop once. A dismissal push needs no
+  sync and leaves a stalled loop alone.
+- **One syncer per client, structurally.** `JoinHandle::abort` only requests
+  cancellation, so "abort the old loop, spawn the new one" used to leave a
+  window with both polling. Every syncer — the warm loop for its lifetime, a
+  wake for its bounded sync — holds `client::SYNC_TURN`, so a replacement
+  begins only once its predecessor has actually been dropped.
 - **A burst coalesces.** `WakeGuard` admits one push sync at a time, released on
   `Drop` so a panicking sync reopens it instead of wedging push shut.
 - **One `Client` per store.** `background_client` reuses the app's client when
@@ -1171,8 +1189,10 @@ alongside `openExternalUrl` opened every link twice.
   invisibly), and an attachment only folds in a reply to the thread's root or to
   one of its replies. Files sent into a thread render in the panel as the same
   click-to-open affordance the main timeline gives them. Attachments
-  sent into a thread have no optimistic row: they appear when the echo arrives,
-  which is what routes them into the panel with their media. An armed reply is
+  sent into a thread have no optimistic row: they appear once sent, from the
+  send's own echo (see *Attachment progress*), which the live render path
+  routes into the panel with its media just as it would the sync echo. Stickers
+  and GIFs sent into a thread still wait for the sync echo. An armed reply is
   consumed by the attachment and cleared, as it is for a text message.
 - **One attachment route.** The attach button (which accepts several files),
   a paste and a drop onto the window all hand their files to one routine,
@@ -1225,6 +1245,16 @@ alongside `openExternalUrl` opened every link twice.
   spinner with the backend's message and stays until dismissed; cancel is
   offered only during the local read, the one phase that can still be abandoned
   without something having already been sent.
+
+  When the row ticks, the attachment is already on screen. `send_pasted_image`,
+  `send_file` and `send_video` return the sent event alongside its id
+  (`SentMessage.echo`), converted by the same function the sync handler uses,
+  and the frontend paints it through the same render path sync events take
+  (`actions/live.ts`), which deduplicates the sync echo by event id when it
+  follows. Attachments used to wait for that echo alone — the one send path
+  with no local echo — so on Android, where picking the file backgrounds the
+  app and the sync loop comes back from that mid long-poll or asleep in
+  backoff, a sent image could stay missing until the room was reopened (#112).
 
   Rows are scoped to the room the attachment is going to. The composer is
   shared by every room, so an unscoped row followed the user out — a failed
