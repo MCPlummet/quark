@@ -3,6 +3,7 @@ pub mod commands;
 pub mod config;
 pub mod events;
 pub mod gif;
+pub mod local_files;
 pub mod matrix;
 pub mod media_cache;
 pub mod media_server;
@@ -214,6 +215,7 @@ pub fn run() {
             commands::send_pasted_image,
             commands::send_file,
             commands::send_video,
+            commands::read_dropped_file,
             commands::get_cache_stats,
             commands::clear_media_cache,
             commands::set_cache_size_limit,

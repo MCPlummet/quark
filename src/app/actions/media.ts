@@ -31,6 +31,7 @@ import { showError, showSuccess } from "../../ui/NotificationToast.js";
 import type { MessageTarget } from "../../ipc/types.js";
 
 import { getComponents, prepareOutgoingBody } from "./context.js";
+import { withSniffedType } from "../file_type.js";
 import { openQuickReactPicker } from "./reactions.js";
 import { startReply, cancelReply } from "./messages.js";
 import { openThread } from "./threads.js";
@@ -372,6 +373,25 @@ export async function sendPendingImage(
   filename: string | null,
   caption?: string,
 ): Promise<void> {
+  await sendImage(blob, filename, caption, { restoreOnFailure: true });
+}
+
+/**
+ * Send an image that was never staged: the second and later images of a
+ * multi-file drop or paste. The composer holds one staged image, so these go
+ * straight out, uncaptioned; a failure stays on its progress row rather than
+ * being "restored" over the image that *is* staged.
+ */
+async function sendImageNow(file: File): Promise<void> {
+  await sendImage(file, file.name || null, undefined, { restoreOnFailure: false });
+}
+
+async function sendImage(
+  blob: Blob,
+  filename: string | null,
+  caption: string | undefined,
+  opts: { restoreOnFailure: boolean },
+): Promise<void> {
   const target = currentAttachmentTarget();
   if (!target) return;
 
@@ -406,20 +426,69 @@ export async function sendPendingImage(
 
   if (sent) {
     if (target.replyToEventId) cancelReply();
-  } else {
+  } else if (opts.restoreOnFailure) {
     restore();
   }
 }
 
 /**
- * Handle a non-image file from the picker or a paste: routed straight to
- * {@link sendAttachment}. (Images stage in the composer preview instead — see
- * the onFilePick wiring in keyboard.ts.)
+ * Attach files from any entry point — the picker, a paste, a drop — with one
+ * routing rule (#83):
+ *
+ * - The first image stages in the composer preview, where Enter sends it and
+ *   the typed text becomes its caption. `onStaged` runs when that happens, so
+ *   the caller can put the user where a caption is typed.
+ * - Every other file sends at once, in order: images as `m.image` (the
+ *   composer only has room to stage one), videos as `m.video`, the rest as
+ *   `m.file` — see {@link sendAttachment}.
+ *
+ * A file the webview could not type is sniffed first, so an image in a format
+ * WebKitGTK does not name still stages as an image rather than uploading as a
+ * nameless file.
+ *
+ * Resolves once every immediate send has settled.
+ */
+export async function attachFiles(
+  files: readonly File[],
+  opts: { onStaged?: () => void } = {},
+): Promise<void> {
+  if (files.length === 0) return;
+  const typed = await Promise.all(files.map(withSniffedType));
+
+  const rest: File[] = [];
+  let staged = false;
+  for (const file of typed) {
+    if (!staged && isImage(file)) {
+      getComponents().input.showImagePreview(file, file.name || undefined);
+      staged = true;
+      opts.onStaged?.();
+    } else {
+      rest.push(file);
+    }
+  }
+
+  // Sequential, so a batch arrives in the order it was dropped.
+  for (const file of rest) {
+    if (isImage(file)) await sendImageNow(file);
+    else await handleFilePick(file);
+  }
+}
+
+function isImage(file: Blob): boolean {
+  return file.type.startsWith("image/");
+}
+
+/**
+ * Send one non-image file straight away through {@link sendAttachment}.
+ * (Images stage in the composer preview instead — see {@link attachFiles}.)
+ *
+ * A clipboard file can arrive without a name; an empty filename would upload
+ * as an attachment called nothing.
  */
 export async function handleFilePick(file: File): Promise<void> {
   const target = currentAttachmentTarget();
   if (!target) return;
-  await sendAttachment(file, file.name, target);
+  await sendAttachment(file, file.name || `attachment-${Date.now()}`, target);
 }
 
 /**

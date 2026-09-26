@@ -38,7 +38,7 @@ import {
   setupReactionChipHandler,
   setupMessageActionHandlers,
   sendPendingImage,
-  handleFilePick,
+  attachFiles,
   setupStatusBar,
   editStatus,
   jumpToMessage,
@@ -55,6 +55,7 @@ import {
 } from "./actions.js";
 import { AppState } from "./state.js";
 import { resolveComposeSubmit } from "./compose_submit.js";
+import { setupFileDrop } from "./file_drop.js";
 import {
   enterMessageTextSelect,
   enterComposeTextSelect,
@@ -1220,16 +1221,21 @@ export function setupKeyboard(components: AppComponents): void {
     input.openFilePicker();
   });
 
-  // Picked images stage in the same preview as pasted ones (Enter sends, typed
-  // text becomes the caption); everything else uploads immediately.
-  input.onFilePick((file) => {
-    if (file.type.startsWith("image/")) {
-      input.showImagePreview(file, file.name);
-      modeManager.transition(Mode.Insert);
-      input.focus();
-    } else {
-      void handleFilePick(file);
-    }
+  // Picked, pasted and dropped files share one routing rule (`attachFiles`):
+  // the first image stages in the preview (Enter sends, typed text becomes the
+  // caption) and puts the user in Insert mode to type that caption; everything
+  // else uploads immediately.
+  const attach = (files: File[]) =>
+    void attachFiles(files, {
+      onStaged: () => {
+        modeManager.transition(Mode.Insert);
+        input.focus();
+      },
+    });
+  input.onAttachFiles(attach);
+  void setupFileDrop({
+    onFiles: attach,
+    setActive: (active) => input.setDropActive(active),
   });
 
   // Wire reaction chip clicks (bubbling custom events) → sendReaction

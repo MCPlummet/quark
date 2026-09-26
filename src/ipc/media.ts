@@ -154,6 +154,20 @@ export async function sendFile(
 }
 
 /**
+ * Read a file dropped onto the window into a `File`, so it can be attached like
+ * a picked or pasted one (#83). A native drop delivers only paths; the backend
+ * reads a path only if that drop put it in scope.
+ */
+export async function readDroppedFile(path: string): Promise<File> {
+  const got = await invoke<MediaDownload>("read_dropped_file", { path });
+  const binary = atob(got.data_base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const name = got.filename || path.split(/[\\/]/).pop() || "dropped-file";
+  return new File([bytes], name, { type: got.mime_type });
+}
+
+/**
  * Upload base64-encoded video bytes and send as an m.video event so it renders
  * as a playable embed. width/height/durationMs are probed client-side from the
  * file and let the timeline reserve the correct aspect ratio before download.

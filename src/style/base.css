@@ -2977,6 +2977,14 @@ body.quark-mobile .input-bar__mode--hidden {
   flex-shrink: 0;
 }
 
+/* A file drag is over the window (#83): the drop lands anywhere, so the
+   composer says where the files will go. Same accent as the focus ring. */
+.input-bar-wrap--drop .input-bar__compose-box {
+  border-color: var(--accent-primary);
+  border-style: dashed;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 25%, transparent);
+}
+
 /* ── Typing indicator ────────────────────────────────────────────────────── */
 
 .typing-indicator {

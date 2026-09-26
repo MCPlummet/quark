@@ -467,6 +467,16 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       } as TimelineEvent);
       return "$mock-video-event-id";
     }
+    case "read_dropped_file": {
+      // Mock mode has no native drop events to produce a path, so this only
+      // answers a direct call — a small text file named after the path.
+      const path = (args?.path as string) ?? "dropped.txt";
+      return {
+        data_base64: btoa("mock dropped file"),
+        mime_type: "text/plain",
+        filename: path.split(/[\\/]/).pop() || "dropped.txt",
+      };
+    }
     case "send_sticker": {
       // Pushed to the timeline like every other send: a mock that returns an id
       // and nothing else cannot show browser dev mode where a sticker lands,

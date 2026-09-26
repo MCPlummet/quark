@@ -87,7 +87,7 @@ export class Input {
   private _onAttachClick: (() => void) | null = null;
   private _onSendClick: (() => void) | null = null;
   private _sendBtnEl: HTMLButtonElement;
-  private _onFilePick: ((file: File) => void) | null = null;
+  private _onAttachFiles: ((files: File[]) => void) | null = null;
   private _onFocusEnterInsert: (() => void) | null = null;
   private _fileInputEl: HTMLInputElement | null = null;
   private _attachProgress: AttachmentProgressList;
@@ -195,25 +195,16 @@ export class Input {
     // along. Images stage in the composer preview (Enter sends, typed text is
     // the caption); everything else goes through the picker's own handler.
     this._fieldEl.addEventListener("paste", (e) => {
-      // Standard path: items
-      const items = e.clipboardData?.items;
-      if (items) {
-        for (const item of Array.from(items)) {
-          // `getAsFile()` is the test for "is this a file": it returns null for
-          // a string item by spec, which makes it a stricter check than `kind`
-          // and one less thing an engine has to have implemented.
-          const blob = item.getAsFile();
-          if (!blob) continue;
-          e.preventDefault();
-          this._stageOrSend(blob);
-          return;
-        }
-      }
+      // Standard path: items. Every file on the clipboard, not just the first —
+      // copying several files in a file manager puts them all there.
+      const fromItems = e.clipboardData?.items ? clipboardItemFiles(e.clipboardData.items) : [];
       // Fallback: files list (used by some Linux clipboard managers)
-      const files = e.clipboardData?.files;
-      if (files && files.length > 0) {
+      const files = fromItems.length > 0
+        ? fromItems
+        : Array.from(e.clipboardData?.files ?? []);
+      if (files.length > 0) {
         e.preventDefault();
-        this._stageOrSend(files[0]);
+        this._onAttachFiles?.(files);
         return;
       }
       // Async fallback: Clipboard API (Linux/Wayland may not populate clipboardData
@@ -228,18 +219,19 @@ export class Input {
       // staged.
       if (typeof navigator !== "undefined" && navigator.clipboard?.read) {
         const before = this._snapshotForUndo();
-        void navigator.clipboard.read().then((clipItems) => {
+        void navigator.clipboard.read().then(async (clipItems) => {
+          // One image per clipboard item: an item offering the same picture as
+          // PNG *and* JPEG is one picture, not two.
+          const images: File[] = [];
           for (const ci of clipItems) {
-            for (const type of ci.types) {
-              if (type.startsWith("image/")) {
-                void ci.getType(type).then((blob) => {
-                  this._undoDefaultPaste(before);
-                  this.showImagePreview(blob);
-                });
-                return;
-              }
-            }
+            const type = ci.types.find((t) => t.startsWith("image/"));
+            if (!type) continue;
+            const blob = await ci.getType(type);
+            images.push(new File([blob], "", { type: blob.type || type }));
           }
+          if (images.length === 0) return;
+          this._undoDefaultPaste(before);
+          this._onAttachFiles?.(images);
         }).catch(() => { /* Clipboard API unavailable or permission denied */ });
       }
     });
@@ -247,12 +239,13 @@ export class Input {
     // Hidden file input — triggered by the attach button
     this._fileInputEl = document.createElement("input");
     this._fileInputEl.type = "file";
+    this._fileInputEl.multiple = true;
     this._fileInputEl.style.display = "none";
     this._fileInputEl.setAttribute("aria-hidden", "true");
     this._fileInputEl.addEventListener("change", () => {
-      const file = this._fileInputEl!.files?.[0];
-      if (file) {
-        this._onFilePick?.(file);
+      const files = Array.from(this._fileInputEl!.files ?? []);
+      if (files.length > 0) {
+        this._onAttachFiles?.(files);
         // Reset so the same file can be picked again
         this._fileInputEl!.value = "";
       }
@@ -383,28 +376,6 @@ export class Input {
   }
 
   /**
-   * Route one pasted file: an image stages in the composer preview, anything
-   * else goes to the file-pick handler, which already knows how to send a video
-   * as `m.video` and everything else as `m.file`.
-   *
-   * Deliberately not delegating the whole decision to `_onFilePick`, which the
-   * picker's handler also owns: that one switches to Insert mode and focuses the
-   * field, which is right for a button press and redundant for a paste the user
-   * is already typing into.
-   *
-   * A clipboard image carries a real `File` with a name where the source had
-   * one, so it is passed through — a named file pasted and the same file
-   * attached should not upload under different names.
-   */
-  private _stageOrSend(file: File): void {
-    if (file.type.startsWith("image/")) {
-      this.showImagePreview(file, file.name || undefined);
-      return;
-    }
-    this._onFilePick?.(file);
-  }
-
-  /**
    * Record what the field held before a default paste, and what it holds
    * immediately after — the two values {@link _undoDefaultPaste} needs.
    *
@@ -460,11 +431,22 @@ export class Input {
   }
 
   /**
-   * Register the handler for a file the user attached — from the attach button,
-   * or pasted into the composer (see {@link _stageOrSend}).
+   * Register the handler for files the user attached — from the attach button
+   * or pasted into the composer. The component only collects them; which one
+   * stages and which send at once is the app's decision (`attachFiles`), made
+   * once for every entry point including a window drop.
    */
-  onFilePick(handler: (file: File) => void): void {
-    this._onFilePick = handler;
+  onAttachFiles(handler: (files: File[]) => void): void {
+    this._onAttachFiles = handler;
+  }
+
+  /**
+   * Mark the composer as the target of a file drag in progress. The native drop
+   * lands anywhere in the window (see `app/file_drop.ts`), so this is the one
+   * place that says where the files will go.
+   */
+  setDropActive(active: boolean): void {
+    this._el.classList.toggle("input-bar-wrap--drop", active);
   }
 
   /**
@@ -722,4 +704,27 @@ export class Input {
       this._fieldEl.placeholder = "…";
     }
   }
+}
+
+/**
+ * The files in a paste's `DataTransferItemList`.
+ *
+ * `getAsFile()` is the test for "is this a file": it returns null for a string
+ * item by spec, which makes it a stricter check than `kind` and one less thing
+ * an engine has to have implemented. Where the engine hands back a file with no
+ * type, the item's own type — the clipboard target it came from — is kept
+ * instead, so an image does not lose the one label that says it is an image.
+ */
+export function clipboardItemFiles(items: DataTransferItemList): File[] {
+  const files: File[] = [];
+  for (const item of Array.from(items)) {
+    const file = item.getAsFile();
+    if (!file) continue;
+    files.push(
+      file.type || !item.type
+        ? file
+        : new File([file], file.name, { type: item.type, lastModified: file.lastModified }),
+    );
+  }
+  return files;
 }

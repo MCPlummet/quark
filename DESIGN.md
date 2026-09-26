@@ -1064,6 +1064,13 @@ sanitised `formatted_body`, the same in a thread reply or after an edit — is
 styled and activated by one shared path (`src/app/links.ts`), so a markdown link
 whose label is not itself a URL looks and behaves like every other link.
 
+On the sending side, the compose box's inline markdown (`src/app/markdown.ts`)
+turns `[label](url)` into `<a href>` in the `formatted_body`, leaving the
+markdown source in `body` as the plain fallback. Only `http(s)`, `mailto` and
+`matrix` targets link; anything else stays literal text. Whenever a message has
+a `formatted_body`, its newlines go out as `<br>`, because other clients render
+that HTML normally and a bare newline would collapse to a space.
+
 Activation is a **single capture-phase guard on the document**, not a listener
 per anchor. Left click and middle click both open the URL in the system browser
 and cancel the in-window navigation; middle-click `mousedown` is cancelled too,
@@ -1113,15 +1120,39 @@ alongside `openExternalUrl` opened every link twice.
   sent into a thread have no optimistic row: they appear when the echo arrives,
   which is what routes them into the panel with their media. An armed reply is
   consumed by the attachment and cleared, as it is for a text message.
-- **Pasting.** Anything on the clipboard that is a file pastes into the
-  composer, not just images: an image stages in the preview, a video sends as
-  `m.video`, everything else as `m.file` — the same routing the attach button
-  uses. Where the webview exposes a pasted image only through the async
-  Clipboard API (Linux/WebKitGTK), the default text paste has already run by the
-  time the image arrives; the text it inserted is taken back out only when it
-  reads as the image's stand-in (a lone URL, path or image filename). Prose that
-  merely shares the clipboard with an image stays, and becomes the caption.
-  Drag-and-drop is not implemented.
+- **One attachment route.** The attach button (which accepts several files),
+  a paste and a drop onto the window all hand their files to one routine,
+  `attachFiles` (`src/app/actions/media.ts`). The first image stages in the
+  preview and switches to Insert mode for the caption. Every other file sends
+  at once, in order: further images as uncaptioned `m.image` (the composer
+  stages only one), videos as `m.video`, everything else as `m.file`. A file
+  the webview could not type (`""` or `application/octet-stream`) is sniffed
+  by its leading bytes (PNG, JPEG, GIF, WebP, BMP, TIFF, ICO, AVIF, HEIC). An
+  image in a format WebKitGTK does not name therefore still stages as an image
+  instead of uploading as a nameless file.
+- **Pasting.** Every file on the clipboard pastes into the composer, not just
+  images and not just the first. A clipboard file the engine hands back
+  untyped keeps its clipboard target's type. Where the webview exposes a pasted
+  image only through the async Clipboard API (Linux/WebKitGTK), the default text
+  paste has already run by the time the image arrives. The text it inserted is
+  taken back out only when it reads as the image's stand-in (a lone URL, path
+  or image filename). Prose that merely shares the clipboard with an image
+  stays, and becomes the caption. The async Clipboard API is spec-limited to
+  `image/png`, so it cannot recover other formats. A clipboard that carries a
+  file-manager copy only as `file://` text is also out of reach: the webview
+  cannot read the path, and the backend reads only dropped files.
+- **Dropping.** Files dropped anywhere on the window attach to the open room.
+  The composer shows a dashed accent border while a drag is over the window.
+  Tauri keeps OS drops for itself (`dragDropEnabled`, left at its default), so
+  the webview never sees an HTML5 `drop` carrying a `File`. `src/app/file_drop.ts`
+  listens to the native event instead, which delivers paths, and reads each one
+  through `read_dropped_file`. That command reads only paths inside the
+  asset-protocol scope. Tauri adds dropped paths to that scope itself, before
+  the frontend hears of the drop, so the scope is exactly the set of files the
+  user handed over (`src-tauri/src/local_files.rs`). A dropped folder, or a path
+  that can't be read, is reported and skipped, and the rest of the drop still
+  attaches. With no room open, a drop says so and reads nothing. Mobile builds
+  get no native drop events.
 - **Encrypted attachments.** In an encrypted room the bytes are encrypted
   before upload and the event references them as an `m.file` source carrying the
   key, never a plaintext `mxc://`. The room decides this, not the call site:

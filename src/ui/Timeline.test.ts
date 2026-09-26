@@ -547,4 +547,24 @@ describe("inline thread file attachments", () => {
     expect(panel.querySelector(".message__file-affordance-label")?.textContent).toBe("notes.pdf");
     expect(panel.querySelector(".message__image-caption")?.textContent).toBe("the good bits");
   });
+
+  // Where #78 and #84 meet: an image sent into a thread with a custom emoji in
+  // its caption. The panel has its own render branch, so the main timeline's
+  // caption tests say nothing about it.
+  it("renders an image reply's formatted caption as HTML, emoji stashed for download", () => {
+    const panel = openWithFile({
+      body: ":party: done",
+      type: "image",
+      mediaUrl: "mxc://x/img",
+      mediaMimeType: "image/png",
+      caption: ":party: done",
+      captionHtml: '<img data-mx-emoticon src="mxc://e/1" alt=":party:"> done',
+    });
+
+    const emoji = panel.querySelector<HTMLImageElement>(
+      ".message__image-caption img[data-mx-emoticon]",
+    );
+    expect(emoji?.dataset.mxc).toBe("mxc://e/1");
+    expect(timeline.getPendingInlineEmojiUrls()).toContain("mxc://e/1");
+  });
 });
