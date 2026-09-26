@@ -248,6 +248,111 @@ fn handle_push(payload: &str, data_dir: &std::path::Path) -> PushResult {
     }
 }
 
+// ─── Rust → Kotlin: posting without the plugin bridge ────────────────────────
+//
+// The warm path used to post through tauri-plugin-notification, whose calls go
+// through `run_mobile_plugin` → wry's `dispatch`, which runs the closure on the
+// Activity and `expect`s there to be one. A process kept alive after its
+// Activity was destroyed — by the push service, the background-sync service,
+// or simply not yet reclaimed — has none, so the first notification panicked
+// the calling thread. That thread is the sync loop, running the event handler.
+//
+// A notification needs a `Context`, not an Activity. So Kotlin hands over the
+// application context and `PushNotifier`'s class once (`nativeInstall`), and
+// the warm path calls `PushNotifier` directly — the same code the cold path
+// posts with, which also retires the plugin's `FLAG_CANCEL_CURRENT` intents
+// (#87).
+
+/// What Rust needs to reach `PushNotifier` from any thread.
+struct Notifier {
+    vm: jni::JavaVM,
+    context: jni::objects::GlobalRef,
+    /// Resolved on a Java thread: `FindClass` from a native thread consults
+    /// only the system class loader and would never find an app class.
+    class: jni::objects::GlobalRef,
+}
+
+static NOTIFIER: std::sync::OnceLock<Notifier> = std::sync::OnceLock::new();
+
+#[no_mangle]
+pub extern "system" fn Java_tel_quark_app_PushNative_nativeInstall<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    context: JObject<'local>,
+) {
+    init_logging();
+    if NOTIFIER.get().is_some() {
+        return;
+    }
+    let installed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let vm = env.get_java_vm().map_err(|e| e.to_string())?;
+        let context = env.new_global_ref(&context).map_err(|e| e.to_string())?;
+        let class = env
+            .find_class("tel/quark/app/PushNotifier")
+            .map_err(|e| e.to_string())?;
+        let class = env.new_global_ref(class).map_err(|e| e.to_string())?;
+        let _ = NOTIFIER.set(Notifier { vm, context, class });
+        Ok::<_, String>(())
+    }));
+    match installed {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            // A pending ClassNotFoundException would poison the next JNI call
+            // the caller makes; clear it along with reporting.
+            let _ = env.exception_clear();
+            tracing::error!("Could not install the native notifier: {e}");
+        }
+        Err(_) => tracing::error!("Installing the native notifier panicked"),
+    }
+}
+
+/// Call a static `(Context, String) -> void` method on `PushNotifier`.
+fn call_notifier(method: &str, arg: &str) -> Result<(), String> {
+    use jni::objects::{JClass, JValue};
+
+    let notifier = NOTIFIER.get().ok_or("The native notifier is not installed")?;
+    let mut env = notifier
+        .vm
+        .attach_current_thread()
+        .map_err(|e| format!("Could not attach to the JVM: {e}"))?;
+    let arg = env
+        .new_string(arg)
+        .map_err(|e| format!("Could not pass the argument to Kotlin: {e}"))?;
+    let class: &JClass = notifier.class.as_obj().into();
+    let called = env.call_static_method(
+        class,
+        method,
+        "(Landroid/content/Context;Ljava/lang/String;)V",
+        &[JValue::Object(notifier.context.as_obj()), JValue::Object(&arg)],
+    );
+    if let Err(e) = called {
+        // The Kotlin side catches its own Throwables, so this is a JNI-level
+        // failure (a renamed method, a missing class). Clear any pending
+        // exception, or every later JNI call on this thread fails with it.
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+        }
+        return Err(format!("PushNotifier.{method} failed: {e}"));
+    }
+    Ok(())
+}
+
+/// Post rendered notifications through `PushNotifier`, bypassing Tauri.
+///
+/// `Err` when the notifier was never installed or the call failed, so the
+/// caller can fall back rather than drop the notification.
+pub fn post_notifications(specs: &[crate::notify::NotificationSpec]) -> Result<(), String> {
+    let json = serde_json::to_string(specs)
+        .map_err(|e| format!("Could not serialise notifications: {e}"))?;
+    call_notifier("postJson", &json)
+}
+
+/// Dismiss a room's live notifications through `PushNotifier`, bypassing Tauri.
+pub fn cancel_room(room_id: &str) -> Result<(), String> {
+    call_notifier("cancelRoomJni", room_id)
+}
+
 // ─── Logcat ──────────────────────────────────────────────────────────────────
 //
 // The app's `tracing` subscriber writes to stdout, which Android discards, and

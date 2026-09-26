@@ -13,6 +13,9 @@ import java.io.File
 
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
+    // Before Tauri starts: the warm path posts notifications through this
+    // (notify.rs → push_jni.rs → PushNotifier), not through the plugin bridge.
+    PushNative.install(this)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     applyImeInsets()

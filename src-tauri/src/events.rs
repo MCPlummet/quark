@@ -262,6 +262,7 @@ async fn maybe_notify(
         .try_state::<Mutex<NotificationConfig>>()
         .and_then(|s| s.lock().ok().map(|c| c.clone()))
     else {
+        crate::push_wake::note_warm_event(&timeline_event.event_id);
         return;
     };
 
@@ -294,11 +295,17 @@ async fn maybe_notify(
     // `claim_notification` stays the dedup gate: an event ID is only
     // remembered when we genuinely notify, and a re-delivered event (sync
     // retry replay) is suppressed here.
-    if let Some(spec) = crate::notify::evaluate(&input, &config) {
-        if claim_notification(&spec.event_id) {
-            crate::notify::deliver(app, &spec);
+    match crate::notify::assess(&input, &config) {
+        Ok(spec) => {
+            if claim_notification(&spec.event_id) {
+                crate::notify::deliver(app, &spec);
+            }
         }
+        Err(reason) => debug!("not notifying {} in {room_id}: {reason:?}", input.event_id),
     }
+    // Last, so a push waiting on this event (`WakePlan::HandOff`) is released
+    // only once whatever notification it deserved is already on screen.
+    crate::push_wake::note_warm_event(&timeline_event.event_id);
 }
 
 /// Register matrix-sdk event handlers that push sync events to the frontend.

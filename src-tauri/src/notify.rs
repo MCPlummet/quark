@@ -99,25 +99,62 @@ pub struct NotificationSpec {
     pub highlight: bool,
 }
 
-/// Decide whether an event warrants an OS notification and render it.
+/// Why [`assess`] declined to notify.
 ///
-/// Pure (no platform calls) so the decision matrix is unit-testable. Returns
-/// `None` for: own messages, focused window, initial-sync catch-up events,
-/// edits (a replacement is not a new message), rooms muted locally or by the
-/// master switch, and events the push rules silenced.
-pub fn evaluate(input: &NotificationInput, config: &NotificationConfig) -> Option<NotificationSpec> {
-    if input.is_own || input.window_focused || input.pre_startup || input.is_edit {
-        return None;
+/// Named because "push arrived, sync ran, nothing appeared" has seven
+/// different causes that look identical from outside, and the log line naming
+/// one is the difference between a bug report that can be acted on and one
+/// that cannot (#90).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Declined {
+    /// The user sent it.
+    Own,
+    /// The app is on screen; the in-app toast covers it.
+    Focused,
+    /// Initial-sync catch-up from before this launch.
+    PreStartup,
+    /// An edit of an earlier message, not a new one.
+    Edit,
+    /// Notifications are switched off in Settings.
+    Disabled,
+    /// The room is on the local mute list (a mute whose rule write failed).
+    MutedLocally,
+    /// The homeserver's push rules did not say notify: a room muted by rule,
+    /// the account-wide `.m.rule.master`, or a room with no push context yet.
+    PushRulesSilent,
+}
+
+/// Decide whether an event warrants an OS notification, and say why not.
+///
+/// Pure (no platform calls) so the decision matrix is unit-testable.
+pub fn assess(
+    input: &NotificationInput,
+    config: &NotificationConfig,
+) -> Result<NotificationSpec, Declined> {
+    if input.is_own {
+        return Err(Declined::Own);
+    }
+    if input.window_focused {
+        return Err(Declined::Focused);
+    }
+    if input.pre_startup {
+        return Err(Declined::PreStartup);
+    }
+    if input.is_edit {
+        return Err(Declined::Edit);
+    }
+    if !config.enabled {
+        return Err(Declined::Disabled);
     }
     if !should_notify(config, &input.room_id) {
-        return None;
+        return Err(Declined::MutedLocally);
     }
     if !input.push.notify {
-        return None;
+        return Err(Declined::PushRulesSilent);
     }
 
     let (title, body) = format_notification(&input.sender, &input.body, &input.room_name, config);
-    Some(NotificationSpec {
+    Ok(NotificationSpec {
         id: stable_id(&input.event_id),
         summary_id: stable_id(&input.room_id),
         title,
@@ -129,6 +166,14 @@ pub fn evaluate(input: &NotificationInput, config: &NotificationConfig) -> Optio
         room_name: input.room_name.clone(),
         highlight: input.push.highlight,
     })
+}
+
+/// [`assess`] without the reason: returns `None` for own messages, focused
+/// window, initial-sync catch-up events, edits (a replacement is not a new
+/// message), rooms muted locally or by the master switch, and events the push
+/// rules silenced.
+pub fn evaluate(input: &NotificationInput, config: &NotificationConfig) -> Option<NotificationSpec> {
+    assess(input, config).ok()
 }
 
 /// Pick the room title a notification should carry.
@@ -233,6 +278,30 @@ pub fn deliver(app: &tauri::AppHandle, spec: &NotificationSpec) {
 fn deliver_mobile(app: &tauri::AppHandle, spec: &NotificationSpec) {
     use tauri::Manager;
 
+    // Android posts through `PushNotifier`, the cold path's own notifier,
+    // called over JNI rather than through the plugin bridge. Two reasons, both
+    // about what the plugin cannot do:
+    //
+    // - Its calls dispatch onto the Activity, and wry panics when there is
+    //   none. A process outliving its Activity is ordinary on Android (a
+    //   foreground service keeps it, or the OS has simply not reclaimed it), and
+    //   the panic lands in the sync loop that called us — silencing every
+    //   notification after it (#90).
+    // - Its tap intents use `FLAG_CANCEL_CURRENT`, which kills the previous
+    //   PendingIntent before the replacement row is posted. The per-room summary
+    //   is re-posted under one id for every message, so a tap in that window
+    //   hits a cancelled intent and the shade closes on nothing (#87).
+    //
+    // `PushNotifier` counts the room's live rows itself, so the summary logic
+    // below is the plugin's alone. The plugin stays as the fallback for a
+    // notifier that was never installed, which Tauri starting in MainActivity
+    // makes all but impossible.
+    #[cfg(target_os = "android")]
+    match crate::push_jni::post_notifications(std::slice::from_ref(spec)) {
+        Ok(()) => return,
+        Err(e) => tracing::warn!("Native notifier unavailable ({e}); posting through the plugin"),
+    }
+
     let registry = app.state::<NotificationRegistry>();
     let result = app
         .notification()
@@ -300,7 +369,13 @@ pub fn cancel_room(app: &tauri::AppHandle, room_id: &str) {
     #[cfg(target_os = "android")]
     {
         let _ = ids;
-        crate::unifiedpush::cancel_room_notifications(app, room_id);
+        // Over JNI for the reason `deliver_mobile` gives: this runs from the
+        // receipt handler inside the sync loop, where a plugin call with no
+        // Activity alive would panic it.
+        if let Err(e) = crate::push_jni::cancel_room(room_id) {
+            tracing::warn!("Native notifier unavailable ({e}); clearing through the plugin");
+            crate::unifiedpush::cancel_room_notifications(app, room_id);
+        }
     }
     #[cfg(target_os = "ios")]
     {
@@ -491,6 +566,25 @@ mod tests {
         let mut i = input();
         i.push = PushEval { notify: false, highlight: false };
         assert!(evaluate(&i, &config()).is_none());
+    }
+
+    #[test]
+    fn assess_names_each_reason_it_declines() {
+        let cases: [(fn(&mut NotificationInput, &mut NotificationConfig), Declined); 7] = [
+            (|i, _| i.is_own = true, Declined::Own),
+            (|i, _| i.window_focused = true, Declined::Focused),
+            (|i, _| i.pre_startup = true, Declined::PreStartup),
+            (|i, _| i.is_edit = true, Declined::Edit),
+            (|_, c| c.enabled = false, Declined::Disabled),
+            (|_, c| c.mute_rooms = vec!["!room:example.com".into()], Declined::MutedLocally),
+            (|i, _| i.push = PushEval { notify: false, highlight: false }, Declined::PushRulesSilent),
+        ];
+        for (setup, reason) in cases {
+            let (mut i, mut c) = (input(), config());
+            setup(&mut i, &mut c);
+            assert_eq!(assess(&i, &c), Err(reason));
+        }
+        assert!(assess(&input(), &config()).is_ok());
     }
 
     #[test]

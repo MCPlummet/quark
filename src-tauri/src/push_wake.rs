@@ -79,6 +79,21 @@ pub fn parse_wake(payload: &str) -> Result<PushWake, String> {
 pub enum WakePlan {
     /// Run a bounded sync and let the notification pipeline decide the rest.
     Sync,
+    /// The app's own sync loop claims to be live, so give it a bounded window
+    /// to show it has handled this event before syncing ourselves.
+    ///
+    /// This used to be a flat `Ignore(WarmSyncRunning)`, and that was the
+    /// wrong answer for exactly the process push exists for: one Android keeps
+    /// resident but has frozen. The loop's clock was stamped seconds before the
+    /// freeze, so it read as live; the push stood down, the service stopped at
+    /// once, and the OS re-froze the process before the loop it deferred to
+    /// had run a single instruction. The event was delivered to nobody (#90).
+    ///
+    /// Waiting is what makes deferring honest. The push service holds the
+    /// process in the foreground — unfrozen, and exempt from Doze's network
+    /// cut — while the loop gets its chance, and only a loop that then fails
+    /// to show the event is raced.
+    HandOff { event_id: String },
     /// Take down this room's notifications. The user read it somewhere else, so
     /// the work is subtraction: no network, no store, no lease — just tell the
     /// OS to drop what it is still showing.
@@ -94,11 +109,11 @@ pub enum IgnoreReason {
     /// opt-out we could not deliver to the homeserver is owed, not applied —
     /// so pushes keep arriving for a while afterwards.
     PushDisabled,
-    /// The app's own sync loop is live *and recently made progress*, so it will
-    /// deliver this event itself. Liveness is half the claim: a loop that
-    /// exists but has been stalled in backoff (or frozen by Doze) is not going
-    /// to deliver anything, and standing down for it is how push comes to do
-    /// nothing in exactly the situation it was added for.
+    /// A counts-only push arrived while the app's own sync loop is live *and
+    /// recently made progress*; that loop will see the receipt and clear the
+    /// room itself. Event pushes no longer stand down on this — they hand off
+    /// ([`WakePlan::HandOff`]) — because a loop that merely claims liveness is
+    /// not a loop that will deliver, and a message push is not safe to drop.
     WarmSyncRunning,
     /// A counts-only push that named no room. Nothing to render and nothing to
     /// dismiss against.
@@ -145,7 +160,12 @@ pub fn plan_wake(wake: &PushWake, push_enabled: bool, warm_sync_active: bool) ->
         return WakePlan::Ignore(IgnoreReason::PushDisabled);
     }
     if warm_sync_active {
-        return WakePlan::Ignore(IgnoreReason::WarmSyncRunning);
+        return match wake {
+            PushWake::Event { event_id, .. } => WakePlan::HandOff { event_id: event_id.clone() },
+            // A warm app clears its own notifications from the receipt it is
+            // about to see; there is nothing here worth holding the process for.
+            PushWake::Clear { .. } => WakePlan::Ignore(IgnoreReason::WarmSyncRunning),
+        };
     }
     match wake {
         PushWake::Event { .. } => WakePlan::Sync,
@@ -414,6 +434,76 @@ pub fn warm_sync_active() -> bool {
     )
 }
 
+// ─── Handing a push to the warm loop ─────────────────────────────────────────
+
+/// Event ids the warm loop's notification handler has finished with, newest
+/// last. What a [`WakePlan::HandOff`] waits to see.
+///
+/// Progress on the loop's clock is not the same claim: a response the server
+/// composed just before the event arrived still stamps progress when it is
+/// finally read. "The warm handler has processed *this event*" is the question
+/// the push actually needs answered, and it is cheap to ask.
+static WARM_SEEN: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+/// How many recent event ids [`WARM_SEEN`] keeps. A push names one event and
+/// is answered within seconds, so this only has to outlast a burst.
+const WARM_SEEN_CAPACITY: usize = 128;
+
+/// How long a push waits for the warm loop before syncing itself.
+///
+/// A healthy loop answers in well under a second once it can run: the push
+/// means the homeserver has something, so its long-poll returns at once. Ten
+/// seconds covers thawing and a reconnect after Doze. A loop still silent after
+/// that is stuck — typically in a long-poll whose socket died while the process
+/// was frozen, which it will not notice until its own request timeout.
+pub const WARM_HANDOFF: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Record that the warm loop has handled an event. Called by
+/// `events::maybe_notify` for every message it processes, after any
+/// notification has been posted — whether or not one was.
+pub fn note_warm_event(event_id: &str) {
+    let mut seen = WARM_SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    remember(&mut seen, event_id, WARM_SEEN_CAPACITY);
+}
+
+fn remember(ring: &mut std::collections::VecDeque<String>, id: &str, capacity: usize) {
+    if ring.iter().any(|seen| seen == id) {
+        return;
+    }
+    ring.push_back(id.to_owned());
+    while ring.len() > capacity {
+        ring.pop_front();
+    }
+}
+
+/// Whether the warm loop has already handled `event_id`.
+pub fn warm_has_seen(event_id: &str) -> bool {
+    WARM_SEEN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|seen| seen == event_id)
+}
+
+/// Wait up to `budget` for the warm loop to handle `event_id`.
+///
+/// `true` means the loop got there and the push has nothing left to do. The
+/// caller holds a foreground service for the duration, which is the point: it
+/// keeps the process thawed and on the network long enough for the loop to run.
+async fn await_warm_handoff(event_id: &str, budget: std::time::Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        if warm_has_seen(event_id) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
 /// The one wake allowed to sync at a time, for the life of the process.
 pub static WAKE_GUARD: WakeGuard = WakeGuard::new();
 
@@ -612,8 +702,24 @@ pub async fn run_wake(
     wake: &PushWake,
 ) -> Result<WakeOutcome, String> {
     let config = crate::notifications::load_notification_config_from(data_dir);
+    if let PushWake::Event { room_id, event_id } = wake {
+        tracing::info!("Push wake for {event_id} in {room_id}");
+    }
     match plan_wake(wake, config.push_enabled, warm_sync_active()) {
         WakePlan::Sync => {}
+        WakePlan::HandOff { event_id } => {
+            if await_warm_handoff(&event_id, WARM_HANDOFF).await {
+                tracing::info!("Push wake handed {event_id} to the warm sync loop, which handled it");
+                return Ok(WakeOutcome::nothing());
+            }
+            // The loop claimed to be live and did not deliver. Racing it is the
+            // lesser evil: the alternative is the event reaching nobody. The
+            // dedupe ring keeps the two from both notifying.
+            tracing::warn!(
+                "Warm sync loop did not handle {event_id} within {WARM_HANDOFF:?}; \
+                 syncing from the push instead"
+            );
+        }
         // Answered without a client, a lease or a byte of network: the whole
         // point of recognising this push is that it costs nothing to honour.
         WakePlan::Dismiss { room_id } => {
@@ -859,7 +965,13 @@ async fn collect(
     // A wake syncs a batch, so most of what arrives may already have been read
     // on another device. Delivered-to-this-phone and seen-by-this-person are
     // different things, and only the second earns silence.
-    if already_seen(event.timestamp, collector.read_marker(room).await) {
+    let marker = collector.read_marker(room).await;
+    if already_seen(event.timestamp, marker) {
+        tracing::debug!(
+            "Push wake: {} in {room_id} is already read (event ts {}, read marker {marker:?})",
+            event.event_id,
+            event.timestamp
+        );
         collector.suppressed.fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -890,10 +1002,19 @@ async fn collect(
         push: crate::notify::PushEval::from_actions(push_actions),
     };
 
-    let Some(spec) = crate::notify::evaluate(&input, &collector.config) else { return };
+    let spec = match crate::notify::assess(&input, &collector.config) {
+        Ok(spec) => spec,
+        Err(reason) => {
+            // One line per declined event: a wake's batch is small, and the
+            // reason is the whole diagnosis when a push "does nothing".
+            tracing::info!("Push wake: not notifying {} in {room_id}: {reason:?}", input.event_id);
+            return;
+        }
+    };
     // Shares the warm path's dedup ring, so a push that arrives for an event the
     // app already showed before its webview died does not show it twice.
     if !crate::events::claim_notification(&spec.event_id) {
+        tracing::info!("Push wake: {} was already notified in this process", spec.event_id);
         return;
     }
     if let Ok(mut out) = collector.out.lock() {
@@ -1112,12 +1233,54 @@ mod tests {
     }
 
     #[test]
-    fn a_push_is_ignored_while_the_app_is_already_syncing() {
-        // The warm loop will deliver this event through the same pipeline. A
-        // second sync would duplicate the notification and — worse — put two
-        // concurrent syncs on the homeserver from one device.
+    fn a_push_is_handed_to_a_warm_loop_rather_than_dropped() {
+        // The warm loop should deliver this event through the same pipeline,
+        // and a second sync would put two on the homeserver from one device —
+        // but "should" is all a liveness clock can say. A process Android has
+        // frozen reads as live for the clock's whole window, and standing down
+        // flat let the OS re-freeze it before the loop ever ran (#90). So the
+        // push waits for the loop to show it handled *this* event.
         let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
-        assert_eq!(plan_wake(&wake, true, true), WakePlan::Ignore(IgnoreReason::WarmSyncRunning));
+        assert_eq!(plan_wake(&wake, true, true), WakePlan::HandOff { event_id: "$e".into() });
+    }
+
+    #[test]
+    fn the_seen_ring_dedupes_and_forgets_the_oldest() {
+        let mut ring = std::collections::VecDeque::new();
+        remember(&mut ring, "$a", 2);
+        remember(&mut ring, "$a", 2);
+        assert_eq!(ring.len(), 1, "a repeat is not a second entry");
+        remember(&mut ring, "$b", 2);
+        remember(&mut ring, "$c", 2);
+        assert_eq!(ring, ["$b", "$c"], "capacity evicts the oldest");
+    }
+
+    #[tokio::test]
+    async fn a_handoff_returns_as_soon_as_the_warm_loop_has_the_event() {
+        let id = "$handoff-seen:test";
+        note_warm_event(id);
+        assert!(await_warm_handoff(id, std::time::Duration::from_millis(10)).await);
+    }
+
+    #[tokio::test]
+    async fn a_handoff_notices_the_event_arriving_mid_wait() {
+        let id = "$handoff-late:test";
+        let waiter = tokio::spawn(async move {
+            await_warm_handoff(id, std::time::Duration::from_secs(5)).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        note_warm_event(id);
+        assert!(waiter.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_handoff_to_a_silent_loop_gives_up_at_its_budget() {
+        // Giving up is what hands the event back to the push's own sync; a
+        // wait that never ended would be the old stand-down with extra steps.
+        let budget = std::time::Duration::from_millis(500);
+        let started = tokio::time::Instant::now();
+        assert!(!await_warm_handoff("$handoff-never:test", budget).await);
+        assert!(started.elapsed() >= budget);
     }
 
     #[test]

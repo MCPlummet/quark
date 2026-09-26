@@ -295,8 +295,32 @@ identical to the warm path — same mutes, same highlight decision, no second
 decision matrix to drift — and the sync sweeps up everything else that arrived
 in the same window. The rendered `NotificationSpec`s serialise back to Kotlin,
 where `PushNotifier` posts them; matching the notification plugin's ids,
-channels, group keys and *intent extras* is what makes a cold notification
-behave like a warm one when tapped.
+channels, group keys and *intent extras* is what makes a tap on one route
+through the plugin's `actionPerformed` event and MainActivity's cold-start
+mirror alike.
+
+**Warm notifications on Android post through `PushNotifier` too**, called
+over JNI (`push_jni::post_notifications`) rather than through
+tauri-plugin-notification. `MainActivity.onCreate` hands Rust the JVM, the
+application context and the `PushNotifier` class once (`nativeInstall`) —
+the class resolved on a Java thread, since `FindClass` from a native thread
+sees only the system class loader. The plugin could not stay, for two
+reasons. Every plugin call dispatches onto the Activity, and wry `expect`s
+one: a process that outlived its Activity (kept by a foreground service, or
+just not yet reclaimed) panicked on its first notification, inside the sync
+loop that raised it. And its tap intents use `FLAG_CANCEL_CURRENT`, which
+kills the old PendingIntent before the replacement row is posted — the room
+summary is re-posted under one id per message, so a tap in that window hit a
+dead intent and closed the shade on nothing (#87). One notifier also means
+one set of request codes, flags and summary rules instead of two that
+drifted. Dismissal (`notify::cancel_room`) goes the same way. The plugin
+remains only as a fallback for a notifier that failed to install, and for
+iOS. The summary alerts with `GROUP_ALERT_CHILDREN` and only once, so its
+per-message re-post does not sound on top of the message's own alert.
+
+The foreground-service placeholder ("Checking for new messages") carries a
+launch intent: it sits in the shade beside the real row on every push, and
+without one a tap on it closed the shade and did nothing.
 
 Three guards matter here, all of them against work this app has previously
 overwhelmed its own homeserver with:
@@ -311,6 +335,19 @@ overwhelmed its own homeserver with:
   The progress stamp comes from `sync_with_callback`, because `Client::sync`
   loops internally and returns only on error: its success arm is reached about
   as often as never.
+
+  Even a loop inside that window only *probably* delivers, so an event push
+  does not stand down flat: it **hands off** (`WakePlan::HandOff`), waiting up
+  to `WARM_HANDOFF` (10 s) for the warm handler to report that it has processed
+  that very event id (`note_warm_event`, stamped at the end of
+  `events::maybe_notify`), and syncs itself only if it never does. Standing
+  down outright lost the event in the commonest Android state of all — a
+  resident process the OS has frozen. The clock was stamped just before the
+  freeze and read as live; the push service stopped at once, and the process
+  was re-frozen before the loop it deferred to had run (#90). The wait is what
+  keeps it thawed: the service holds the foreground, which also exempts it from
+  Doze's network cut, for as long as the loop needs. Counts-only pushes still
+  stand down, since a warm app clears the room from the receipt itself.
 - **A burst coalesces.** `WakeGuard` admits one push sync at a time, released on
   `Drop` so a panicking sync reopens it instead of wedging push shut.
 - **One `Client` per store.** `background_client` reuses the app's client when
@@ -554,6 +591,13 @@ is owed:
 - Writes are atomic (temp file + rename) and an unreadable `push.json` is moved
   to `push.json.corrupt` rather than overwritten — it may be the only surviving
   record of a live pusher.
+
+A distributor re-announcing the endpoint it already gave us is free only when
+a pusher points at it (`push::is_registered_at`). The address is stored before
+registration is attempted, so a first attempt that failed leaves it stored
+and unregistered; treating that re-announcement as "nothing new" left push
+dead until the next app launch, which for a user who only meets the app
+through its notifications may never come.
 
 Reads never mint state: `get_push_status` uses `load_push_state`, so opening
 Settings on desktop doesn't create a `push.json` for a platform that can never
