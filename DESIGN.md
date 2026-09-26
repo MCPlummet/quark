@@ -1058,6 +1058,13 @@ sanitised `formatted_body`, the same in a thread reply or after an edit — is
 styled and activated by one shared path (`src/app/links.ts`), so a markdown link
 whose label is not itself a URL looks and behaves like every other link.
 
+On the sending side, the compose box's inline markdown (`src/app/markdown.ts`)
+turns `[label](url)` into `<a href>` in the `formatted_body`, leaving the
+markdown source in `body` as the plain fallback. Only `http(s)`, `mailto` and
+`matrix` targets link; anything else stays literal text. Whenever a message has
+a `formatted_body`, its newlines go out as `<br>`, because other clients render
+that HTML normally and a bare newline would collapse to a space.
+
 Activation is a **single capture-phase guard on the document**, not a listener
 per anchor. Left click and middle click both open the URL in the system browser
 and cancel the in-window navigation; middle-click `mousedown` is cancelled too,
