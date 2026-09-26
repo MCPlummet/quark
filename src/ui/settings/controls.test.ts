@@ -89,6 +89,18 @@ describe("toggleSection", () => {
     expect(checkbox(section).checked).toBe(true);
   });
 
+  // A state with nothing for the user to do returns "" — no blank hint line.
+  it("hides the hint line when the hint is empty", async () => {
+    const c = makeControls();
+    const section = (await c.toggleSection(spec({
+      get: async () => ({ supported: true, enabled: true, detail: "registered" }),
+      hint: () => "",
+    })))!;
+
+    const hints = [...section.querySelectorAll<HTMLElement>(".settings-dialog__hint")];
+    expect(hints.filter((h) => !h.hidden)).toHaveLength(1); // the status line
+  });
+
   // These switches carry homeserver- and OS-side effects, so they must land
   // when flipped — waiting for [save] is what let a stale draft undo them.
   it("applies the flip immediately and repaints from the backend", async () => {

@@ -204,6 +204,12 @@ can least afford: telling someone it works while nothing delivers it.
 the only one the user can fix — the foreground service remains the fallback
 there.
 
+The push section shows a one-line status for the current state and, beneath
+it, a hint only when there is something for the user to do (install a
+distributor, or re-enable notifications at the top of the tab); other states
+show no hint. Settings copy in general is user guidance, not an explanation of
+how a feature works — rationale like what the gateway sees lives here (#113).
+
 **`muted_account` is the rung that is not about this device at all.**
 `.m.rule.master` is an account-wide kill switch — one override rule matching
 every event and notifying on nothing — which Quark never writes and other

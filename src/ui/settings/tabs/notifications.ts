@@ -24,10 +24,7 @@ import type { SettingsTab } from "../types.js";
 
 /**
  * What an account-wide mute means, in the user's terms rather than the rule's.
- *
- * Exported as one string because it is said in two places — the notice at the
- * top of the tab, and the push hint — and the two must not drift into
- * describing different problems.
+ * Shown in the notice at the top of the tab.
  */
 export const ACCOUNT_MUTE_MESSAGE =
   "Notifications are disabled for your whole account (set by another client). " +
@@ -100,13 +97,12 @@ export function pushStatusLine(s: PushStatus): string {
   const ios = s.transport === "apns";
   switch (s.readiness) {
     case "off":
-      return "push: off · the app must stay running to notify";
+      return "push: off · Quark can only notify while it is running";
     // Not a stall in the chain at all: everything below can be green while the
-    // account-wide rule guarantees the homeserver sends nothing. Naming the
-    // rule is deliberate — it is what makes the state searchable, and what
-    // several hours of debugging the gateway chain would otherwise cost.
+    // account-wide rule (`.m.rule.master`) guarantees the homeserver sends
+    // nothing. The notice at the top of the tab explains it and undoes it.
     case "muted_account":
-      return "push: blocked by an account-wide mute (.m.rule.master) — nothing will be delivered";
+      return "push: blocked — notifications are disabled for your account";
     case "ready":
       return `push: registered · gateway: ${s.gateway_url ?? "unknown"}`;
     case "no_transport":
@@ -114,7 +110,7 @@ export function pushStatusLine(s: PushStatus): string {
         ? "push: iOS has not provided a device token yet"
         : "push: no distributor installed — nothing can wake the app";
     case "waiting":
-      if (ios) return "push: waiting for a device token from iOS — no pusher registered yet";
+      if (ios) return "push: waiting for iOS";
       // Several installed and none saved is not a wait at all: UnifiedPush
       // refuses to break the tie, so nothing will happen until the user picks.
       // Calling that "waiting" leaves them staring at a line that never moves.
@@ -122,40 +118,27 @@ export function pushStatusLine(s: PushStatus): string {
         return `push: ${s.distributors.length} distributors installed — pick one below to finish setup`;
       }
       return s.distributor
-        ? `push: waiting for ${s.distributor} — no pusher registered yet`
-        : "push: waiting for a distributor — no pusher registered yet";
+        ? `push: waiting for ${s.distributor}`
+        : "push: waiting for a distributor";
   }
 }
 
-/** What the user can do about it, likewise per transport. */
+/**
+ * What the user can do about it — or "" when there is nothing for them to do.
+ *
+ * Only states with a user action get a hint (#113): explanations of how push
+ * works, or of what the gateway sees, belong in DESIGN.md, not under a switch.
+ */
 export function pushHint(s: PushStatus): string {
-  const privacy =
-    "Only a room ID and event ID ever reach the push gateway — never message content.";
-  // Ahead of the transport-specific advice, because none of it is the problem:
-  // installing a distributor or waiting for a token fixes a chain that will
-  // still deliver nothing while the account is muted. The control that undoes
-  // it is at the top of this tab, which is where every platform can reach it —
-  // desktop has no push section for it to live in.
+  // The control that undoes the mute is at the top of this tab, where every
+  // platform can reach it — desktop has no push section for it to live in.
   if (s.readiness === "muted_account") {
-    return `${ACCOUNT_MUTE_MESSAGE} Turn it back on at the top of this tab. ${privacy}`;
+    return "Turn notifications back on at the top of this tab.";
   }
-  if (s.transport === "apns") {
-    // Not a switch on iOS: it follows "Enable notifications" above, because
-    // push is the only way the app hears anything while it is closed.
-    return `Follows Enable notifications — iOS can only reach you through push while Quark is closed. \
-Delivered through Apple's push service and Quark's own gateway; nothing to install. ${privacy}`;
+  if (s.transport !== "apns" && s.readiness === "no_transport") {
+    return "Install a UnifiedPush distributor (such as ntfy) to be notified while Quark is closed.";
   }
-  if (s.readiness === "no_transport") {
-    // Somewhere to go, rather than a restatement of what's missing.
-    return `Install a UnifiedPush distributor — see unifiedpush.org/users/distributors. Until then Quark can only notify while it is running. ${privacy}`;
-  }
-  // Telling someone to install a distributor when they have installed two is
-  // the same dead end the status line above just escaped — the thing they need
-  // to do is choose, and the picker is right there.
-  if (!s.distributor && s.distributors.length > 1) {
-    return `Quark won't pick between installed distributors for you — whichever you choose carries this device's push traffic. ${privacy}`;
-  }
-  return `Android needs a UnifiedPush distributor installed (ntfy, NextPush, …). ${privacy}`;
+  return "";
 }
 
 export const notificationsTab: SettingsTab = {
@@ -244,8 +227,7 @@ export const notificationsTab: SettingsTab = {
       status: (s) =>
         `service: ${s.running ? "running" : "stopped"} · ` +
         `battery optimization: ${s.battery_exempt ? "unrestricted" : "restricted"}`,
-      hint: () =>
-        "Per-category sound & importance (Messages / Mentions) is configured in Android Settings → Notifications.",
+      hint: () => "Notification sounds are set in Android Settings → Notifications.",
       extra: (state, refresh) => {
         if (state.battery_exempt) return null;
         const btn = document.createElement("button");

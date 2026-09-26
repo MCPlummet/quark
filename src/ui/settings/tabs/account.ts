@@ -283,10 +283,6 @@ export const accountTab: SettingsTab = {
         "Backup",
         `${backup.enabled ? "enabled" : "disabled"} · on server: ${backup.exists_on_server ? "yes" : "no"}`,
       ));
-      const keyHint = document.createElement("div");
-      keyHint.className = "settings-dialog__hint";
-      keyHint.textContent = "Enabling or restoring key backup is coming in a later release.";
-      keySection.appendChild(keyHint);
       content.appendChild(keySection);
 
       // ── Log out ───────────────────────────────────────────────────────────

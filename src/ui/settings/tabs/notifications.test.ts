@@ -28,7 +28,7 @@ const status = (over: Partial<PushStatus> = {}): PushStatus => ({
 describe("pushStatusLine", () => {
   it("says the app must stay running while push is off", () => {
     expect(pushStatusLine(status({ enabled: false, readiness: "off" }))).toContain(
-      "must stay running",
+      "only notify while it is running",
     );
   });
 
@@ -102,31 +102,29 @@ describe("pushStatusLine", () => {
 });
 
 describe("pushHint", () => {
-  it("tells Android users what to install", () => {
-    const hint = pushHint(status());
+  // A user with nothing installed needs to know what to install.
+  it("tells Android users to install a distributor when none is installed", () => {
+    const hint = pushHint(status({ readiness: "no_transport", distributor: null }));
     expect(hint).toContain("UnifiedPush distributor");
     expect(hint).toContain("ntfy");
   });
 
-  // A user with nothing installed needs somewhere to go, not a description of
-  // what they are missing.
-  it("points at the distributor list when none is installed", () => {
-    expect(pushHint(status({ readiness: "no_transport", distributor: null }))).toContain(
-      "unifiedpush.org",
-    );
+  // #113: the hint is for what the user can do, not how push works. States
+  // with nothing to act on show no hint at all.
+  it("says nothing when there is nothing for the user to do", () => {
+    expect(pushHint(status())).toBe("");
+    expect(pushHint(status({ readiness: "ready", registered: true }))).toBe("");
+    expect(pushHint(status({ distributor: null, distributors: ["a", "b"] }))).toBe("");
+    expect(pushHint(status({ transport: "apns" }))).toBe("");
+    expect(pushHint(status({ transport: "apns", readiness: "no_transport" }))).toBe("");
   });
 
-  it("tells iOS users there is nothing to install", () => {
-    const hint = pushHint(status({ transport: "apns" }));
-    expect(hint).not.toContain("UnifiedPush");
-    expect(hint).toContain("nothing to install");
-  });
-
-  // The privacy guarantee is the same on both transports and is the whole
-  // reason `event_id_only` is requested — it must not be dropped by either.
-  it("states the privacy guarantee on every transport", () => {
+  it("never leaks implementation notes", () => {
     for (const transport of ["unified_push", "apns"] as const) {
-      expect(pushHint(status({ transport }))).toContain("never message content");
+      for (const readiness of ["off", "ready", "waiting", "no_transport", "muted_account"] as const) {
+        const hint = pushHint(status({ transport, readiness }));
+        expect(hint).not.toMatch(/gateway|event ID|room ID/i);
+      }
     }
   });
 });
@@ -143,31 +141,18 @@ describe("account-wide mute", () => {
   it("never reports a muted account as working push", () => {
     const line = pushStatusLine(muted);
     expect(line).not.toContain("registered ·");
-    expect(line).toContain("account-wide mute");
-  });
-
-  // Naming the rule is what makes the state searchable, and what turns hours
-  // down the gateway chain into one lookup.
-  it("names the rule that caused it", () => {
-    expect(pushStatusLine(muted)).toContain(".m.rule.master");
+    expect(line).toContain("disabled for your account");
   });
 
   // A registered pusher over a working distributor is still delivering
   // nothing, so the transport advice would send the user to fix a chain that
   // is already fine.
-  it("explains the account mute instead of the transport, on every platform", () => {
+  it("points at the notice instead of the transport, on every platform", () => {
     for (const transport of ["unified_push", "apns"] as const) {
       const hint = pushHint(status({ ...muted, transport }));
-      expect(hint).toContain("whole account");
-      expect(hint).not.toContain("unifiedpush.org");
-      // The privacy guarantee is not dropped by taking this branch.
-      expect(hint).toContain("never message content");
+      expect(hint).toContain("top of this tab");
+      expect(hint).not.toContain("UnifiedPush");
     }
-  });
-
-  it("says the same thing in the notice and the hint", () => {
-    expect(pushHint(muted)).toContain(ACCOUNT_MUTE_MESSAGE);
-    expect(ACCOUNT_MUTE_MESSAGE).toContain("set by another client");
   });
 });
 
