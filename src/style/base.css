@@ -5752,17 +5752,23 @@ body.quark-mobile .profile-edit-dialog__panel {
 }
 
 /* Section heading between the Rooms and Commands runs. Not a navigable row —
- * the SelectionList only ever sees .command-palette__item. */
+ * the SelectionList only ever sees .command-palette__item.
+ *
+ * It sticks to the top of the list, so its background must be opaque: rows
+ * scroll beneath it. --surface-dim is a translucent tint, so it is layered over
+ * the panel's --bg rather than used alone (alone, row text showed through).
+ * z-index keeps it above rows that establish their own stacking context. */
 .command-palette__section {
   padding: 5px 12px 3px;
   color: var(--roomlist-muted);
   font-size: calc(var(--font-size) - 2px);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  background-color: var(--surface-dim);
+  background: linear-gradient(var(--surface-dim), var(--surface-dim)), var(--bg);
   border-bottom: var(--border-width) solid var(--border-color);
   position: sticky;
   top: 0;
+  z-index: 1;
 }
 
 .command-palette__desc {
