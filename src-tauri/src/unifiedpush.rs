@@ -393,10 +393,22 @@ pub fn unsubscribe(app: &tauri::AppHandle) -> Result<(), String> {
 /// An unchanged endpoint stops here. Distributors re-announce on every app
 /// start, and turning that into a pusher round-trip per launch is exactly the
 /// kind of chatter this app has hurt its homeserver with before.
+///
+/// "Unchanged" has to mean *registered*, though, not merely *stored*. The
+/// address is written down before registration is attempted, so a first
+/// attempt that failed — offline, or the app not yet logged in — left an
+/// endpoint on disk that no pusher points at, and every later re-announcement
+/// read as "already had it" and stopped. Push then waited on the next app
+/// launch to recover, which for a user who only ever sees the app through its
+/// notifications may be never.
 pub async fn on_new_endpoint(data_dir: &std::path::Path, endpoint: &str) -> Result<(), String> {
     if !crate::push::store_endpoint(data_dir, endpoint)? {
-        tracing::debug!("Distributor re-announced the endpoint we already had");
-        return Ok(());
+        let state = crate::push::load_push_state(data_dir);
+        if crate::push::is_registered_at(state.as_ref(), endpoint) {
+            tracing::debug!("Distributor re-announced the endpoint we already had");
+            return Ok(());
+        }
+        tracing::info!("Distributor re-announced an endpoint no pusher points at yet; registering");
     }
     register_stored_endpoint(data_dir).await
 }

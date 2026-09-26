@@ -295,6 +295,17 @@ pub fn store_endpoint(config_dir: &std::path::Path, endpoint: &str) -> Result<bo
     Ok(changed.is_some())
 }
 
+/// Whether the homeserver was last told to push to `endpoint`.
+///
+/// Answers from the ledger alone — no network — which is what lets a
+/// distributor's routine re-announcement stay free while still catching the
+/// endpoint that was stored but never registered.
+pub fn is_registered_at(state: Option<&PushState>, endpoint: &str) -> bool {
+    state
+        .and_then(|s| s.last.as_ref())
+        .is_some_and(|last| last.pushkey == endpoint)
+}
+
 /// Whether a session start should ask the transport for an address.
 ///
 /// Registration is otherwise driven entirely by the transport volunteering an
@@ -1481,6 +1492,27 @@ mod endpoint_request_tests {
     fn push_switched_off_asks_for_nothing() {
         assert!(!should_request_endpoint(false, false));
         assert!(!should_request_endpoint(false, true));
+    }
+
+    #[test]
+    fn a_stored_endpoint_is_not_a_registered_one() {
+        // The address is written down *before* registration is attempted, so
+        // a failed first attempt leaves it stored with no pusher behind it.
+        // Reading that as "registered" is what made every re-announcement stop
+        // short of retrying.
+        let mut state = PushState::fresh();
+        state.endpoint = Some("https://ntfy.example/up1".into());
+        assert!(!is_registered_at(Some(&state), "https://ntfy.example/up1"));
+        assert!(!is_registered_at(None, "https://ntfy.example/up1"));
+
+        state.last = Some(RegisteredPusher {
+            user_id: "@a:x".into(),
+            app_id: "tel.quark.app.android".into(),
+            pushkey: "https://ntfy.example/up1".into(),
+            gateway_url: "https://ntfy.example/_matrix/push/v1/notify".into(),
+        });
+        assert!(is_registered_at(Some(&state), "https://ntfy.example/up1"));
+        assert!(!is_registered_at(Some(&state), "https://ntfy.example/up2"));
     }
 }
 

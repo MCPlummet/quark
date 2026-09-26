@@ -586,6 +586,13 @@ is owed:
   to `push.json.corrupt` rather than overwritten — it may be the only surviving
   record of a live pusher.
 
+A distributor re-announcing the endpoint it already gave us is free only when
+a pusher points at it (`push::is_registered_at`). The address is stored before
+registration is attempted, so a first attempt that failed leaves it stored
+and unregistered; treating that re-announcement as "nothing new" left push
+dead until the next app launch, which for a user who only meets the app
+through its notifications may never come.
+
 Reads never mint state: `get_push_status` uses `load_push_state`, so opening
 Settings on desktop doesn't create a `push.json` for a platform that can never
 use one.
