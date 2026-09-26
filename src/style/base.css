@@ -1768,6 +1768,14 @@ body.quark-mobile .room-list__header-btn {
   white-space: nowrap;
 }
 
+/* Original outside the loaded window: still fetching, or nothing to show.
+ * The banner stays clickable either way — the event ID is enough to jump. */
+.reply-preview--loading .reply-preview__body,
+.reply-preview--unavailable .reply-preview__body {
+  font-style: italic;
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+}
+
 /* ── Message highlight (jump-to animation) ───────────────────────────────── */
 
 @keyframes message-highlight-flash {
@@ -6987,7 +6995,13 @@ body.quark-mobile .status-bar__status {
  *
  * Copying a fragment is not lost — the sheet's "Select text" row opts this one
  * body back in via .message__body--selectable and hands it to the platform,
- * callout included, which is also where the drag handles come from. */
+ * callout included, which is also where the drag handles come from.
+ *
+ * Refused on the whole message row, not just its body: the press is live
+ * anywhere inside `[data-message-id]`, and a press on the reply banner, a link
+ * preview, the thread indicator or a reaction still started a highlight
+ * alongside the sheet. The body's explicit opt-in below still wins. */
+body.quark-mobile .message,
 body.quark-mobile .message__body {
   -webkit-user-select: none;
   user-select: none;

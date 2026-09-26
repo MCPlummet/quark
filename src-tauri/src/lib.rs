@@ -183,6 +183,7 @@ pub fn run() {
             // Timeline
             commands::get_timeline,
             commands::get_event_context,
+            commands::get_event,
             commands::paginate_forward,
             commands::open_room_timeline,
             commands::load_older_timeline,

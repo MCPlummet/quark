@@ -17,6 +17,7 @@ import {
   createRoom,
   markRoomRead,
   getEventContext,
+  getEvent,
   paginateForward,
   openRoomTimeline,
   loadOlderTimeline,
@@ -53,6 +54,9 @@ import {
   _applyEdits,
   _buildThreadRootCounts,
   timelineEventToMessage,
+  replyPreviewFor,
+  replyPreviewFromEvent,
+  _replyPreviewCache,
   _downloadReactionEmoji,
   _downloadMessageImages,
   _downloadInlineEmoji,
@@ -62,7 +66,7 @@ import {
   setContextView,
   setMediaCacheLimit,
 } from "./context.js";
-import { closeThread } from "./threads.js";
+import { closeThread, openThread } from "./threads.js";
 import { cancelReply, cancelEdit } from "./messages.js";
 import { openRoomSettings } from "./dialogs.js";
 import { openProfileForUser } from "./profile.js";
@@ -680,14 +684,101 @@ export async function jumpToMessage(eventId: string): Promise<void> {
   // Fast path — message is already rendered
   if (timeline.scrollToMessage(eventId)) return;
 
+  // A thread reply never renders in the main timeline, so no amount of context
+  // loading will put it on screen — open its thread instead. Checked against
+  // the loaded buffer first, then against the fetched context below.
+  const loaded = AppState.get("currentTimeline").find((e) => e.event_id === eventId);
+  if (loaded?.thread_root) {
+    await openThread(loaded.thread_root);
+    return;
+  }
+
   // Fetch context around the target event and rebuild the timeline
   try {
     const ctx = await getEventContext(roomId, eventId, 25);
+    if (roomId !== AppState.get("currentRoomId")) return;
+    const target = ctx.events.find((e) => e.event_id === eventId);
+    if (target?.thread_root) {
+      await openThread(target.thread_root);
+      return;
+    }
+    if (!target) {
+      // The server knows the event but it isn't a message we render (redacted,
+      // a state event, …). Rebuilding the timeline around it would move the
+      // user somewhere with nothing highlighted; say so and stay put.
+      showError("The original message is no longer available");
+      return;
+    }
     paginationState.contextFocusEventId = eventId;
     _renderContextPage(ctx, eventId, { scrollToFocus: true });
   } catch (err) {
     showError(`Failed to load message: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/** Originals currently being fetched, so a burst of replies to the same
+ *  message costs one request. */
+const _replyFetchesInFlight = new Set<string>();
+/** Originals waiting for a fetch slot. */
+const _replyFetchQueue: { roomId: string; eventId: string }[] = [];
+/** Concurrent single-event fetches — a room full of replies to old messages
+ *  must not fire dozens of requests at the homeserver at once. */
+const MAX_REPLY_FETCHES = 4;
+let _replyFetchesActive = 0;
+
+/**
+ * Resolve the `"loading"` reply preview of every message replying to
+ * `eventId`, whose original is outside the loaded window (#106). Wired to
+ * `Timeline.onUnresolvedReply`.
+ *
+ * Checks the loaded buffer first — the original may have arrived with an older
+ * page since the preview was drawn — then fetches the single event.
+ */
+export function resolveReplyPreview(eventId: string): void {
+  const roomId = AppState.get("currentRoomId");
+  if (!roomId) return;
+  const { timeline } = getComponents();
+
+  const local = replyPreviewFor(eventId, AppState.get("currentTimeline"));
+  if (local.state !== "loading") {
+    timeline.updateReplyPreview(eventId, local);
+    return;
+  }
+  if (_replyFetchesInFlight.has(eventId)) return;
+  _replyFetchesInFlight.add(eventId);
+  _replyFetchQueue.push({ roomId, eventId });
+  _pumpReplyFetches();
+}
+
+function _pumpReplyFetches(): void {
+  while (_replyFetchesActive < MAX_REPLY_FETCHES && _replyFetchQueue.length > 0) {
+    const job = _replyFetchQueue.shift()!;
+    _replyFetchesActive++;
+    void _fetchReplyPreview(job.roomId, job.eventId).finally(() => {
+      _replyFetchesActive--;
+      _replyFetchesInFlight.delete(job.eventId);
+      _pumpReplyFetches();
+    });
+  }
+}
+
+async function _fetchReplyPreview(roomId: string, eventId: string): Promise<void> {
+  const unavailable = { eventId, senderName: "", body: "", state: "unavailable" as const };
+  let preview;
+  try {
+    const ev = await getEvent(roomId, eventId);
+    preview = ev ? replyPreviewFromEvent(ev) : unavailable;
+    // An undecryptable original must re-resolve once keys arrive; everything
+    // else (including "not a message") is stable enough to remember.
+    if (ev?.msg_type !== "m.room.encrypted") _replyPreviewCache.set(eventId, preview);
+  } catch {
+    // Transient (offline, rate-limited) or permanent (no access) — either way
+    // there is nothing to show now. Not cached, so a later render retries.
+    preview = unavailable;
+  }
+  // Event IDs are unique across rooms, so a room switch in the meantime just
+  // means nothing in the timeline matches.
+  getComponents().timeline.updateReplyPreview(eventId, preview);
 }
 
 /**

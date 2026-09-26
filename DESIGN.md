@@ -575,6 +575,8 @@ Adding chrome inside one of those containers needs no new `touch-action` rule. A
 
 **Pinch-zoom is off, but the layout is still zoom-aware.** The viewport meta (`user-scalable=no`, `maximum-scale=1`) disables page zoom — on iOS the meta is the only mechanism, since WebKit does not let `touch-action` suppress its page-level pinch; a body-level `touch-action: pan-x pan-y` covers engines that do honor it. Zoom can still happen regardless: Android's "force enable zoom" accessibility setting overrides the meta, and a ≤768px desktop window can be trackpad-pinched. A pinch shrinks the visual viewport to roughly `layoutHeight / scale`, which from a height difference alone is indistinguishable from an open keyboard — so `viewportMetrics` takes `visualViewport.scale` and claims neither a keyboard inset nor a pan while zoomed, and the compose guards stand down there too. `ImageLightbox` implements its own pinch-to-zoom for images in JS; the meta does not affect it.
 
+**Long press opens the action sheet, and nothing else.** `attachLongPress` (`src/app/long_press.ts`) is the one gesture helper — the timeline, room list and space strip all attach it at their container. It fires only in mobile mode (a desktop-width touchscreen gets `contextmenu` and the floating menu, never the sheet) and swallows the click the engine synthesises after the press. The engine would otherwise start a native text selection on the same press, so in mobile mode the whole message row is `user-select: none`. Copying a fragment goes through the sheet's **Select text** row instead: it opts that one body back in (`.message__body--selectable`), selects its contents and hands it to the platform's own handles and callout (#100). It deliberately does not reuse the vim `o` text-select path, which sets `contenteditable` and would raise the soft keyboard. The opt-in is revoked on the next press elsewhere.
+
 ---
 
 ## UI Design
@@ -968,7 +970,15 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
 - [x] Spaces: hierarchy display, space-scoped room lists, restricted joins
 - [x] Threads (m.thread relation) — replies carry media and MSC2530 captions,
       converted by the same code path as the main timeline
-- [x] Rich replies (m.in_reply_to)
+- [x] Rich replies (m.in_reply_to) — every reply gets its banner, even when the
+      original is outside the loaded window: the preview is looked up in the
+      page, then the whole buffer, then a cache of fetched originals, and
+      otherwise drawn as "loading original message…" while `get_event` fetches
+      it (at most four at once; "original message unavailable" if it is gone).
+      An undecryptable reply keeps its banner, since `m.relates_to` is
+      cleartext; a thread's `is_falling_back` pointer is not a reply. Clicking
+      the banner jumps to the original — scrolling if loaded, else loading its
+      context, else opening its thread if it is a thread reply
 - [x] Reactions (m.annotation) — Unicode + custom emoji
 - [x] Message editing & redaction — an edit re-runs the outgoing formatter, so
       `m.new_content` keeps the HTML `formatted_body` and custom emoji survive

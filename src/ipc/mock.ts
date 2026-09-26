@@ -215,6 +215,10 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         next_batch: end < MOCK_TIMELINE.length ? `mock-next-${end}` : null,
       };
     }
+    case "get_event": {
+      const targetId = (args?.eventId as string) ?? "";
+      return MOCK_TIMELINE.find((e) => e.event_id === targetId) ?? null;
+    }
     case "paginate_forward": {
       // Mock token format: "mock-next-<index>" — index is the next event to return
       const after = args?.after as string ?? "";

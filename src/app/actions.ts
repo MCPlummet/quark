@@ -43,6 +43,7 @@ export {
   selectRoom,
   markRoomAsRead,
   jumpToMessage,
+  resolveReplyPreview,
   jumpToLatest,
   reloadCurrentRoomTimeline,
   appendRoomTimelineCache,

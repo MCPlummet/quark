@@ -51,6 +51,7 @@ export type { SearchHitPayload, SearchProgressPayload } from "./rooms.js";
 export {
   getTimeline,
   getEventContext,
+  getEvent,
   paginateForward,
   openRoomTimeline,
   loadOlderTimeline,

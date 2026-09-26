@@ -710,6 +710,17 @@ pub async fn get_event_context(
     crate::matrix::timeline::get_event_context(&client, &room_id, &event_id, context_size.unwrap_or(25)).await
 }
 
+/// A single message by ID, for resolving an out-of-window reply target.
+#[tauri::command]
+pub async fn get_event(
+    state: State<'_, MatrixState>,
+    room_id: String,
+    event_id: String,
+) -> Result<Option<crate::matrix::timeline::TimelineEvent>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::timeline::get_event(&client, &room_id, &event_id).await
+}
+
 #[tauri::command]
 pub async fn paginate_forward(
     state: State<'_, MatrixState>,

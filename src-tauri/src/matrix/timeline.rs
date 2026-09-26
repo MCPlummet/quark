@@ -829,6 +829,7 @@ fn convert_sync_encrypted(
     >,
 ) -> TimelineEvent {
     let timestamp: u64 = ev.origin_server_ts.get().into();
+    let (in_reply_to, thread_root) = extract_encrypted_relations(ev.content.relates_to.as_ref());
     TimelineEvent {
         event_id: ev.event_id.to_string(),
         sender: ev.sender.to_string(),
@@ -838,8 +839,8 @@ fn convert_sync_encrypted(
         msg_type: "m.room.encrypted".to_string(),
         is_edit: false,
         relates_to_event_id: None,
-        in_reply_to: None,
-        thread_root: None,
+        in_reply_to,
+        thread_root,
         media_url: None,
         media_mimetype: None,
         media_width: None,
@@ -1088,15 +1089,48 @@ pub(crate) fn extract_relations<C>(
             }
             Relation::Thread(thread) => {
                 thread_root = Some(thread.event_id.to_string());
-                if let Some(r) = &thread.in_reply_to {
-                    in_reply_to = Some(r.event_id.to_string());
-                }
+                in_reply_to = thread_reply_target(thread);
             }
             _ => {}
         }
     }
 
     (is_edit, relates_to_event_id, in_reply_to, thread_root)
+}
+
+/// The event a threaded message genuinely replies to, if any.
+///
+/// Every threaded event carries an `m.in_reply_to` so clients without thread
+/// support can still show *something*; when `is_falling_back` is set that
+/// pointer is just "the latest event in the thread", not a reply the sender
+/// chose, and must not be surfaced as one.
+fn thread_reply_target(thread: &matrix_sdk::ruma::events::relation::Thread) -> Option<String> {
+    if thread.is_falling_back {
+        return None;
+    }
+    thread.in_reply_to.as_ref().map(|r| r.event_id.to_string())
+}
+
+/// Reply and thread pointers from an event that is still encrypted.
+///
+/// `m.relates_to` travels in the clear on an encrypted event, so a message we
+/// cannot read yet still says what it replies to and which thread it belongs
+/// in. Hardcoding both to `None` rendered an undecryptable reply without its
+/// reply banner and an undecryptable thread reply in the main timeline (#106).
+///
+/// Edits are deliberately not reported: marking an unreadable replacement as an
+/// edit would overwrite the original's body with the UTD placeholder.
+fn extract_encrypted_relations(
+    relates_to: Option<&matrix_sdk::ruma::events::room::encrypted::Relation>,
+) -> (Option<String>, Option<String>) {
+    use matrix_sdk::ruma::events::room::encrypted::Relation as EncRelation;
+    match relates_to {
+        Some(EncRelation::Reply { in_reply_to }) => (Some(in_reply_to.event_id.to_string()), None),
+        Some(EncRelation::Thread(thread)) => {
+            (thread_reply_target(thread), Some(thread.event_id.to_string()))
+        }
+        _ => (None, None),
+    }
 }
 
 /// Send a plain text message to a room, optionally as a reply.
@@ -1473,6 +1507,31 @@ pub async fn get_event_context(
         prev_batch: response.prev_batch_token,
         next_batch: response.next_batch_token,
     })
+}
+
+/// Fetch one displayable event by ID, converted like any timeline event.
+///
+/// Resolves the reply banner of a message whose original is not in the loaded
+/// window — typically because it is older than the history fetched so far
+/// (#106). `Room::event` decrypts where it can, so an encrypted original comes
+/// back readable when its keys are held. Returns `None` for an event that is
+/// not a message (state, a redaction's tombstone, …) rather than an error: the
+/// caller has nothing to show either way, but a missing preview is not a fault.
+pub async fn get_event(
+    client: &Client,
+    room_id: &str,
+    event_id: &str,
+) -> Result<Option<TimelineEvent>, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let event_id = EventId::parse(event_id).map_err(|e| format!("Invalid event ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {} not found", room_id))?;
+    let ev = room
+        .event(&event_id, None)
+        .await
+        .map_err(|e| format!("Failed to fetch event: {e}"))?;
+    Ok(convert_raw_message_like(ev.raw()))
 }
 
 /// Fetch all edit-revision events (m.replace relations) for a given event.
@@ -2382,5 +2441,99 @@ mod tests {
             serde_json::from_value(json).expect("deserialize image event");
         let te = convert_sync_room_message(ev);
         assert_eq!(te.caption, None);
+    }
+
+    // --- Reply pointers (#106) ---
+
+    fn message_with_relation(relates_to: serde_json::Value) -> OriginalSyncRoomMessageEvent {
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$msg:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": { "msgtype": "m.text", "body": "hi", "m.relates_to": relates_to }
+        }))
+        .expect("deserialize message")
+    }
+
+    fn encrypted_with_relation(
+        relates_to: serde_json::Value,
+    ) -> matrix_sdk::ruma::events::OriginalSyncMessageLikeEvent<
+        matrix_sdk::ruma::events::room::encrypted::RoomEncryptedEventContent,
+    > {
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.encrypted",
+            "event_id": "$enc:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "algorithm": "m.megolm.v1.aes-sha2",
+                "ciphertext": "AwgAEnAC",
+                "sender_key": "sender_key",
+                "device_id": "DEVICE",
+                "session_id": "session",
+                "m.relates_to": relates_to
+            }
+        }))
+        .expect("deserialize encrypted event")
+    }
+
+    #[test]
+    fn thread_fallback_pointer_is_not_a_reply() {
+        // Every threaded event carries an m.in_reply_to for thread-unaware
+        // clients; with is_falling_back it is not a reply the sender chose.
+        let te = convert_sync_room_message(message_with_relation(serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$root:example.com",
+            "is_falling_back": true,
+            "m.in_reply_to": { "event_id": "$latest:example.com" }
+        })));
+        assert_eq!(te.thread_root.as_deref(), Some("$root:example.com"));
+        assert_eq!(te.in_reply_to, None);
+    }
+
+    #[test]
+    fn genuine_reply_inside_a_thread_is_kept() {
+        let te = convert_sync_room_message(message_with_relation(serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$root:example.com",
+            "m.in_reply_to": { "event_id": "$quoted:example.com" }
+        })));
+        assert_eq!(te.in_reply_to.as_deref(), Some("$quoted:example.com"));
+    }
+
+    #[test]
+    fn undecryptable_reply_keeps_its_reply_pointer() {
+        // m.relates_to is cleartext on an encrypted event, so an unreadable
+        // reply still knows what it answers and gets its banner.
+        let te = convert_sync_encrypted(encrypted_with_relation(serde_json::json!({
+            "m.in_reply_to": { "event_id": "$parent:example.com" }
+        })));
+        assert_eq!(te.msg_type, "m.room.encrypted");
+        assert_eq!(te.in_reply_to.as_deref(), Some("$parent:example.com"));
+        assert_eq!(te.thread_root, None);
+    }
+
+    #[test]
+    fn undecryptable_thread_reply_stays_in_its_thread() {
+        let te = convert_sync_encrypted(encrypted_with_relation(serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$root:example.com",
+            "is_falling_back": true,
+            "m.in_reply_to": { "event_id": "$latest:example.com" }
+        })));
+        assert_eq!(te.thread_root.as_deref(), Some("$root:example.com"));
+        assert_eq!(te.in_reply_to, None);
+    }
+
+    #[test]
+    fn undecryptable_edit_is_not_reported_as_an_edit() {
+        // Applying it would overwrite the original with the UTD placeholder.
+        let te = convert_sync_encrypted(encrypted_with_relation(serde_json::json!({
+            "rel_type": "m.replace",
+            "event_id": "$orig:example.com"
+        })));
+        assert!(!te.is_edit);
+        assert_eq!(te.relates_to_event_id, None);
     }
 }

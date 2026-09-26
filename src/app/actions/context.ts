@@ -364,6 +364,65 @@ export function _resolveReactionImage(key: string): string | undefined {
   return _emojiImageCache.get(key);
 }
 
+// ── Reply previews ───────────────────────────────────────────────────────────
+
+/**
+ * Previews of reply originals fetched from the server because they were not in
+ * the loaded window, by event ID. Event IDs are globally unique, so this is not
+ * partitioned by room. Undecryptable originals are never cached — their
+ * preview must refresh once keys arrive.
+ */
+export const _replyPreviewCache = new Map<string, ReplyPreviewData>();
+
+/**
+ * Build the reply banner for `parent`. When `edits` (the list `parent` came
+ * from) holds a replacement for it, the latest edit's text wins, so the banner
+ * quotes what the timeline shows rather than the pre-edit words.
+ */
+export function replyPreviewFromEvent(parent: TimelineEvent, edits?: readonly TimelineEvent[]): ReplyPreviewData {
+  let latestEdit: TimelineEvent | undefined;
+  for (const ev of edits ?? []) {
+    if (ev.is_edit && ev.relates_to_event_id === parent.event_id
+        && (!latestEdit || ev.timestamp > latestEdit.timestamp)) {
+      latestEdit = ev;
+    }
+  }
+  // An edit's m.new_content carries no reply fallback. The original does if it
+  // is itself a reply — its body starts with the quote of *its* parent, so
+  // strip it and show the parent's own words, not its grandparent's.
+  const body = latestEdit
+    ? latestEdit.body
+    : parent.in_reply_to
+      ? stripReplyFallback(parent.body, parent.formatted_body ?? undefined).body
+      : parent.body;
+  return {
+    eventId: parent.event_id,
+    senderName: resolveDisplayName(parent.sender),
+    body: body.slice(0, 80),
+  };
+}
+
+/**
+ * The reply banner for a message replying to `parentId`: built from the first
+ * list that holds the original, else a previously fetched preview, else a
+ * `"loading"` placeholder that the Timeline reports so the original gets
+ * fetched (`resolveReplyPreview`).
+ *
+ * Never `undefined`. Returning nothing when the original was not loaded is
+ * what made a reply to an older message render as a plain message (#106) —
+ * the event ID alone is enough to draw the banner and to jump.
+ */
+export function replyPreviewFor(
+  parentId: string,
+  ...lists: (readonly TimelineEvent[] | undefined)[]
+): ReplyPreviewData {
+  for (const list of lists) {
+    const parent = list?.find((ev) => ev.event_id === parentId && !ev.is_edit);
+    if (parent) return replyPreviewFromEvent(parent, list);
+  }
+  return _replyPreviewCache.get(parentId) ?? { eventId: parentId, senderName: "", body: "", state: "loading" };
+}
+
 /** Map a Matrix `msgtype` to the renderer's message kind. */
 function _messageTypeOf(e: TimelineEvent): "text" | "image" | "sticker" | "video" | "file" {
   if (e.msg_type === "m.image") return "image";
@@ -385,23 +444,13 @@ function _messageTypeOf(e: TimelineEvent): "text" | "image" | "sticker" | "video
 export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEvent[], threadRootCounts?: Map<string, number>): MessageData {
   const msgType = _messageTypeOf(e);
 
-  let replyTo: ReplyPreviewData | undefined;
-  if (e.in_reply_to && allEvents) {
-    const parent = allEvents.find((ev) => ev.event_id === e.in_reply_to);
-    if (parent) {
-      // If the parent is itself a reply, its body starts with the quoted
-      // fallback of *its* parent — strip it so the preview shows the parent's
-      // own words, not its grandparent's.
-      const parentBody = parent.in_reply_to
-        ? stripReplyFallback(parent.body, parent.formatted_body ?? undefined).body
-        : parent.body;
-      replyTo = {
-        eventId: parent.event_id,
-        senderName: resolveDisplayName(parent.sender),
-        body: parentBody.slice(0, 80),
-      };
-    }
-  }
+  // Looked up in the page being mapped *and* the whole loaded buffer: a page
+  // from forward/backward pagination rarely contains the original of a reply
+  // that sits near its edge, and looking in the page alone dropped the banner.
+  // Always a preview when the event is a reply — see `replyPreviewFor`.
+  const replyTo: ReplyPreviewData | undefined = e.in_reply_to
+    ? replyPreviewFor(e.in_reply_to, allEvents, AppState.get("currentTimeline"))
+    : undefined;
 
   // Resolve avatar: prefer cached data URL, then mock-injected URL (dev mode)
   const mxcUrl = _memberAvatarMxc.get(e.sender);

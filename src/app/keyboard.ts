@@ -42,6 +42,7 @@ import {
   setupStatusBar,
   editStatus,
   jumpToMessage,
+  resolveReplyPreview,
   jumpToLatest,
   loadTheme,
   configThemeOverridesRc,
@@ -1015,6 +1016,9 @@ export function setupKeyboard(components: AppComponents): void {
 
   // Reply preview jumps to the original when message is not loaded
   timeline.onJumpToMessage((eventId) => void jumpToMessage(eventId));
+
+  // A reply whose original is outside the loaded window fetches it (#106)
+  timeline.onUnresolvedReply((eventId) => resolveReplyPreview(eventId));
 
   // "Jump to latest" button
   timeline.onJumpToLatest(() => void jumpToLatest());
