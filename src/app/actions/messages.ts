@@ -293,6 +293,7 @@ export async function sendMessage(body: string): Promise<void> {
     // register it so the sync echo is ignored (preventing a duplicate).
     const { timeline } = getComponents();
     timeline.confirmMessage(optimisticMsg.id, eventId);
+    promoteReplyTarget(optimisticMsg.id, eventId);
     _ownSentEventIds.add(eventId);
   } catch (err) {
     showError(`Failed to send: ${err instanceof Error ? err.message : String(err)}`);
@@ -306,6 +307,21 @@ export function startReply(eventId: string, senderName: string, snippet: string)
   const { replyPreview } = getComponents();
   AppState.set("replyToEventId", eventId);
   replyPreview.show({ eventId, senderName, snippet });
+}
+
+/**
+ * Follow an optimistic message to its real event ID in the reply target.
+ *
+ * Replying to one of your own messages while it is still sending records its
+ * `optimistic-…` placeholder ID. `confirmMessage` renames the timeline node,
+ * but nothing renamed the reply target, so the reply was later sent with an
+ * ID the server can't resolve and failed (#106). Call after every
+ * `confirmMessage`.
+ */
+export function promoteReplyTarget(optimisticId: string, realEventId: string): void {
+  if (AppState.get("replyToEventId") === optimisticId) {
+    AppState.set("replyToEventId", realEventId);
+  }
 }
 
 /**

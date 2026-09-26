@@ -29,7 +29,7 @@ import {
   _emojiImageCache,
   _shortcodeToMxc,
 } from "./context.js";
-import { cancelReply } from "./messages.js";
+import { cancelReply, promoteReplyTarget } from "./messages.js";
 import { currentAttachmentTarget } from "./media.js";
 
 // ── Emoji picker state ────────────────────────────────────────────────────────
@@ -143,6 +143,7 @@ export function openEmojiPicker(initialTab: "emoji" | "sticker" = "emoji"): void
         // there was one to promote.
         if (!threadRootEventId) {
           timeline.confirmMessage(optimisticId, eventId);
+          promoteReplyTarget(optimisticId, eventId);
           _ownSentEventIds.add(eventId);
         }
       } catch (err) {
