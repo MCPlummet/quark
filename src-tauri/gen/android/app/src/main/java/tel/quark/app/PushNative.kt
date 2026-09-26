@@ -51,6 +51,7 @@ object PushNative {
    */
   fun handle(context: Context, payload: String): PushResult {
     if (!libraryLoaded) return NOTHING
+    install(context)
 
     // Rust resolves the store, the session and notifications.toml under this
     // one path: Tauri's app_data_dir() and app_config_dir() both resolve to
@@ -77,7 +78,25 @@ object PushNative {
     }
   }
 
-  private fun parseSpecs(array: JSONArray?): List<PushSpec> {
+  /**
+   * Hand Rust what it needs to post notifications without Tauri's plugin
+   * bridge: the JVM, the application context, and [PushNotifier]'s class —
+   * resolved here, on a Java thread, because a native thread's `FindClass`
+   * sees only the system class loader and would never find an app class.
+   *
+   * Called from MainActivity before Tauri starts, and from [handle] so a
+   * process a push woke has it too. Idempotent on the Rust side.
+   */
+  fun install(context: Context) {
+    if (!libraryLoaded) return
+    try {
+      nativeInstall(context.applicationContext)
+    } catch (e: Throwable) {
+      Log.e(TAG, "Could not install the native notifier", e)
+    }
+  }
+
+  internal fun parseSpecs(array: JSONArray?): List<PushSpec> {
     if (array == null) return emptyList()
     val specs = ArrayList<PushSpec>(array.length())
     for (i in 0 until array.length()) {
@@ -177,6 +196,8 @@ object PushNative {
   }
 
   private external fun nativeHandlePush(payload: String, dataDir: String): String?
+
+  private external fun nativeInstall(context: Context)
 
   private external fun nativeOnNewEndpoint(endpoint: String, dataDir: String): String?
 

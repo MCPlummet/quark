@@ -289,8 +289,32 @@ identical to the warm path — same mutes, same highlight decision, no second
 decision matrix to drift — and the sync sweeps up everything else that arrived
 in the same window. The rendered `NotificationSpec`s serialise back to Kotlin,
 where `PushNotifier` posts them; matching the notification plugin's ids,
-channels, group keys and *intent extras* is what makes a cold notification
-behave like a warm one when tapped.
+channels, group keys and *intent extras* is what makes a tap on one route
+through the plugin's `actionPerformed` event and MainActivity's cold-start
+mirror alike.
+
+**Warm notifications on Android post through `PushNotifier` too**, called
+over JNI (`push_jni::post_notifications`) rather than through
+tauri-plugin-notification. `MainActivity.onCreate` hands Rust the JVM, the
+application context and the `PushNotifier` class once (`nativeInstall`) —
+the class resolved on a Java thread, since `FindClass` from a native thread
+sees only the system class loader. The plugin could not stay, for two
+reasons. Every plugin call dispatches onto the Activity, and wry `expect`s
+one: a process that outlived its Activity (kept by a foreground service, or
+just not yet reclaimed) panicked on its first notification, inside the sync
+loop that raised it. And its tap intents use `FLAG_CANCEL_CURRENT`, which
+kills the old PendingIntent before the replacement row is posted — the room
+summary is re-posted under one id per message, so a tap in that window hit a
+dead intent and closed the shade on nothing (#87). One notifier also means
+one set of request codes, flags and summary rules instead of two that
+drifted. Dismissal (`notify::cancel_room`) goes the same way. The plugin
+remains only as a fallback for a notifier that failed to install, and for
+iOS. The summary alerts with `GROUP_ALERT_CHILDREN` and only once, so its
+per-message re-post does not sound on top of the message's own alert.
+
+The foreground-service placeholder ("Checking for new messages") carries a
+launch intent: it sits in the shade beside the real row on every push, and
+without one a tap on it closed the shade and did nothing.
 
 Three guards matter here, all of them against work this app has previously
 overwhelmed its own homeserver with:

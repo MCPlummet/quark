@@ -233,6 +233,30 @@ pub fn deliver(app: &tauri::AppHandle, spec: &NotificationSpec) {
 fn deliver_mobile(app: &tauri::AppHandle, spec: &NotificationSpec) {
     use tauri::Manager;
 
+    // Android posts through `PushNotifier`, the cold path's own notifier,
+    // called over JNI rather than through the plugin bridge. Two reasons, both
+    // about what the plugin cannot do:
+    //
+    // - Its calls dispatch onto the Activity, and wry panics when there is
+    //   none. A process outliving its Activity is ordinary on Android (a
+    //   foreground service keeps it, or the OS has simply not reclaimed it), and
+    //   the panic lands in the sync loop that called us — silencing every
+    //   notification after it (#90).
+    // - Its tap intents use `FLAG_CANCEL_CURRENT`, which kills the previous
+    //   PendingIntent before the replacement row is posted. The per-room summary
+    //   is re-posted under one id for every message, so a tap in that window
+    //   hits a cancelled intent and the shade closes on nothing (#87).
+    //
+    // `PushNotifier` counts the room's live rows itself, so the summary logic
+    // below is the plugin's alone. The plugin stays as the fallback for a
+    // notifier that was never installed, which Tauri starting in MainActivity
+    // makes all but impossible.
+    #[cfg(target_os = "android")]
+    match crate::push_jni::post_notifications(std::slice::from_ref(spec)) {
+        Ok(()) => return,
+        Err(e) => tracing::warn!("Native notifier unavailable ({e}); posting through the plugin"),
+    }
+
     let registry = app.state::<NotificationRegistry>();
     let result = app
         .notification()
@@ -300,7 +324,13 @@ pub fn cancel_room(app: &tauri::AppHandle, room_id: &str) {
     #[cfg(target_os = "android")]
     {
         let _ = ids;
-        crate::unifiedpush::cancel_room_notifications(app, room_id);
+        // Over JNI for the reason `deliver_mobile` gives: this runs from the
+        // receipt handler inside the sync loop, where a plugin call with no
+        // Activity alive would panic it.
+        if let Err(e) = crate::push_jni::cancel_room(room_id) {
+            tracing::warn!("Native notifier unavailable ({e}); clearing through the plugin");
+            crate::unifiedpush::cancel_room_notifications(app, room_id);
+        }
     }
     #[cfg(target_os = "ios")]
     {
