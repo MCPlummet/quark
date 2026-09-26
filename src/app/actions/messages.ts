@@ -19,6 +19,7 @@ import {
   _memberAvatarMxc,
   _avatarDataUrl,
   prepareOutgoingBody,
+  replyPreviewFor,
   _downloadInlineEmoji,
 } from "./context.js";
 import { sendThreadReply } from "./threads.js";
@@ -49,14 +50,14 @@ export async function sendMessage(body: string): Promise<void> {
   const composeBoxEl = input.getComposeBoxElement();
   const composeRect = composeBoxEl.getBoundingClientRect();
 
-  let replyTo: ReplyPreviewData | undefined;
-  if (replyToEventId) {
-    const events = AppState.get("currentTimeline");
-    const parent = events.find((e) => e.event_id === replyToEventId);
-    if (parent) {
-      replyTo = { eventId: parent.event_id, senderName: parent.sender, body: parent.body.slice(0, 80) };
-    }
-  }
+  // Same builder as the mapper, so the optimistic bubble shows the banner the
+  // landed message will: display name rather than MXID, edits applied, the
+  // parent's own reply quote stripped — and a banner at all when the original
+  // is outside the loaded window (#106). The sync echo of our own send is
+  // deduplicated against this bubble, so whatever it shows here is final.
+  const replyTo: ReplyPreviewData | undefined = replyToEventId
+    ? replyPreviewFor(replyToEventId, AppState.get("currentTimeline"))
+    : undefined;
 
   const ownUserId = AppState.get("ownUserId");
   const ownDisplayName = AppState.get("ownDisplayName");

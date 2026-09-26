@@ -1768,6 +1768,14 @@ body.quark-mobile .room-list__header-btn {
   white-space: nowrap;
 }
 
+/* Original outside the loaded window: still fetching, or nothing to show.
+ * The banner stays clickable either way — the event ID is enough to jump. */
+.reply-preview--loading .reply-preview__body,
+.reply-preview--unavailable .reply-preview__body {
+  font-style: italic;
+  color: color-mix(in srgb, var(--fg) 45%, transparent);
+}
+
 /* ── Message highlight (jump-to animation) ───────────────────────────────── */
 
 @keyframes message-highlight-flash {

@@ -59,6 +59,15 @@ export async function getEventContext(
 }
 
 /**
+ * Fetch a single message by event ID, or null when the event exists but is
+ * not a displayable message. Used to resolve a reply preview whose original
+ * is outside the loaded window. Matches the Rust `get_event` command.
+ */
+export async function getEvent(roomId: string, eventId: string): Promise<TimelineEvent | null> {
+  return invoke<TimelineEvent | null>("get_event", { roomId, eventId });
+}
+
+/**
  * Fetch newer events using a forward-pagination token from a prior
  * `get_event_context` or `paginate_forward` response.
  * Returns events in chronological order. `next_batch === null` means the live

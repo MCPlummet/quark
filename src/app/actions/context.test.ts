@@ -18,6 +18,7 @@ import {
   _memberDisplayName,
   _dmUserByRoom,
   _ownSentEventIds,
+  _replyPreviewCache,
 } from "./context.js";
 import { AppState } from "../state.js";
 import type { TimelineEvent, RoomInfo } from "../../ipc/types.js";
@@ -64,7 +65,7 @@ function makeRoom(over: Partial<RoomInfo> = {}): RoomInfo {
 }
 
 beforeEach(() => {
-  for (const m of [_emojiImageCache, _shortcodeToMxc, _memberDisplayName, _dmUserByRoom]) m.clear();
+  for (const m of [_emojiImageCache, _shortcodeToMxc, _memberDisplayName, _dmUserByRoom, _replyPreviewCache]) m.clear();
   _ownSentEventIds.clear();
   AppState.patch({ ownUserId: null });
 });
@@ -395,6 +396,46 @@ describe("timelineEventToMessage", () => {
       senderName: "Bob",
       body: "second message",
     });
+  });
+
+  // #106: a reply whose original was not in the mapped list rendered with no
+  // banner at all — the "replied-to message is old" symptom.
+  it("still gives a reply a (loading) preview when its original is not loaded", () => {
+    const reply = makeEvent({ event_id: "$reply", in_reply_to: "$old" });
+    expect(timelineEventToMessage(reply, [reply]).replyTo).toEqual({
+      eventId: "$old",
+      senderName: "",
+      body: "",
+      state: "loading",
+    });
+  });
+
+  it("finds the original in the loaded buffer when the page lacks it", () => {
+    // Forward pagination maps one page at a time; the original of a reply at
+    // the page's edge sits in the part of the buffer already loaded.
+    const parent = makeEvent({ event_id: "$parent", sender: "@alice:x", body: "earlier" });
+    const reply = makeEvent({ event_id: "$reply", in_reply_to: "$parent" });
+    AppState.set("currentTimeline", [parent, reply]);
+    try {
+      expect(timelineEventToMessage(reply, [reply]).replyTo?.body).toBe("earlier");
+    } finally {
+      AppState.set("currentTimeline", []);
+    }
+  });
+
+  it("uses a previously fetched original", () => {
+    _replyPreviewCache.set("$fetched", { eventId: "$fetched", senderName: "Alice", body: "from the server" });
+    const reply = makeEvent({ event_id: "$reply", in_reply_to: "$fetched" });
+    expect(timelineEventToMessage(reply, [reply]).replyTo?.body).toBe("from the server");
+  });
+
+  it("quotes the edited text of an edited original", () => {
+    const parent = makeEvent({ event_id: "$parent", body: "tpyo" });
+    const edit = makeEvent({
+      event_id: "$edit", body: "typo", is_edit: true, relates_to_event_id: "$parent", timestamp: 2000,
+    });
+    const reply = makeEvent({ event_id: "$reply", in_reply_to: "$parent", timestamp: 3000 });
+    expect(timelineEventToMessage(reply, [parent, edit, reply]).replyTo?.body).toBe("typo");
   });
 
   it("maps reactions through to the UI shape", () => {

@@ -286,6 +286,52 @@ describe("Timeline", () => {
       expect(onJump).toHaveBeenCalledWith("$gone");
     });
 
+    it("renders a loading preview and asks for its original once", () => {
+      const onUnresolved = vi.fn();
+      timeline.onUnresolvedReply(onUnresolved);
+      const pending = { eventId: "$old", senderName: "", body: "", state: "loading" as const };
+      timeline.setMessages([
+        makeMsg({ id: "$r1", replyTo: pending }),
+        makeMsg({ id: "$r2", senderName: "Bob", replyTo: pending }),
+      ]);
+      const previews = timeline.getElement().querySelectorAll(".reply-preview--loading");
+      expect(previews).toHaveLength(2);
+      expect(onUnresolved).toHaveBeenCalledTimes(1);
+      expect(onUnresolved).toHaveBeenCalledWith("$old");
+    });
+
+    it("asks for unresolved originals on every entry point", () => {
+      const onUnresolved = vi.fn();
+      timeline.onUnresolvedReply(onUnresolved);
+      const pending = (id: string) => ({ eventId: id, senderName: "", body: "", state: "loading" as const });
+      timeline.setMessages([makeMsg({ id: "$a" })]);
+      timeline.appendMessage(makeMsg({ id: "$b", replyTo: pending("$x1") }));
+      timeline.prependMessages([makeMsg({ id: "$c", replyTo: pending("$x2") })]);
+      timeline.appendMessages([makeMsg({ id: "$d", replyTo: pending("$x3") })]);
+      expect(onUnresolved.mock.calls.map((c) => c[0])).toEqual(["$x1", "$x2", "$x3"]);
+    });
+
+    it("does not ask for resolved previews", () => {
+      const onUnresolved = vi.fn();
+      timeline.onUnresolvedReply(onUnresolved);
+      timeline.setMessages([
+        makeMsg({ replyTo: { eventId: "$o", senderName: "A", body: "hi" } }),
+      ]);
+      expect(onUnresolved).not.toHaveBeenCalled();
+    });
+
+    it("updateReplyPreview swaps the banner in the DOM and the buffer", () => {
+      timeline.setMessages([
+        makeMsg({ id: "$r", replyTo: { eventId: "$old", senderName: "", body: "", state: "loading" } }),
+      ]);
+      timeline.updateReplyPreview("$old", { eventId: "$old", senderName: "Carol", body: "found it" });
+      const reply = timeline.getElement().querySelector(".reply-preview")!;
+      expect(reply.classList.contains("reply-preview--loading")).toBe(false);
+      expect(reply.querySelector(".reply-preview__body")?.textContent).toBe("found it");
+      expect(reply.querySelector(".reply-preview__sender")?.textContent).toBe("Carol");
+      expect(timeline.getElement().querySelectorAll(".reply-preview")).toHaveLength(1);
+    });
+
     it("does not render reply preview when replyTo is absent", () => {
       timeline.setMessages([makeMsg()]);
 
