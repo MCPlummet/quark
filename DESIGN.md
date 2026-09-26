@@ -627,7 +627,7 @@ use one.
 
 | Surface | Guarded element | Let through |
 | --- | --- | --- |
-| Main composer | `.input-bar-wrap` (`Input`) | `.input-bar__field` — it scrolls past six lines |
+| Main composer | `.input-bar-wrap` (`Input`) | `.input-bar__field` — it scrolls past six lines — and `.attach-tray__items`, the staged-attachments row, which scrolls sideways |
 | Autocomplete popover | `.shortcode-preview` (`ShortcodePreview` / `MentionPreview`, mounted on `.content-area`, so outside the wrap) | itself, but only while the list actually overflows |
 | Thread overlay compose row | `.thread-view__input-bar` (`ThreadView` builds its own row; it does not use `Input`) | nothing — the reply field is one line |
 
@@ -1156,29 +1156,45 @@ alongside `openExternalUrl` opened every link twice.
 ### Media Handling
 - Authenticated media download via `/_matrix/client/v1/media/download/`
 - Inline image previews in timeline (configurable max dimensions)
-- **Image attachments & captions (MSC2530):** pasting an image — or picking one
-  via the attach button — stages it in a preview above the compose bar rather
-  than sending immediately. Enter (or the ➤ / preview Send button) sends it;
-  any text typed first becomes the caption, sent as a single `m.image` with
-  `body` = caption and `filename` = original name (no caption ⇒ `body` =
-  filename, `filename` omitted). The read path surfaces `filename` alongside the
+- **Staged attachments & captions (MSC2530):** every attachment — picked via
+  the attach button, pasted or dropped; image, video or any other file — waits
+  in a tray above the compose bar rather than sending immediately
+  (`src/ui/AttachmentTray.ts`, owned by `Input`). Images show as thumbnails,
+  everything else as a one-line chip (a glyph, the filename and a human size),
+  each with its own `×`. Adding more files appends them, in order. The tray's
+  row scrolls sideways rather than wrapping, so a long batch never pushes the
+  compose bar off a phone screen, and mobile uses the same tray. Nothing is
+  sent until the composer is submitted (Enter, the ➤ button or the tray's
+  Send button). Then every staged attachment goes out in order, sequentially,
+  as `m.image`, `m.video` or `m.file` by type (`attachmentKind`). Any typed
+  text becomes the **first** attachment's caption, whatever its type — MSC2530
+  allows a caption on any media message, and `send_file` / `send_video` take
+  one just as `send_pasted_image` does. A captioned upload sends
+  `body` = caption and `filename` = original name; with no caption, `body` =
+  filename and `filename` is omitted. The read path extracts captions from
+  `m.image`, `m.video`, `m.file` and `m.audio` alike, and every timeline
+  surface draws one beneath the media. It surfaces `filename` alongside the
   caption rather than making `body` serve both: with a caption present `body`
   *is* the caption, so using it as alt text announced a captioned image twice
   (once as alt, once as the caption drawn beneath it) and labelled a captioned
   video with the caption instead of the file it plays. Alt text, the video
   label and the download name all take the filename, falling back to the
-  reply-fallback-stripped body for uploads that carry none. The first `Esc` discards the staged image
-  (modal-close semantics — mode, reply, and edit state untouched); staging a
-  second image replaces the first, keeping the typed caption. An armed reply
-  attaches to the image send and clears on success; a failed send restores the
-  staged image and caption to the composer. Committing an inline edit takes
-  precedence — the staged image stays pending. Staged images persist across
-  room switches like text drafts and send to the room current at send time.
-  Videos and non-image files still upload immediately. A caption goes through
-  the same emoji expansion as a typed message — Unicode shortcodes become
-  glyphs in `body`, custom (MSC2545) ones become `<img data-mx-emoticon>` in
-  `formatted_body` with the shortcode left in `body` as the fallback — and the
-  read path renders `formatted_body` where the event carries one.
+  reply-fallback-stripped body for uploads that carry none. The first `Esc`
+  (or the tray's Cancel) clears the whole tray (modal-close semantics — mode,
+  reply, and edit state untouched). The room, open thread and armed reply are
+  read once, at submit, so the whole batch goes where it was sent even if the
+  user moves on while it uploads. Every attachment follows the thread; an
+  armed reply rides on the first attachment only and clears once that one is
+  sent. A failed (or cancelled) attachment does not stop the rest. The failures go back to the
+  front of the tray in order, and if the captioned first attachment is among
+  them, so is the caption as typed. Committing an inline edit takes precedence
+  — the tray stays pending. Staged attachments persist across room switches
+  like text drafts and send to the room current at submit. A caption goes
+  through the same emoji expansion as a typed message — Unicode shortcodes
+  become glyphs in `body`, custom (MSC2545) ones become
+  `<img data-mx-emoticon>` in `formatted_body` with the shortcode left in
+  `body` as the fallback — and the read path renders `formatted_body` where
+  the event carries one.
 - **Attachments follow the open thread.** An image, file, video, sticker or GIF
   sent with a thread open carries that thread's relation, exactly as a text
   reply does. A reply armed *inside* a thread produces one threaded reply
@@ -1196,14 +1212,12 @@ alongside `openExternalUrl` opened every link twice.
   consumed by the attachment and cleared, as it is for a text message.
 - **One attachment route.** The attach button (which accepts several files),
   a paste and a drop onto the window all hand their files to one routine,
-  `attachFiles` (`src/app/actions/media.ts`). The first image stages in the
-  preview and switches to Insert mode for the caption. Every other file sends
-  at once, in order: further images as uncaptioned `m.image` (the composer
-  stages only one), videos as `m.video`, everything else as `m.file`. A file
-  the webview could not type (`""` or `application/octet-stream`) is sniffed
-  by its leading bytes (PNG, JPEG, GIF, WebP, BMP, TIFF, ICO, AVIF, HEIC). An
-  image in a format WebKitGTK does not name therefore still stages as an image
-  instead of uploading as a nameless file.
+  `attachFiles` (`src/app/actions/media.ts`). It stages every file in the tray,
+  in order, and switches to Insert mode for the caption. A file the webview
+  could not type (`""` or `application/octet-stream`) is sniffed by its leading
+  bytes (PNG, JPEG, GIF, WebP, BMP, TIFF, ICO, AVIF, HEIC). An image in a format
+  WebKitGTK does not name therefore still stages and sends as an image instead
+  of uploading as a nameless file.
 - **Pasting.** Every file on the clipboard pastes into the composer, not just
   images and not just the first. A clipboard file the engine hands back
   untyped keeps its clipboard target's type. Where the webview exposes a pasted
@@ -1211,7 +1225,7 @@ alongside `openExternalUrl` opened every link twice.
   paste has already run by the time the image arrives. The text it inserted is
   taken back out only when it reads as the image's stand-in (a lone URL, path
   or image filename). Prose that merely shares the clipboard with an image
-  stays, and becomes the caption. The async Clipboard API is spec-limited to
+  stays, and becomes the first attachment's caption. The async Clipboard API is spec-limited to
   `image/png`, so it cannot recover other formats.
 - **Pasting files copied in a file manager.** Copying files in Dolphin or
   Nautilus puts a list of `file://` URIs on the clipboard (`text/uri-list`, and

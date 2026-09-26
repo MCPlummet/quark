@@ -26,6 +26,7 @@ import {
   type AttachmentProgressPayload,
 } from "../../ipc/media.js";
 import type { AttachmentProgressHandle } from "../../ui/AttachmentProgress.js";
+import { attachmentKind, type StagedAttachment } from "../../ui/AttachmentTray.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
@@ -95,9 +96,9 @@ function readBlobAsBase64(blob: Blob, onProgress?: (loaded: number, total: numbe
       // it can throw in its own right. Either way `onabort` never ran, while
       // `onload`/`onerror` bail out on `cancelled` — leaving this promise
       // pending forever. `runAttachment` then never returned: the row stayed on
-      // screen for good, the blob stayed pinned, and `sendPendingImage` never
-      // reached the `restore()` that puts a cancelled image back in the
-      // composer, so the staged image was simply lost.
+      // screen for good, the blob stayed pinned, and the send never reached
+      // the restore that puts a cancelled attachment back in the composer's
+      // tray, so the staged attachment was simply lost.
       cancel = () => {
         if (cancelled) return;
         cancelled = true;
@@ -248,8 +249,8 @@ function paintSent(roomId: string, sent: SentMessage): void {
  * Where an attachment is going: the room, plus whatever the composer currently
  * has armed.
  *
- * Derived in one place because four entry points need it — the staged image, a
- * picked file, a pasted file and a GIF — and the media path read none of it
+ * Derived in one place because every media send needs it — the staged
+ * attachments and a GIF — and the media path read none of it
  * before #78. `messages.ts` had routed text to the open thread since threads
  * landed; media simply never asked, so an image sent with a thread open
  * uploaded fine, reported success, and appeared in the main timeline.
@@ -334,32 +335,42 @@ function imageExtension(mimeType: string): string {
 }
 
 /**
- * Send one file as the right event type: video as `m.video` so it renders as a
- * playable embed, everything else as `m.file`.
+ * Send one attachment as the event its type calls for — `m.image`, `m.video`
+ * or `m.file` ({@link attachmentKind}) — behind its progress row, with an
+ * optional MSC2530 caption. Returns true when the event was sent.
  *
- * The routing lives here rather than at each entry point because the picker and
- * the paste handler make the same decision, and only one of them used to make
- * it at all (#83).
+ * The routing lives here rather than at each entry point because the picker,
+ * a paste and a drop all make the same decision, and only one of them used to
+ * make it at all (#83).
  */
-export async function sendAttachment(
-  file: Blob,
-  filename: string,
+async function sendOne(
+  item: StagedAttachment,
   target: MessageTarget & { roomId: string },
+  caption: PreparedCaption,
 ): Promise<boolean> {
-  const { roomId, replyToEventId, threadRootEventId } = target;
-  const isVideo = file.type.startsWith("video/");
+  const { file } = item;
+  const kind = attachmentKind(file);
+  // A clipboard file can arrive without a name; an empty filename would
+  // upload as an attachment called nothing.
+  const name =
+    item.filename ||
+    (kind === "image"
+      ? `pasted-image-${Date.now()}.${imageExtension(file.type)}`
+      : `attachment-${Date.now()}`);
 
-  const sent = await runAttachment(file, filename, roomId, async (dataBase64, uploadId) => {
+  return runAttachment(file, name, target.roomId, async (dataBase64, uploadId) => {
     const send = {
-      roomId,
+      roomId: target.roomId,
       dataBase64,
       mimeType: uploadMimeType(file),
-      filename,
-      replyToEventId,
-      threadRootEventId,
+      filename: name,
+      replyToEventId: target.replyToEventId,
+      threadRootEventId: target.threadRootEventId,
       uploadId,
+      ...caption,
     };
-    if (isVideo) {
+    if (kind === "image") return sendPastedImage(send);
+    if (kind === "video") {
       // Probe dimensions/duration up front so the timeline can reserve the
       // right aspect ratio before the video is downloaded.
       const meta = await probeVideoMetadata(file);
@@ -373,55 +384,39 @@ export async function sendAttachment(
     }
     return sendFile({ ...send, fileSize: file.size });
   });
-
-  // Consuming the armed reply means disarming it. Before these paths carried
-  // the reply at all, leaving the banner up was merely untidy; now the
-  // attachment really is a reply, so a banner left standing makes every message
-  // after it one too.
-  if (sent && replyToEventId) cancelReply();
-  return sent;
 }
 
 /**
- * Send a staged image (pasted or picked) as an m.image event, with an optional
- * MSC2530 caption. The caption goes out through the same emoji expansion as a
- * typed message (#84) — it is composed in the same field, with the same
- * autocomplete popup, so `:party:` has to mean the same thing in both.
+ * Send what the composer's tray held when it was submitted, in the order it
+ * was staged. The typed text is the first attachment's MSC2530 caption,
+ * through the same emoji expansion as a typed message (#84) — it is composed
+ * in the same field, with the same autocomplete popup, so `:party:` has to
+ * mean the same thing in both. Captions apply to any media type.
  *
- * A reply or an open thread routes the image the same way it routes text (#78).
- * On failure the staged image and the caption *as typed* are restored to the
- * composer, so nothing the user prepared is lost and the shortcode they wrote
- * is the shortcode they get back.
+ * The room, open thread and armed reply are read once, at submit, so the
+ * whole batch goes where the user sent it even if they move on while it
+ * uploads. Every attachment follows the thread (#78); an armed reply rides on
+ * the first only — one message answers, the rest follow it — and is disarmed
+ * once that one is sent. The sends are sequential so the batch arrives in the
+ * order it was staged.
+ *
+ * Whatever fails (or is cancelled while being read) goes back to the front of
+ * the tray, and if the captioned one is among it, so does the caption *as
+ * typed* — nothing the user prepared is lost, and the shortcode they wrote is
+ * the shortcode they get back.
  */
-export async function sendPendingImage(
-  blob: Blob,
-  filename: string | null,
+export async function sendStagedAttachments(
+  items: readonly StagedAttachment[],
   caption?: string,
 ): Promise<void> {
-  await sendImage(blob, filename, caption, { restoreOnFailure: true });
-}
-
-/**
- * Send an image that was never staged: the second and later images of a
- * multi-file drop or paste. The composer holds one staged image, so these go
- * straight out, uncaptioned; a failure stays on its progress row rather than
- * being "restored" over the image that *is* staged.
- */
-async function sendImageNow(file: File): Promise<void> {
-  await sendImage(file, file.name || null, undefined, { restoreOnFailure: false });
-}
-
-async function sendImage(
-  blob: Blob,
-  filename: string | null,
-  caption: string | undefined,
-  opts: { restoreOnFailure: boolean },
-): Promise<void> {
-  const target = currentAttachmentTarget();
-  if (!target) return;
-
-  const name = filename ?? `pasted-image-${Date.now()}.${imageExtension(blob.type)}`;
+  if (items.length === 0) return;
   const raw = caption?.trim() || undefined;
+  const target = currentAttachmentTarget();
+  if (!target) {
+    restoreStaged(items, raw);
+    return;
+  }
+
   const prepared: PreparedCaption = {};
   if (raw) {
     const { body, formattedBody } = prepareOutgoingBody(raw);
@@ -429,49 +424,46 @@ async function sendImage(
     prepared.formattedCaption = formattedBody;
   }
 
-  const restore = () => {
-    const { input } = getComponents();
-    input.showImagePreview(blob, filename ?? undefined);
-    // Don't clobber anything typed since the send started.
-    if (raw && input.getValue().trim().length === 0) input.setValue(raw);
-  };
-
-  const sent = await runAttachment(blob, name, target.roomId, (dataBase64, uploadId) =>
-    sendPastedImage({
-      roomId: target.roomId,
-      dataBase64,
-      mimeType: uploadMimeType(blob),
-      filename: name,
-      replyToEventId: target.replyToEventId,
-      threadRootEventId: target.threadRootEventId,
-      uploadId,
-      ...prepared,
-    }),
-  );
-
-  if (sent) {
-    if (target.replyToEventId) cancelReply();
-  } else if (opts.restoreOnFailure) {
-    restore();
+  const failed: StagedAttachment[] = [];
+  let captionLost = false;
+  for (const [i, item] of items.entries()) {
+    const first = i === 0;
+    const sent = await sendOne(
+      item,
+      first ? target : { ...target, replyToEventId: undefined },
+      first ? prepared : {},
+    );
+    if (sent) {
+      // Consuming the armed reply means disarming it: the attachment really
+      // is a reply, so a banner left standing makes every message after it
+      // one too.
+      if (first && target.replyToEventId) cancelReply();
+    } else {
+      failed.push(item);
+      if (first) captionLost = true;
+    }
   }
+  if (failed.length > 0) restoreStaged(failed, captionLost ? raw : undefined);
+}
+
+/** Put unsent attachments, and the caption that went with them, back in the composer. */
+function restoreStaged(items: readonly StagedAttachment[], caption: string | undefined): void {
+  const { input } = getComponents();
+  input.restoreStagedAttachments(items);
+  // Don't clobber anything typed since the send started.
+  if (caption && input.getValue().trim().length === 0) input.setValue(caption);
 }
 
 /**
- * Attach files from any entry point — the picker, a paste, a drop — with one
- * routing rule (#83):
- *
- * - The first image stages in the composer preview, where Enter sends it and
- *   the typed text becomes its caption. `onStaged` runs when that happens, so
- *   the caller can put the user where a caption is typed.
- * - Every other file sends at once, in order: images as `m.image` (the
- *   composer only has room to stage one), videos as `m.video`, the rest as
- *   `m.file` — see {@link sendAttachment}.
+ * Attach files from any entry point — the picker, a paste, a drop — by
+ * staging each one in the composer's tray, in order. Nothing is sent until the
+ * composer is submitted ({@link sendStagedAttachments}); `onStaged` runs once
+ * the files are in the tray, so the caller can put the user where a caption is
+ * typed.
  *
  * A file the webview could not type is sniffed first, so an image in a format
- * WebKitGTK does not name still stages as an image rather than uploading as a
- * nameless file.
- *
- * Resolves once every immediate send has settled.
+ * WebKitGTK does not name still stages (and sends) as an image rather than as
+ * a nameless file.
  */
 export async function attachFiles(
   files: readonly File[],
@@ -479,24 +471,9 @@ export async function attachFiles(
 ): Promise<void> {
   if (files.length === 0) return;
   const typed = await Promise.all(files.map(withSniffedType));
-
-  const rest: File[] = [];
-  let staged = false;
-  for (const file of typed) {
-    if (!staged && isImage(file)) {
-      getComponents().input.showImagePreview(file, file.name || undefined);
-      staged = true;
-      opts.onStaged?.();
-    } else {
-      rest.push(file);
-    }
-  }
-
-  // Sequential, so a batch arrives in the order it was dropped.
-  for (const file of rest) {
-    if (isImage(file)) await sendImageNow(file);
-    else await handleFilePick(file);
-  }
+  const { input } = getComponents();
+  for (const file of typed) input.stageAttachment(file, file.name || null);
+  opts.onStaged?.();
 }
 
 /**
@@ -514,23 +491,6 @@ export async function readCopiedFiles(): Promise<{ files: File[]; listed: boolea
     console.warn("[paste] reading copied files failed:", err);
     return { files: [], listed: false };
   }
-}
-
-function isImage(file: Blob): boolean {
-  return file.type.startsWith("image/");
-}
-
-/**
- * Send one non-image file straight away through {@link sendAttachment}.
- * (Images stage in the composer preview instead — see {@link attachFiles}.)
- *
- * A clipboard file can arrive without a name; an empty filename would upload
- * as an attachment called nothing.
- */
-export async function handleFilePick(file: File): Promise<void> {
-  const target = currentAttachmentTarget();
-  if (!target) return;
-  await sendAttachment(file, file.name || `attachment-${Date.now()}`, target);
 }
 
 /**

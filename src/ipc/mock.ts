@@ -454,19 +454,27 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     }
     case "send_file": {
       const filename = (args?.filename as string) ?? "file";
+      const caption = (args?.caption as string | null) ?? null;
       return mockSent({
-        ...mockEvent("@you:matrix.org", `[File: ${filename}]`, 0),
+        ...mockEvent("@you:matrix.org", caption ?? `[File: ${filename}]`, 0),
         msg_type: "m.file",
         media_url: "",
         media_mimetype: (args?.mimeType as string) ?? "application/octet-stream",
+        filename: caption ? filename : null,
+        caption,
+        caption_formatted: (args?.formattedCaption as string | null) ?? null,
         ...mockRelation(args),
       } as TimelineEvent);
     }
     case "send_video": {
       const filename = (args?.filename as string) ?? "video.mp4";
+      const caption = (args?.caption as string | null) ?? null;
       return mockSent({
-        ...mockEvent("@you:matrix.org", `[Video: ${filename}]`, 0),
+        ...mockEvent("@you:matrix.org", caption ?? `[Video: ${filename}]`, 0),
         msg_type: "m.video",
+        filename: caption ? filename : null,
+        caption,
+        caption_formatted: (args?.formattedCaption as string | null) ?? null,
         media_url: "",
         media_mimetype: (args?.mimeType as string) ?? "video/mp4",
         media_width: (args?.width as number) ?? null,

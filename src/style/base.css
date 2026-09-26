@@ -3037,32 +3037,129 @@ body.quark-mobile .input-bar__mode--hidden {
   30% { opacity: 1; transform: scale(1.3); }
 }
 
-/* ── Image paste preview ─────────────────────────────────────────────────── */
+/* ── Staged attachments ──────────────────────────────────────────────────────
+ * The tray above the compose bar where picked, pasted and dropped files wait
+ * until the composer is submitted. Images show as thumbnails, everything else
+ * as a one-line chip (glyph, name, size); each carries its own × control. The
+ * row scrolls sideways rather than wrapping, so a long batch never pushes the
+ * compose bar off a phone's screen. */
 
-.paste-preview {
+.attach-tray {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 12px 8px 52px;
   background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
   border-top: var(--border-width) solid var(--border-color);
   flex-shrink: 0;
+  min-width: 0;
 }
 
-.paste-preview__img {
+.attach-tray__items {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 0 0 2px;
+  list-style: none;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.attach-tray__item {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 3px;
+  font-size: calc(var(--font-size) - 1px);
+  color: var(--fg);
+}
+
+.attach-tray__item--image {
+  padding: 0;
+  overflow: hidden;
+}
+
+.attach-tray__thumb {
+  display: block;
   max-width: 120px;
   max-height: 80px;
   object-fit: contain;
-  border-radius: 3px;
 }
 
-.paste-preview__label {
+.attach-tray__item--file,
+.attach-tray__item--video {
+  max-width: 260px;
+  padding: 3px 4px 3px 8px;
+  white-space: nowrap;
+}
+
+.attach-tray__glyph {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.attach-tray__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.attach-tray__size {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--fg) 55%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.attach-tray__remove {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.attach-tray__remove:hover,
+.attach-tray__remove:focus-visible {
+  color: var(--accent-error);
+  background: color-mix(in srgb, var(--accent-error) 15%, transparent);
+}
+
+/* On a thumbnail the × sits over the image's corner. */
+.attach-tray__item--image .attach-tray__remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: color-mix(in srgb, var(--bg-secondary) 85%, transparent);
+  color: var(--fg);
+}
+
+.attach-tray__footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.attach-tray__label {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: calc(var(--font-size) - 1px);
   color: color-mix(in srgb, var(--fg) 70%, transparent);
 }
 
-.paste-preview__btn {
+.attach-tray__btn {
   background: none;
   border: var(--border-width) solid var(--border-color);
   color: var(--fg);
@@ -3073,18 +3170,28 @@ body.quark-mobile .input-bar__mode--hidden {
   border-radius: 2px;
 }
 
-.paste-preview__btn:hover {
+.attach-tray__btn:hover {
   background: color-mix(in srgb, var(--accent-primary) 20%, transparent);
   border-color: var(--accent-primary);
 }
 
-.paste-preview__btn--send {
+.attach-tray__btn--send {
   border-color: var(--accent-success);
   color: var(--accent-success);
 }
 
-.paste-preview__btn--cancel {
+.attach-tray__btn--cancel {
   border-color: color-mix(in srgb, var(--fg) 30%, transparent);
+}
+
+body.quark-mobile .attach-tray {
+  padding-left: 12px;
+}
+
+/* A thumb-sized target for the × on touch. */
+body.quark-mobile .attach-tray__remove {
+  min-width: 28px;
+  min-height: 28px;
 }
 
 /* ── Image lightbox ──────────────────────────────────────────────────────── */
@@ -6793,9 +6900,14 @@ body.quark-mobile .input-bar__field {
 
 body.quark-mobile .input-bar__mode,
 body.quark-mobile .input-bar__actions,
-body.quark-mobile .paste-preview,
+body.quark-mobile .attach-tray__footer,
 body.quark-mobile .reply-preview-bar {
   touch-action: none;
+}
+
+/* The tray's item row is its one scroller: sideways only, like the field. */
+body.quark-mobile .attach-tray__items {
+  touch-action: pan-x;
 }
 
 /* The autocomplete popover (shortcodes and mentions share the class) is a
@@ -7550,7 +7662,7 @@ body.quark-mobile .message__link {
 
 /* ── Attachment progress (#63) ───────────────────────────────────────────────
  * Inline rows in the compose region, shown while a picked/pasted file is read,
- * uploaded and sent. Styled to sit with .paste-preview (same left inset, same
+ * uploaded and sent. Styled to sit with .attach-tray (same left inset, same
  * tinted strip) so the composer keeps one visual language, and rendered as
  * monospace text — spinner, [████░░░░] bar, byte counts — rather than a
  * graphical widget. */

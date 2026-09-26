@@ -37,7 +37,7 @@ import {
   openQuickReactPicker,
   setupReactionChipHandler,
   setupMessageActionHandlers,
-  sendPendingImage,
+  sendStagedAttachments,
   attachFiles,
   readCopiedFiles,
   setupStatusBar,
@@ -738,9 +738,10 @@ function handleTextSelectKeydown(e: KeyboardEvent, components: AppComponents): b
 // ── Insert mode keyboard handlers ─────────────────────────────────────────────
 
 /**
- * Submit the compose box: commit an in-progress edit, send a staged image
- * (typed text becomes its caption), or send a new message. Shared by the
- * Enter key, the dedicated send button (#4), and the staged-image Send button.
+ * Submit the compose box: commit an in-progress edit, send the staged
+ * attachments (typed text becomes the first one's caption), or send a new
+ * message. Shared by the Enter key, the dedicated send button (#4), and the
+ * attachment tray's Send button.
  */
 function submitComposeBox(components: AppComponents): void {
   const { input, shortcodePreview } = components;
@@ -748,7 +749,7 @@ function submitComposeBox(components: AppComponents): void {
   const plan = resolveComposeSubmit({
     rawValue: input.getValue(),
     editingEventId: AppState.get("editingEventId"),
-    hasPendingImage: input.hasPendingImage(),
+    hasStagedAttachments: input.hasStagedAttachments(),
   });
   switch (plan.kind) {
     case "none":
@@ -761,11 +762,11 @@ function submitComposeBox(components: AppComponents): void {
       void editMessage(editingId, plan.body);
       return;
     }
-    case "image": {
-      const pending = input.takePendingImage();
-      if (!pending) return;
+    case "attachments": {
+      const staged = input.takeStagedAttachments();
+      if (staged.length === 0) return;
       input.setValue("");
-      void sendPendingImage(pending.blob, pending.filename, plan.caption ?? undefined);
+      void sendStagedAttachments(staged, plan.caption ?? undefined);
       return;
     }
     case "text":
@@ -1226,10 +1227,9 @@ export function setupKeyboard(components: AppComponents): void {
     input.openFilePicker();
   });
 
-  // Picked, pasted and dropped files share one routing rule (`attachFiles`):
-  // the first image stages in the preview (Enter sends, typed text becomes the
-  // caption) and puts the user in Insert mode to type that caption; everything
-  // else uploads immediately.
+  // Picked, pasted and dropped files share one route (`attachFiles`): each one
+  // stages in the composer's tray, and the user lands in Insert mode to type a
+  // caption. Nothing sends until the composer is submitted.
   const attach = (files: File[]) =>
     void attachFiles(files, {
       onStaged: () => {
@@ -1454,9 +1454,9 @@ export function setupKeyboard(components: AppComponents): void {
     // Escape (or Ctrl+[) always resets to Normal (if not already) and clears sequences.
     // When vim mode is disabled, Escape just closes overlays — don't leave Insert mode.
     if (e.key === "Escape" || (e.ctrlKey && e.key === "[")) {
-      // A staged image is a lightweight modal: the first Escape only discards
-      // it — mode, text-select, and reply/edit state all stay untouched.
-      if (input.discardPendingImage()) {
+      // The attachment tray is a lightweight modal: the first Escape only
+      // clears it — mode, text-select, and reply/edit state all stay untouched.
+      if (input.discardStagedAttachments()) {
         e.preventDefault();
         keymapManager.resetSequence();
         return;

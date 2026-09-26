@@ -3,6 +3,9 @@
 import { Mode } from "../vim/mode.js";
 import { isMobile, onMobileChange, guardViewportPan } from "../app/mobile.js";
 import { AttachmentProgressList, type AttachmentProgressHandle } from "./AttachmentProgress.js";
+import { AttachmentTray, type StagedAttachment } from "./AttachmentTray.js";
+
+export type { StagedAttachment };
 
 const MODE_LABELS: Record<string, string> = {
   Normal: "NOR",
@@ -126,12 +129,8 @@ export class Input {
   private _modeEl: HTMLElement;
   private _fieldEl: HTMLTextAreaElement;
   private _composeBoxEl: HTMLElement;
-  private _pastePreviewEl: HTMLElement;
-  private _pastePreviewImg: HTMLImageElement;
-  private _pastePreviewLabelEl: HTMLSpanElement;
+  private _tray: AttachmentTray;
   private _inputBarEl: HTMLElement;
-  private _pendingImageBlob: Blob | null = null;
-  private _pendingImageName: string | null = null;
   private _currentMode: string = "Normal";
   private _onEmojiClick: (() => void) | null = null;
   private _onGifClick: (() => void) | null = null;
@@ -150,50 +149,25 @@ export class Input {
     this._el.className = "input-bar-wrap";
     this._el.setAttribute("role", "region");
     this._el.setAttribute("aria-label", "Message input");
-    // Nothing in the compose region scrolls except the field itself, so no drag
-    // over it may reach the visual-viewport pan (#33).
-    guardViewportPan(this._el, (t) => !!t?.closest(".input-bar__field"));
+    // Nothing in the compose region scrolls except the field and the staged-
+    // attachments row, so no other drag over it may reach the visual-viewport
+    // pan (#33).
+    guardViewportPan(this._el, (t) => !!t?.closest(".input-bar__field, .attach-tray__items"));
 
     // ── Attachment progress (hidden until something is being attached) ────
-    // Above the paste preview so a queued send and the row describing it read
+    // Above the staged-attachments tray so a queued send and the row describing it read
     // top-down in the order they happened.
     this._attachProgress = new AttachmentProgressList();
     this._el.appendChild(this._attachProgress.getElement());
 
-    // ── Paste image preview (hidden by default, shown above compose bar) ──
-    this._pastePreviewEl = document.createElement("div");
-    this._pastePreviewEl.className = "paste-preview";
-    this._pastePreviewEl.style.display = "none";
-    this._pastePreviewEl.setAttribute("role", "group");
-    this._pastePreviewEl.setAttribute("aria-label", "Image paste preview");
-
-    this._pastePreviewImg = document.createElement("img");
-    this._pastePreviewImg.className = "paste-preview__img";
-    this._pastePreviewImg.alt = "Pasted image";
-    this._pastePreviewEl.appendChild(this._pastePreviewImg);
-
-    this._pastePreviewLabelEl = document.createElement("span");
-    this._pastePreviewLabelEl.className = "paste-preview__label";
-    this._pastePreviewLabelEl.textContent = "Send image?";
-    this._pastePreviewEl.appendChild(this._pastePreviewLabelEl);
-
-    // Send routes through the same submit path as the ➤ button so the typed
-    // caption / edit precedence logic applies regardless of affordance.
-    const sendBtn = document.createElement("button");
-    sendBtn.type = "button";
-    sendBtn.className = "paste-preview__btn paste-preview__btn--send";
-    sendBtn.textContent = "Send";
-    sendBtn.addEventListener("click", () => this._onSendClick?.());
-    this._pastePreviewEl.appendChild(sendBtn);
-
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "paste-preview__btn paste-preview__btn--cancel";
-    cancelBtn.textContent = "Cancel";
-    cancelBtn.addEventListener("click", () => this.discardPendingImage());
-    this._pastePreviewEl.appendChild(cancelBtn);
-
-    this._el.appendChild(this._pastePreviewEl);
+    // ── Staged attachments (hidden until something is attached) ─────────
+    // The Send button routes through the same submit path as Enter and the ➤
+    // button, so the caption and edit-precedence rules apply whichever is used.
+    this._tray = new AttachmentTray({
+      onSend: () => this._onSendClick?.(),
+      onChange: () => this._refreshPlaceholder(),
+    });
+    this._el.appendChild(this._tray.getElement());
 
     // ── The actual input bar ──────────────────────────────────────────────
     const inputBar = document.createElement("div");
@@ -244,8 +218,8 @@ export class Input {
     // branch used to filter on `image/`, so a PDF, zip or mp4 on the clipboard
     // fell through to the browser's default text paste and vanished — even
     // though the file picker beside it has sent those as `m.file`/`m.video` all
-    // along. Images stage in the composer preview (Enter sends, typed text is
-    // the caption); everything else goes through the picker's own handler.
+    // along. Every file, whatever its type, goes to the same handler as a
+    // picked one and waits in the tray until the composer is submitted.
     this._fieldEl.addEventListener("paste", (e) => this._handlePaste(e));
 
     // Hidden file input — triggered by the attach button
@@ -543,7 +517,7 @@ export class Input {
    * and taking the text back out there deletes a paste the user asked for. So
    * the undo is limited to text that reads as the image's fallback — see
    * {@link looksLikeImageFallbackText}. Anything else stays, and becomes the
-   * staged image's caption (#84), which is visible and removable either way.
+   * first staged attachment's caption (#84), which is visible and removable either way.
    */
   private _undoDefaultPaste(
     undo: PasteUndo,
@@ -564,9 +538,9 @@ export class Input {
 
   /**
    * Register the handler for files the user attached — from the attach button
-   * or pasted into the composer. The component only collects them; which one
-   * stages and which send at once is the app's decision (`attachFiles`), made
-   * once for every entry point including a window drop.
+   * or pasted into the composer. The component only collects them; staging
+   * them is the app's decision (`attachFiles`), made once for every entry
+   * point including a window drop.
    */
   onAttachFiles(handler: (files: File[]) => void): void {
     this._onAttachFiles = handler;
@@ -764,82 +738,58 @@ export class Input {
     this._fieldEl.addEventListener("input", () => handler(this._fieldEl.value));
   }
 
-  // ── Pending image (paste / attach staging) ─────────────────────────────────
+  // ── Staged attachments ─────────────────────────────────────────────────────
 
   /**
-   * Stage an image for sending: show the preview above the compose bar and
-   * hold the blob until a submit consumes it (`takePendingImage`) or the user
-   * discards it. A second call while one is staged replaces it; any typed
-   * caption in the field is left alone.
+   * Stage a file in the tray above the compose bar, after anything already
+   * there. Nothing is sent until the composer is submitted, which takes the
+   * whole tray ({@link takeStagedAttachments}); typed text is left alone and
+   * becomes the first attachment's caption.
    */
-  showImagePreview(blob: Blob, filename?: string): void {
-    // Replacing a staged image before its object URL loaded would leak it.
-    this._revokePreviewUrl();
-    this._pendingImageBlob = blob;
-    this._pendingImageName = filename ?? null;
-    const url = URL.createObjectURL(blob);
-    this._pastePreviewImg.src = url;
-    // Clean up the object URL when the image loads
-    this._pastePreviewImg.onload = () => {
-      this._pastePreviewImg.onload = null;
-      URL.revokeObjectURL(url);
-    };
-    const name = filename ? `Send ${filename}?` : "Send image?";
-    this._pastePreviewLabelEl.textContent = isMobile()
-      ? name
-      : `${name} — Enter to send · Esc to cancel`;
-    this._pastePreviewEl.style.display = "flex";
-    this._refreshPlaceholder();
+  stageAttachment(file: Blob, filename?: string | null): StagedAttachment {
+    return this._tray.add(file, filename);
   }
 
-  /** Whether an image is staged and waiting to be sent. */
-  hasPendingImage(): boolean {
-    return this._pendingImageBlob !== null;
+  /** Put attachments whose send failed back at the front of the tray. */
+  restoreStagedAttachments(items: readonly StagedAttachment[]): void {
+    this._tray.restore(items);
   }
 
-  /** Atomically take the staged image (clearing the preview), or null if none. */
-  takePendingImage(): { blob: Blob; filename: string | null } | null {
-    const blob = this._pendingImageBlob;
-    if (!blob) return null;
-    const filename = this._pendingImageName;
-    this._clearPendingImage();
-    return { blob, filename };
+  /** Whether anything is staged and waiting to be sent. */
+  hasStagedAttachments(): boolean {
+    return this._tray.size > 0;
   }
 
-  /** Discard the staged image. Returns true if there was one to discard. */
-  discardPendingImage(): boolean {
-    if (!this._pendingImageBlob) return false;
-    this._clearPendingImage();
-    return true;
+  /** The staged attachments, in order, without taking them. */
+  stagedAttachments(): readonly StagedAttachment[] {
+    return this._tray.items();
+  }
+
+  /** Atomically take every staged attachment, emptying the tray. */
+  takeStagedAttachments(): StagedAttachment[] {
+    return this._tray.take();
+  }
+
+  /** Remove one staged attachment. Returns false if it was not staged. */
+  removeStagedAttachment(id: number): boolean {
+    return this._tray.remove(id);
+  }
+
+  /** Clear the whole tray. Returns true if there was anything to clear. */
+  discardStagedAttachments(): boolean {
+    return this._tray.clear();
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
 
-  private _clearPendingImage(): void {
-    this._pendingImageBlob = null;
-    this._pendingImageName = null;
-    this._revokePreviewUrl();
-    this._pastePreviewImg.src = "";
-    this._pastePreviewEl.style.display = "none";
-    this._refreshPlaceholder();
-  }
-
-  /** Revoke a preview object URL whose `onload` hasn't fired yet. */
-  private _revokePreviewUrl(): void {
-    if (this._pastePreviewImg.onload && this._pastePreviewImg.src) {
-      URL.revokeObjectURL(this._pastePreviewImg.src);
-      this._pastePreviewImg.onload = null;
-    }
-  }
-
   /**
-   * The placeholder doubles as the staged-image hint: Command mode keeps its
-   * prompt, otherwise a pending image invites a caption.
+   * The placeholder doubles as the staged-attachments hint: Command mode keeps
+   * its prompt, otherwise a staged attachment invites a caption.
    */
   private _refreshPlaceholder(): void {
     if (this._vimMode && this._currentMode === "Command") {
       this._fieldEl.placeholder = "command…";
-    } else if (this.hasPendingImage()) {
+    } else if (this.hasStagedAttachments()) {
       this._fieldEl.placeholder = "Add a caption…";
     } else {
       this._fieldEl.placeholder = "…";

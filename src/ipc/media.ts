@@ -20,6 +20,10 @@ export interface AttachmentSend extends MessageTarget {
   filename: string;
   /** Correlates upload-progress events with the composer row showing them. */
   uploadId?: string;
+  /** MSC2530 caption — any media type may carry one. */
+  caption?: string;
+  /** The caption as HTML, where it needs one (custom emoji, #84). */
+  formattedCaption?: string;
 }
 
 /** The shared invoke arguments for an attachment send. */
@@ -32,6 +36,8 @@ function attachmentArgs(send: AttachmentSend): Record<string, unknown> {
     replyToEventId: send.replyToEventId ?? null,
     threadRootEventId: send.threadRootEventId ?? null,
     uploadId: send.uploadId ?? null,
+    caption: send.caption ?? null,
+    formattedCaption: send.formattedCaption ?? null,
   };
 }
 
@@ -141,8 +147,8 @@ export async function uploadMedia(filePath: string): Promise<string> {
 }
 
 /**
- * Upload base64-encoded file bytes and send as an m.file event.
- * Used for the file picker attach flow.
+ * Upload base64-encoded file bytes and send as an m.file event, with an
+ * optional MSC2530 caption.
  */
 export async function sendFile(
   send: AttachmentSend & { fileSize?: number },
@@ -301,14 +307,8 @@ export async function openMediaExternally(
  * custom emoji actually lives, so sending one without the other sends a literal
  * `:shortcode:` (#84).
  */
-export async function sendPastedImage(
-  send: AttachmentSend & { caption?: string; formattedCaption?: string },
-): Promise<SentMessage> {
-  return invoke<SentMessage>("send_pasted_image", {
-    ...attachmentArgs(send),
-    caption: send.caption ?? null,
-    formattedCaption: send.formattedCaption ?? null,
-  });
+export async function sendPastedImage(send: AttachmentSend): Promise<SentMessage> {
+  return invoke<SentMessage>("send_pasted_image", attachmentArgs(send));
 }
 
 // ─── Attachment upload progress ──────────────────────────────────────────────
