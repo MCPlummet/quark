@@ -623,3 +623,21 @@ describe("attachFiles", () => {
     expect(sendFile.mock.calls[0][0].threadRootEventId).toBe("$root");
   });
 });
+
+// #78 and #84 were fixed on the same path; this pins them together, since a
+// regression in how the send is assembled could keep either half and lose the
+// other.
+describe("a captioned image sent into a thread (#78 + #84)", () => {
+  it("carries the thread root and the expanded caption in one send", async () => {
+    AppState.set("threadRootEventId", "$root");
+    _shortcodeToMxc.set("party", "mxc://e/party");
+
+    await sendPendingImage(blob(), "cat.png", ":party: see [docs](https://e.com) :smile:");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.threadRootEventId).toBe("$root");
+    expect(send.caption).toBe(":party: see [docs](https://e.com) 😄");
+    expect(send.formattedCaption).toContain('<img data-mx-emoticon src="mxc://e/party"');
+    expect(send.formattedCaption).toContain('<a href="https://e.com">docs</a>');
+  });
+});
