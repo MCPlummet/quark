@@ -41,6 +41,24 @@ vi.mock("./actions.js", async (importActual) => {
   };
 });
 vi.mock("../ui/NotificationToast.js", () => ({ showToast: vi.fn() }));
+// The live-render path sync.ts shares with attachment sends (`actions/live.ts`)
+// imports its helpers from their own modules, not the barrel above, so the
+// network/IPC-touching ones are stubbed at source too.
+vi.mock("./actions/context.js", async (importActual) => ({
+  ...(await importActual<typeof import("./actions/context.js")>()),
+  downloadSyncMessageImage: vi.fn(),
+  ensureSenderAvatarDownloaded: vi.fn(),
+  resolveInlineEmojiForTimeline: vi.fn(),
+}));
+vi.mock("./actions/rooms.js", async (importActual) => ({
+  ...(await importActual<typeof import("./actions/rooms.js")>()),
+  appendRoomTimelineCache: vi.fn(),
+  bumpRoomActivity: vi.fn(),
+}));
+vi.mock("./actions/home.js", async (importActual) => ({
+  ...(await importActual<typeof import("./actions/home.js")>()),
+  homeViewHandleMessage: vi.fn(),
+}));
 vi.mock("./notifications.js", () => ({ handleIncomingMessage: vi.fn() }));
 
 import { startSync, stopSync } from "./sync.js";

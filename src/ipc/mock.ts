@@ -1,7 +1,7 @@
 // Mock IPC layer for browser-only dev mode (no Tauri backend)
 // Provides fake data so the UI renders and can be interacted with
 
-import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember } from "./types.js";
+import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember, SentMessage } from "./types.js";
 
 export interface CacheStats {
   total_size_bytes: number;
@@ -56,6 +56,12 @@ function mockRelation(args?: Record<string, unknown>): Partial<TimelineEvent> {
     in_reply_to: (args?.replyToEventId as string | null) ?? null,
     thread_root: (args?.threadRootEventId as string | null) ?? null,
   };
+}
+
+/** Record a sent attachment and answer the way the backend does: id plus echo. */
+function mockSent(event: TimelineEvent): SentMessage {
+  MOCK_TIMELINE.push(event);
+  return { event_id: event.event_id, echo: event };
 }
 
 function mockEvent(sender: string, body: string, minutesAgo: number): TimelineEvent {
@@ -432,7 +438,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "send_pasted_image": {
       const filename = (args?.filename as string) ?? "pasted-image.png";
       const caption = (args?.caption as string | null) ?? null;
-      MOCK_TIMELINE.push({
+      return mockSent({
         ...mockEvent("@you:matrix.org", caption ?? `[Image: ${filename}]`, 0),
         msg_type: "m.image",
         media_url: "",
@@ -441,22 +447,20 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         caption_formatted: (args?.formattedCaption as string | null) ?? null,
         ...mockRelation(args),
       } as TimelineEvent);
-      return "$mock-paste-event-id";
     }
     case "send_file": {
       const filename = (args?.filename as string) ?? "file";
-      MOCK_TIMELINE.push({
+      return mockSent({
         ...mockEvent("@you:matrix.org", `[File: ${filename}]`, 0),
         msg_type: "m.file",
         media_url: "",
         media_mimetype: (args?.mimeType as string) ?? "application/octet-stream",
         ...mockRelation(args),
       } as TimelineEvent);
-      return "$mock-file-event-id";
     }
     case "send_video": {
       const filename = (args?.filename as string) ?? "video.mp4";
-      MOCK_TIMELINE.push({
+      return mockSent({
         ...mockEvent("@you:matrix.org", `[Video: ${filename}]`, 0),
         msg_type: "m.video",
         media_url: "",
@@ -465,7 +469,6 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         media_height: (args?.height as number) ?? null,
         ...mockRelation(args),
       } as TimelineEvent);
-      return "$mock-video-event-id";
     }
     case "send_sticker": {
       // Pushed to the timeline like every other send: a mock that returns an id

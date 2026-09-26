@@ -121,6 +121,16 @@ export interface MessageTarget {
   threadRootEventId?: string;
 }
 
+/**
+ * What an attachment send returns — matches `timeline::SentMessage`. `echo` is
+ * the sent event as its sync echo will carry it, painted straight away (#112);
+ * null only if the backend could not build it, in which case sync still will.
+ */
+export interface SentMessage {
+  event_id: string;
+  echo: TimelineEvent | null;
+}
+
 export interface TimelineEvent {
   event_id: string;
   sender: string;

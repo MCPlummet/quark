@@ -1361,7 +1361,7 @@ pub async fn send_pasted_image(
     reply_to_event_id: Option<String>,
     thread_root_event_id: Option<String>,
     upload_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<crate::matrix::timeline::SentMessage, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
@@ -1401,7 +1401,7 @@ pub async fn send_file(
     reply_to_event_id: Option<String>,
     thread_root_event_id: Option<String>,
     upload_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<crate::matrix::timeline::SentMessage, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
@@ -1443,7 +1443,7 @@ pub async fn send_video(
     reply_to_event_id: Option<String>,
     thread_root_event_id: Option<String>,
     upload_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<crate::matrix::timeline::SentMessage, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
@@ -2201,6 +2201,9 @@ pub async fn send_gif(
         },
     )
     .await
+    // A GIF paints optimistically before the send (gif.ts), so it only needs
+    // the id to confirm that bubble.
+    .map(|sent| sent.event_id)
 }
 
 #[cfg(test)]

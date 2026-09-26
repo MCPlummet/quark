@@ -1,9 +1,9 @@
 // Media IPC calls
 
 import { invoke } from "./invoke.js";
-import type { MediaDownload, MessageTarget, UrlPreview } from "./types.js";
+import type { MediaDownload, MessageTarget, SentMessage, UrlPreview } from "./types.js";
 
-export type { MediaDownload, MessageTarget, UrlPreview };
+export type { MediaDownload, MessageTarget, SentMessage, UrlPreview };
 
 /**
  * The common half of every attachment send.
@@ -146,8 +146,8 @@ export async function uploadMedia(filePath: string): Promise<string> {
  */
 export async function sendFile(
   send: AttachmentSend & { fileSize?: number },
-): Promise<string> {
-  return invoke<string>("send_file", {
+): Promise<SentMessage> {
+  return invoke<SentMessage>("send_file", {
     ...attachmentArgs(send),
     fileSize: send.fileSize ?? null,
   });
@@ -165,8 +165,8 @@ export async function sendVideo(
     durationMs?: number;
     fileSize?: number;
   },
-): Promise<string> {
-  return invoke<string>("send_video", {
+): Promise<SentMessage> {
+  return invoke<SentMessage>("send_video", {
     ...attachmentArgs(send),
     width: send.width ?? null,
     height: send.height ?? null,
@@ -271,8 +271,8 @@ export async function openMediaExternally(
  */
 export async function sendPastedImage(
   send: AttachmentSend & { caption?: string; formattedCaption?: string },
-): Promise<string> {
-  return invoke<string>("send_pasted_image", {
+): Promise<SentMessage> {
+  return invoke<SentMessage>("send_pasted_image", {
     ...attachmentArgs(send),
     caption: send.caption ?? null,
     formattedCaption: send.formattedCaption ?? null,

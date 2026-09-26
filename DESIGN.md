@@ -1121,8 +1121,10 @@ alongside `openExternalUrl` opened every link twice.
   invisibly), and an attachment only folds in a reply to the thread's root or to
   one of its replies. Files sent into a thread render in the panel as the same
   click-to-open affordance the main timeline gives them. Attachments
-  sent into a thread have no optimistic row: they appear when the echo arrives,
-  which is what routes them into the panel with their media. An armed reply is
+  sent into a thread have no optimistic row: they appear once sent, from the
+  send's own echo (see *Attachment progress*), which the live render path
+  routes into the panel with its media just as it would the sync echo. Stickers
+  and GIFs sent into a thread still wait for the sync echo. An armed reply is
   consumed by the attachment and cleared, as it is for a text message.
 - **Pasting.** Anything on the clipboard that is a file pastes into the
   composer, not just images: an image stages in the preview, a video sends as
@@ -1151,6 +1153,16 @@ alongside `openExternalUrl` opened every link twice.
   spinner with the backend's message and stays until dismissed; cancel is
   offered only during the local read, the one phase that can still be abandoned
   without something having already been sent.
+
+  When the row ticks, the attachment is already on screen. `send_pasted_image`,
+  `send_file` and `send_video` return the sent event alongside its id
+  (`SentMessage.echo`), converted by the same function the sync handler uses,
+  and the frontend paints it through the same render path sync events take
+  (`actions/live.ts`), which deduplicates the sync echo by event id when it
+  follows. Attachments used to wait for that echo alone — the one send path
+  with no local echo — so on Android, where picking the file backgrounds the
+  app and the sync loop comes back from that mid long-poll or asleep in
+  backoff, a sent image could stay missing until the room was reopened (#112).
 
   Rows are scoped to the room the attachment is going to. The composer is
   shared by every room, so an unscoped row followed the user out — a failed

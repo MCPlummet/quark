@@ -26,6 +26,10 @@ export {
   timelineEventToThreadMessage,
 } from "./actions/context.js";
 
+// Live events: one render path for the sync listener and this device's own
+// attachment sends (#112).
+export { recordLiveEvent, renderLiveEvent, showSentEvent } from "./actions/live.js";
+
 // Session lifecycle.
 export { login, attemptSessionRestore, logout, maybePromptSessionVerification } from "./actions/session.js";
 
