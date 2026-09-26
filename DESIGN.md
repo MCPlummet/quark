@@ -292,7 +292,7 @@ where `PushNotifier` posts them; matching the notification plugin's ids,
 channels, group keys and *intent extras* is what makes a cold notification
 behave like a warm one when tapped.
 
-Three guards matter here, all of them against work this app has previously
+Several guards matter here, all of them against work this app has previously
 overwhelmed its own homeserver with:
 
 - **A warm app wins — while it is actually working.** `push_wake` keeps a
@@ -305,6 +305,23 @@ overwhelmed its own homeserver with:
   The progress stamp comes from `sync_with_callback`, because `Client::sync`
   loops internally and returns only on error: its success arm is reached about
   as often as never.
+- **A stalled loop is restarted, never raced.** An event push that finds the
+  loop running but stalled (`WarmSync::Stalled`) does not sync beside it: the
+  wake would be handed the app's own `Client`, and two syncs on one client are
+  two concurrent E2EE outgoing-request flushes from one device (#52). Instead
+  `client::restart_sync` aborts the loop and spawns a fresh one — on Tauri's
+  runtime, since the wake's JNI runtime dies when it returns — and the wake
+  waits, within its budget, for the new loop's first completed sync, which
+  delivers the event through the warm handlers. A restart never revives a loop
+  that was stopped: the "is one running?" check, the abort and the spawn all
+  happen under the `SyncState` lock logout also takes. Restarting stamps the
+  liveness clock, so a burst restarts the loop once. A dismissal push needs no
+  sync and leaves a stalled loop alone.
+- **One syncer per client, structurally.** `JoinHandle::abort` only requests
+  cancellation, so "abort the old loop, spawn the new one" used to leave a
+  window with both polling. Every syncer — the warm loop for its lifetime, a
+  wake for its bounded sync — holds `client::SYNC_TURN`, so a replacement
+  begins only once its predecessor has actually been dropped.
 - **A burst coalesces.** `WakeGuard` admits one push sync at a time, released on
   `Drop` so a panicking sync reopens it instead of wedging push shut.
 - **One `Client` per store.** `background_client` reuses the app's client when
