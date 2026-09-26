@@ -248,6 +248,13 @@ export interface MediaDownload {
   filename: string | null;
 }
 
+/** Files a file manager copied to the OS clipboard — matches clipboard_files::ClipboardFiles */
+export interface ClipboardFiles {
+  files: MediaDownload[];
+  /** One readable reason per listed entry that could not be read. */
+  errors: string[];
+}
+
 // ─── Devices / Sessions ───────────────────────────────────────────────────────
 
 /** A user session/device with merged trust status — matches matrix::devices::SessionInfo */

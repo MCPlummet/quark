@@ -1,4 +1,5 @@
 pub mod apns;
+pub mod clipboard_files;
 pub mod commands;
 pub mod config;
 pub mod events;
@@ -217,6 +218,7 @@ pub fn run() {
             commands::send_file,
             commands::send_video,
             commands::read_dropped_file,
+            commands::read_clipboard_files,
             commands::get_cache_stats,
             commands::clear_media_cache,
             commands::set_cache_size_limit,

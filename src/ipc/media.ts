@@ -1,7 +1,7 @@
 // Media IPC calls
 
 import { invoke } from "./invoke.js";
-import type { MediaDownload, MessageTarget, SentMessage, UrlPreview } from "./types.js";
+import type { ClipboardFiles, MediaDownload, MessageTarget, SentMessage, UrlPreview } from "./types.js";
 
 export type { MediaDownload, MessageTarget, SentMessage, UrlPreview };
 
@@ -160,11 +160,29 @@ export async function sendFile(
  */
 export async function readDroppedFile(path: string): Promise<File> {
   const got = await invoke<MediaDownload>("read_dropped_file", { path });
+  return mediaToFile(got, path.split(/[\\/]/).pop() || "dropped-file");
+}
+
+/**
+ * Read the files a file manager copied to the OS clipboard (Linux). WebKitGTK
+ * shows a paste only the list's `file://` text, so the backend reads the list
+ * off the clipboard itself; nothing here names a path. `files` is empty when
+ * the clipboard holds no file list; `errors` names each listed entry that could
+ * not be read (a folder, a network location, past the size cap).
+ */
+export async function readClipboardFiles(): Promise<{ files: File[]; errors: string[] }> {
+  const got = await invoke<ClipboardFiles>("read_clipboard_files");
+  return {
+    files: got.files.map((f) => mediaToFile(f, "pasted-file")),
+    errors: got.errors,
+  };
+}
+
+function mediaToFile(got: MediaDownload, fallbackName: string): File {
   const binary = atob(got.data_base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const name = got.filename || path.split(/[\\/]/).pop() || "dropped-file";
-  return new File([bytes], name, { type: got.mime_type });
+  return new File([bytes], got.filename || fallbackName, { type: got.mime_type });
 }
 
 /**

@@ -76,7 +76,7 @@ export {
 // ─── Media ────────────────────────────────────────────────────────────────────
 export type { MessageTarget } from "./types.js";
 export type { AttachmentSend } from "./media.js";
-export { downloadMedia, getThumbnail, uploadMedia, sendPastedImage, sendFile, sendVideo, readDroppedFile, saveMediaToTemp, serveMedia, saveMediaWithDialog, getPlatform, openMediaExternally, getCacheStats, clearMediaCache, setCacheSizeLimit, getEventCacheSize, clearEventCache, getUrlPreview } from "./media.js";
+export { downloadMedia, getThumbnail, uploadMedia, sendPastedImage, sendFile, sendVideo, readDroppedFile, readClipboardFiles, saveMediaToTemp, serveMedia, saveMediaWithDialog, getPlatform, openMediaExternally, getCacheStats, clearMediaCache, setCacheSizeLimit, getEventCacheSize, clearEventCache, getUrlPreview } from "./media.js";
 export type { CacheStats, UrlPreview } from "./media.js";
 
 // ─── Notifications ────────────────────────────────────────────────────────────

@@ -33,7 +33,12 @@ vi.mock("../../ipc/index.js", () => ({
   openMediaExternally: vi.fn(),
   sendFile: (...args: Parameters<typeof sendFile>) => sendFile(...args),
   sendVideo: (...args: Parameters<typeof sendVideo>) => sendVideo(...args),
+  readClipboardFiles: () => readClipboardFiles(),
 }));
+
+const readClipboardFiles = vi.fn<() => Promise<{ files: File[]; errors: string[] }>>(
+  async () => ({ files: [], errors: [] }),
+);
 
 const sendFile = vi.fn<(send: Sent) => Promise<SentMessage>>(async () => ({ event_id: "$file", echo: null }));
 
@@ -73,7 +78,8 @@ vi.mock("./live.js", () => ({
   showSentEvent: (...args: Parameters<typeof showSentEvent>) => showSentEvent(...args),
 }));
 
-import { sendPendingImage, handleFilePick, attachFiles } from "./media.js";
+import { sendPendingImage, handleFilePick, attachFiles, readCopiedFiles } from "./media.js";
+import { showError } from "../../ui/NotificationToast.js";
 import { setComponents, _shortcodeToMxc } from "./context.js";
 import { AppState } from "../state.js";
 
@@ -721,5 +727,26 @@ describe("a captioned image sent into a thread (#78 + #84)", () => {
     expect(send.caption).toBe(":party: see [docs](https://e.com) 😄");
     expect(send.formattedCaption).toContain('<img data-mx-emoticon src="mxc://e/party"');
     expect(send.formattedCaption).toContain('<a href="https://e.com">docs</a>');
+  });
+});
+
+describe("readCopiedFiles", () => {
+  it("returns the read files and reports each entry that could not be read", async () => {
+    const f = new File(["x"], "a.txt", { type: "text/plain" });
+    readClipboardFiles.mockResolvedValueOnce({ files: [f], errors: ["Can't attach dir: folders can't be attached"] });
+    const got = await readCopiedFiles();
+    expect(got).toEqual({ files: [f], listed: true });
+    expect(showError).toHaveBeenCalledWith("Can't attach dir: folders can't be attached");
+  });
+
+  it("says a list was there even when nothing in it could attach", async () => {
+    readClipboardFiles.mockResolvedValueOnce({ files: [], errors: ["x.pdf is not a local file"] });
+    expect(await readCopiedFiles()).toEqual({ files: [], listed: true });
+  });
+
+  it("reads an ordinary clipboard, or a failed read, as no list", async () => {
+    expect(await readCopiedFiles()).toEqual({ files: [], listed: false });
+    readClipboardFiles.mockRejectedValueOnce(new Error("boom"));
+    expect(await readCopiedFiles()).toEqual({ files: [], listed: false });
   });
 });

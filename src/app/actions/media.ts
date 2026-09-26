@@ -13,6 +13,7 @@ import {
   sendPastedImage,
   sendFile,
   sendVideo,
+  readClipboardFiles,
 } from "../../ipc/index.js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { isTauri } from "../../ipc/mock.js";
@@ -495,6 +496,23 @@ export async function attachFiles(
   for (const file of rest) {
     if (isImage(file)) await sendImageNow(file);
     else await handleFilePick(file);
+  }
+}
+
+/**
+ * Read the files a file manager copied to the OS clipboard, for a paste that
+ * the webview showed only as their `file://` text (Linux). Each listed entry
+ * that could not be read — a folder, a network location, past the size cap —
+ * is reported here, so the composer only has to attach what came back.
+ */
+export async function readCopiedFiles(): Promise<{ files: File[]; listed: boolean }> {
+  try {
+    const { files, errors } = await readClipboardFiles();
+    for (const reason of errors) showError(reason);
+    return { files, listed: files.length > 0 || errors.length > 0 };
+  } catch (err) {
+    console.warn("[paste] reading copied files failed:", err);
+    return { files: [], listed: false };
   }
 }
 

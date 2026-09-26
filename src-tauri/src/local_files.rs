@@ -39,7 +39,16 @@ pub fn read_dropped_file(
     if meta.is_dir() {
         return Err("Folders can't be attached".into());
     }
-    let data = std::fs::read(path).map_err(|e| format!("Cannot read dropped file: {e}"))?;
+    load_attachment(path).map_err(|e| format!("Cannot read dropped file: {e}"))
+}
+
+/// Read a local file the user handed over — by a drop, or by copying it in a
+/// file manager (`clipboard_files`) — into the shape the attach path takes.
+///
+/// No policy lives here: each caller decides first whether `path` is one the
+/// user actually handed over, and that it is not a folder.
+pub(crate) fn load_attachment(path: &Path) -> Result<MediaDownload, String> {
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
 
     let filename = path.file_name().map(|n| n.to_string_lossy().into_owned());
     // Content sniffing first, then the extension — the same detection the asset

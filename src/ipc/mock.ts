@@ -484,6 +484,10 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         filename: path.split(/[\\/]/).pop() || "dropped.txt",
       };
     }
+    case "read_clipboard_files":
+      // The browser has no OS clipboard for the backend to read: report "no
+      // file list", which is what every ordinary text paste gets too.
+      return { files: [], errors: [] };
     case "send_sticker": {
       // Pushed to the timeline like every other send: a mock that returns an id
       // and nothing else cannot show browser dev mode where a sticker lands,

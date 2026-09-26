@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { Input } from "./Input.js";
+import { Input, isFileUriList, looksLikeFileListText } from "./Input.js";
 import { Mode } from "../vim/mode.js";
 
 describe("Input", () => {
@@ -405,6 +405,152 @@ describe("Input", () => {
         expect(f.value).toBe("hello");
         expect(input.hasPendingImage()).toBe(true);
       });
+    });
+
+    // A file-manager copy (Dolphin, Nautilus) reaches WebKitGTK only as text —
+    // the files' URIs or paths — which the page cannot open. The backend reads
+    // the list off the OS clipboard instead.
+    describe("files copied in a file manager", () => {
+      const copiedPng = () => new File(["x"], "shot.png", { type: "image/png" });
+      const copiedPdf = () => new File(["%PDF"], "doc.pdf", { type: "application/pdf" });
+      const flush = async () => {
+        for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+      };
+
+      function paste(data: Record<string, string>) {
+        const evt = new Event("paste", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+        Object.defineProperty(evt, "clipboardData", {
+          value: { items: [], files: [], getData: (t: string) => data[t] ?? "" },
+        });
+        field()!.dispatchEvent(evt);
+        return evt;
+      }
+
+      beforeEach(() => {
+        // No async image path in these: the file list is the whole story.
+        Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+      });
+
+      it("intercepts a file:// URI list and attaches what the backend read", async () => {
+        const reader = vi.fn(async () => ({ files: [copiedPng(), copiedPdf()], listed: true }));
+        input.setClipboardFileReader(reader);
+
+        const evt = paste({
+          "text/plain": "file:///home/u/shot.png\nfile:///home/u/doc.pdf",
+          "text/uri-list": "file:///home/u/shot.png\r\nfile:///home/u/doc.pdf\r\n",
+        });
+        expect(evt.defaultPrevented).toBe(true);
+        await flush();
+
+        expect(reader).toHaveBeenCalledTimes(1);
+        expect(attached[0].map((f) => f.name)).toEqual(["shot.png", "doc.pdf"]);
+        expect(field()!.value).toBe("");
+      });
+
+      it("intercepts on the text flavour alone when there is no uri-list", async () => {
+        input.setClipboardFileReader(async () => ({ files: [copiedPdf()], listed: true }));
+        const evt = paste({ "text/plain": "file:///home/u/doc.pdf" });
+        expect(evt.defaultPrevented).toBe(true);
+        await flush();
+        expect(attached[0].map((f) => f.name)).toEqual(["doc.pdf"]);
+      });
+
+      it("pastes the URI text after all when the OS clipboard holds no file list", async () => {
+        input.setClipboardFileReader(async () => ({ files: [], listed: false }));
+        const f = field()!;
+        f.value = "see ";
+        f.selectionStart = f.selectionEnd = 4;
+
+        paste({ "text/plain": "file:///tmp/x.log" });
+        await flush();
+
+        expect(attached).toHaveLength(0);
+        expect(f.value).toBe("see file:///tmp/x.log");
+      });
+
+      it("pastes nothing when the list held only things that can't attach", async () => {
+        // The reader has already reported the folder; the URI is not a message.
+        input.setClipboardFileReader(async () => ({ files: [], listed: true }));
+        paste({ "text/plain": "file:///home/u/Pictures" });
+        await flush();
+
+        expect(attached).toHaveLength(0);
+        expect(field()!.value).toBe("");
+      });
+
+      it("leaves an ordinary text paste alone and never asks the backend", async () => {
+        const reader = vi.fn(async () => ({ files: [], listed: false }));
+        input.setClipboardFileReader(reader);
+        const evt = paste({ "text/plain": "hello there", "text/uri-list": "" });
+        await flush();
+
+        expect(evt.defaultPrevented).toBe(false);
+        expect(reader).not.toHaveBeenCalled();
+      });
+
+      it("does not treat a copied web link as a file list", async () => {
+        const reader = vi.fn(async () => ({ files: [], listed: false }));
+        input.setClipboardFileReader(reader);
+        const evt = paste({ "text/plain": "https://e.com/a.png", "text/uri-list": "https://e.com/a.png" });
+        await flush();
+
+        expect(evt.defaultPrevented).toBe(false);
+        expect(reader).not.toHaveBeenCalled();
+      });
+
+      // Nautilus offers the list's plain text as bare paths. Those are also
+      // what a user copies out of a terminal, so the paste goes ahead and is
+      // only taken back out if the clipboard really held files.
+      it("takes pasted paths back out when they were a file-manager copy", async () => {
+        input.setClipboardFileReader(async () => ({ files: [copiedPng()], listed: true }));
+        const f = field()!;
+        f.value = "";
+
+        const evt = paste({ "text/plain": "/home/u/My Pictures/shot.png" });
+        expect(evt.defaultPrevented).toBe(false);
+        f.value = "/home/u/My Pictures/shot.png"; // the default paste
+        await flush();
+
+        expect(attached[0].map((x) => x.name)).toEqual(["shot.png"]);
+        expect(f.value).toBe("");
+      });
+
+      it("keeps pasted paths that were only text", async () => {
+        input.setClipboardFileReader(async () => ({ files: [], listed: false }));
+        const f = field()!;
+        paste({ "text/plain": "/etc/hosts" });
+        f.value = "/etc/hosts";
+        await flush();
+
+        expect(attached).toHaveLength(0);
+        expect(f.value).toBe("/etc/hosts");
+      });
+
+      it("asks the backend when the engine exposed nothing at all", async () => {
+        const reader = vi.fn(async () => ({ files: [copiedPdf()], listed: true }));
+        input.setClipboardFileReader(reader);
+        paste({});
+        await flush();
+
+        expect(reader).toHaveBeenCalledTimes(1);
+        expect(attached[0].map((x) => x.name)).toEqual(["doc.pdf"]);
+      });
+
+      it("pastes the text when the backend read fails", async () => {
+        input.setClipboardFileReader(async () => { throw new Error("no clipboard"); });
+        paste({ "text/plain": "file:///tmp/a.txt" });
+        await flush();
+        expect(field()!.value).toBe("file:///tmp/a.txt");
+      });
+    });
+
+    it("isFileUriList / looksLikeFileListText", () => {
+      expect(isFileUriList("file:///a\r\nfile:///b\r\n")).toBe(true);
+      expect(isFileUriList("# comment\nfile:///a")).toBe(true);
+      expect(isFileUriList("file:///a\nhttps://e.com")).toBe(false);
+      expect(isFileUriList("")).toBe(false);
+      expect(looksLikeFileListText("/home/u/a b.png\n/home/u/c.png")).toBe(true);
+      expect(looksLikeFileListText("hello /home")).toBe(false);
     });
 
     it("the preview Send button routes through the send-click handler", () => {

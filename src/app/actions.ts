@@ -116,7 +116,7 @@ export {
 export { openEmojiPicker, openStickerPicker, openGifPicker } from "./actions/gif.js";
 
 // Media paste/pick, message hover-action handlers.
-export { sendPendingImage, handleFilePick, attachFiles, setupMessageActionHandlers } from "./actions/media.js";
+export { sendPendingImage, handleFilePick, attachFiles, readCopiedFiles, setupMessageActionHandlers } from "./actions/media.js";
 
 // `:` command executor.
 export { executeCommand } from "./actions/commands.js";

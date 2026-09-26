@@ -1212,9 +1212,40 @@ alongside `openExternalUrl` opened every link twice.
   taken back out only when it reads as the image's stand-in (a lone URL, path
   or image filename). Prose that merely shares the clipboard with an image
   stays, and becomes the caption. The async Clipboard API is spec-limited to
-  `image/png`, so it cannot recover other formats. A clipboard that carries a
-  file-manager copy only as `file://` text is also out of reach: the webview
-  cannot read the path, and the backend reads only dropped files.
+  `image/png`, so it cannot recover other formats.
+- **Pasting files copied in a file manager.** Copying files in Dolphin or
+  Nautilus puts a list of `file://` URIs on the clipboard (`text/uri-list`, and
+  `x-special/gnome-copied-files` on GNOME), not the files. WebKitGTK shows the
+  page only the list's text, and the page cannot open a path, so the backend
+  reads the list off the OS clipboard itself: `read_clipboard_files`
+  (`src-tauri/src/clipboard_files.rs`). The command takes no argument. It opens
+  only what the OS clipboard lists, so nothing the webview sends can point it
+  at a file. On Wayland it reads over the data-control protocol
+  (`wl-clipboard-rs`), which needs no keyboard focus. Where the compositor
+  lacks that protocol (Mutter), or on X11, it reads the X selection
+  (`x11-clipboard`), which XWayland mirrors from the Wayland clipboard. Both
+  crates are pure Rust, so the build needs no system library. The list is
+  parsed here, not by a clipboard crate: entries end in `\r\n` (RFC 2483, and
+  what Qt and GTK write), `#` lines are comments, URIs are percent-decoded, and
+  `file://localhost/` is local. A non-`file:` URI (a copy out of `smb://`), a
+  file on another host, a folder, an unreadable file, or a file past the 100 MB
+  per-paste cap is reported by name and skipped, and the rest still attach. The
+  composer asks for the list in three cases:
+  - The paste's text is nothing but `file:` URIs. The default paste is
+    suppressed, because nobody means to send that as a message. If the OS
+    clipboard turns out to hold no file list (a URI copied out of a terminal),
+    the text is inserted by hand instead.
+  - The text is absolute paths, one per line (Nautilus's plain-text flavour).
+    A path copied from a terminal looks the same, so the paste goes ahead and
+    is taken back out only if a file list is really there.
+  - The engine exposed nothing at all.
+
+  Any other text paste never reaches the backend. Linux only; the command
+  returns nothing elsewhere. A limit to the "only what the clipboard lists"
+  guarantee: WebKit lets a page write a URI list to the clipboard from a `copy`
+  handler, inside a user gesture. Script already running in the webview could
+  therefore stage a path and then paste it. This is weaker than the drop path,
+  whose scope only a real OS drop can widen.
 - **Dropping.** Files dropped anywhere on the window attach to the open room.
   The composer shows a dashed accent border while a drag is over the window.
   Tauri keeps OS drops for itself (`dragDropEnabled`, left at its default), so

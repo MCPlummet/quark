@@ -39,6 +39,7 @@ import {
   setupMessageActionHandlers,
   sendPendingImage,
   attachFiles,
+  readCopiedFiles,
   setupStatusBar,
   editStatus,
   jumpToMessage,
@@ -1237,6 +1238,9 @@ export function setupKeyboard(components: AppComponents): void {
       },
     });
   input.onAttachFiles(attach);
+  // A file-manager copy reaches the page only as text; the backend reads the
+  // files themselves off the OS clipboard.
+  input.setClipboardFileReader(readCopiedFiles);
   void setupFileDrop({
     onFiles: attach,
     setActive: (active) => input.setDropActive(active),

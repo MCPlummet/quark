@@ -30,6 +30,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
+# Decoding a copied file's name out of a URI for an error message (clipboard_files.rs).
+percent-encoding = "2"
 mime = "0.3"
 sha2 = "0.10"
 rand = "0.8"
@@ -91,6 +93,20 @@ tauri-plugin-single-instance = "2"
 # into ONE SQLCipher build with a vendored OpenSSL — this is what unblocks the
 # native Windows release build that the old Linux cross-compile couldn't do
 # (libsqlite3-sys failed on 'openssl/crypto.h' not found when cross-compiling).
+# Reading a file-manager copy off the OS clipboard (`clipboard_files.rs`).
+# WebKitGTK hands the page only the text flavour of a copied-files list, so the
+# backend reads the raw `text/uri-list` itself. Two small crates rather than
+# `arboard`: arboard's file-list getter splits the list on `\n` alone, and both
+# Dolphin (Qt) and Nautilus (GTK) terminate entries with `\r\n` as RFC 2483
+# says, which leaves a stray `\r` on every path; nor does it expose the raw
+# bytes to parse ourselves. These two are what arboard uses underneath anyway.
+# Both are pure Rust (wayland-backend's and x11rb's own protocol code), so no
+# libwayland/libxcb is needed at build time. Linux-only (Android is its own
+# target_os); the command returns nothing on other platforms.
+[target.'cfg(target_os = "linux")'.dependencies]
+wl-clipboard-rs = "0.9"
+x11-clipboard = "0.9"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
 

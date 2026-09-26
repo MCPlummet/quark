@@ -70,6 +70,57 @@ function looksLikeImageFallbackText(text: string): boolean {
   );
 }
 
+/**
+ * Reads a file-manager copy off the OS clipboard. `listed` says whether the
+ * clipboard held a file list at all — it can hold one with nothing attachable
+ * in it (only folders), which the reader reports itself.
+ */
+export type ClipboardFileReader = () => Promise<{ files: File[]; listed: boolean }>;
+
+const NO_COPIED_FILES = { files: [] as File[], listed: false };
+
+/** One flavour of a paste's clipboard data as text; "" when absent or unreadable. */
+function readClipboardText(data: DataTransfer | null | undefined, type: string): string {
+  try {
+    return data?.getData?.(type) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The entries of a clipboard text flavour, one per line: blank lines and
+ * `text/uri-list` `#` comments dropped.
+ */
+function listLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("#"));
+}
+
+/**
+ * Whether a paste's text is nothing but `file:` URIs — the text a file manager
+ * puts beside a copied-files list, and never something a person types. A paste
+ * like this is intercepted outright and the files read by the backend.
+ */
+export function isFileUriList(text: string): boolean {
+  const lines = listLines(text);
+  return lines.length > 0 && lines.every((l) => /^file:/i.test(l));
+}
+
+/**
+ * Whether a paste's text reads as a copied-files list in either form a file
+ * manager writes it: `file:` URIs, or absolute paths one per line (the plain
+ * text Nautilus offers). Paths are also what a user copies out of a terminal,
+ * so this only prompts a look at the OS clipboard — the paste itself goes
+ * ahead, and is taken back out only if a file list really is there.
+ */
+export function looksLikeFileListText(text: string): boolean {
+  const lines = listLines(text);
+  return lines.length > 0 && lines.every((l) => /^file:/i.test(l) || l.startsWith("/"));
+}
+
 export class Input {
   private _el: HTMLElement;
   private _modeEl: HTMLElement;
@@ -88,6 +139,7 @@ export class Input {
   private _onSendClick: (() => void) | null = null;
   private _sendBtnEl: HTMLButtonElement;
   private _onAttachFiles: ((files: File[]) => void) | null = null;
+  private _readClipboardFiles: ClipboardFileReader | null = null;
   private _onFocusEnterInsert: (() => void) | null = null;
   private _fileInputEl: HTMLInputElement | null = null;
   private _attachProgress: AttachmentProgressList;
@@ -194,47 +246,7 @@ export class Input {
     // though the file picker beside it has sent those as `m.file`/`m.video` all
     // along. Images stage in the composer preview (Enter sends, typed text is
     // the caption); everything else goes through the picker's own handler.
-    this._fieldEl.addEventListener("paste", (e) => {
-      // Standard path: items. Every file on the clipboard, not just the first —
-      // copying several files in a file manager puts them all there.
-      const fromItems = e.clipboardData?.items ? clipboardItemFiles(e.clipboardData.items) : [];
-      // Fallback: files list (used by some Linux clipboard managers)
-      const files = fromItems.length > 0
-        ? fromItems
-        : Array.from(e.clipboardData?.files ?? []);
-      if (files.length > 0) {
-        e.preventDefault();
-        this._onAttachFiles?.(files);
-        return;
-      }
-      // Async fallback: Clipboard API (Linux/Wayland may not populate clipboardData
-      // for images pasted into a text input).
-      //
-      // `preventDefault()` is not an option here — whether there is an image to
-      // paste is not known until the read resolves, and suppressing the default
-      // on the chance of one would break every ordinary text paste. So snapshot
-      // the field first and put it back if an image does turn up: the default
-      // paste has already run by then, which is how the clipboard's *text*
-      // flavour ended up typed into the composer at the same moment the image
-      // staged.
-      if (typeof navigator !== "undefined" && navigator.clipboard?.read) {
-        const before = this._snapshotForUndo();
-        void navigator.clipboard.read().then(async (clipItems) => {
-          // One image per clipboard item: an item offering the same picture as
-          // PNG *and* JPEG is one picture, not two.
-          const images: File[] = [];
-          for (const ci of clipItems) {
-            const type = ci.types.find((t) => t.startsWith("image/"));
-            if (!type) continue;
-            const blob = await ci.getType(type);
-            images.push(new File([blob], "", { type: blob.type || type }));
-          }
-          if (images.length === 0) return;
-          this._undoDefaultPaste(before);
-          this._onAttachFiles?.(images);
-        }).catch(() => { /* Clipboard API unavailable or permission denied */ });
-      }
-    });
+    this._fieldEl.addEventListener("paste", (e) => this._handlePaste(e));
 
     // Hidden file input — triggered by the attach button
     this._fileInputEl = document.createElement("input");
@@ -376,6 +388,123 @@ export class Input {
   }
 
   /**
+   * Route a paste: files the webview exposes attach directly; a copied-files
+   * list it only shows as text is read by the backend; an image it exposes
+   * only through the async Clipboard API is fetched after the fact.
+   */
+  private _handlePaste(e: ClipboardEvent): void {
+    const data = e.clipboardData;
+    // Standard path: items. Every file on the clipboard, not just the first —
+    // copying several files in a file manager puts them all there.
+    const fromItems = data?.items ? clipboardItemFiles(data.items) : [];
+    // Fallback: files list (used by some Linux clipboard managers)
+    const files = fromItems.length > 0 ? fromItems : Array.from(data?.files ?? []);
+    if (files.length > 0) {
+      e.preventDefault();
+      this._onAttachFiles?.(files);
+      return;
+    }
+
+    // A file-manager copy (Dolphin, Nautilus) reaches a WebKitGTK page only as
+    // text: the files' `file://` URIs, or their paths. The page cannot open
+    // either, so the backend reads the list off the OS clipboard itself.
+    const text = readClipboardText(data, "text/plain");
+    const uriList = readClipboardText(data, "text/uri-list");
+    if (this._readClipboardFiles && (isFileUriList(uriList) || isFileUriList(text))) {
+      // Nothing but file URIs: no one means to paste that as a message, so
+      // suppress it now rather than take it back later. If the OS clipboard
+      // turns out not to hold the files after all, the text goes in as typed.
+      e.preventDefault();
+      void this._pasteCopiedFiles(text || uriList);
+      return;
+    }
+
+    // What remains is either an ordinary text paste, or a clipboard the engine
+    // could not describe synchronously (WebKitGTK, for images). Neither can be
+    // `preventDefault()`ed on a guess — that would break every text paste — so
+    // snapshot the field and put it back only if something to attach turns up:
+    // the default paste has already run by then, which is how the clipboard's
+    // *text* flavour ended up typed into the composer at the same moment an
+    // image staged.
+    const hasText = text.length > 0;
+    const askBackend = this._readClipboardFiles && (!hasText || looksLikeFileListText(text));
+    const readImages = typeof navigator !== "undefined" && !!navigator.clipboard?.read;
+    if (!askBackend && !readImages) return;
+    const before = this._snapshotForUndo();
+    void (async () => {
+      if (askBackend) {
+        const { files: copied } = await this._readClipboardFiles!().catch(() => NO_COPIED_FILES);
+        if (copied.length > 0) {
+          // A fast answer can beat the snapshot of what the paste inserted;
+          // that snapshot is a task queued before this one, so yield once.
+          await new Promise((r) => setTimeout(r, 0));
+          this._undoDefaultPaste(before, (t) => looksLikeFileListText(t) || looksLikeImageFallbackText(t));
+          this._onAttachFiles?.(copied);
+          return;
+        }
+      }
+      if (readImages) await this._pasteClipboardImages(before);
+    })();
+  }
+
+  /**
+   * Attach the files a file manager put on the OS clipboard. `text` is what
+   * the suppressed default paste would have inserted, put in by hand if the
+   * clipboard holds no file list after all (a URI copied out of a terminal).
+   */
+  private async _pasteCopiedFiles(text: string): Promise<void> {
+    const copied = await this._readClipboardFiles!().catch(() => NO_COPIED_FILES);
+    if (copied.files.length > 0) {
+      this._onAttachFiles?.(copied.files);
+      return;
+    }
+    // A list with nothing attachable in it (only folders, say) has already been
+    // reported by the reader. Only a clipboard that held no list at all gets
+    // its text pasted back.
+    if (!copied.listed) this._insertText(text);
+  }
+
+  /**
+   * Async fallback: Clipboard API (Linux/Wayland may not populate
+   * clipboardData for images pasted into a text input). One image per
+   * clipboard item: an item offering the same picture as PNG *and* JPEG is one
+   * picture, not two.
+   */
+  private async _pasteClipboardImages(before: PasteUndo): Promise<void> {
+    try {
+      const clipItems = await navigator.clipboard.read();
+      const images: File[] = [];
+      for (const ci of clipItems) {
+        const type = ci.types.find((t) => t.startsWith("image/"));
+        if (!type) continue;
+        const blob = await ci.getType(type);
+        images.push(new File([blob], "", { type: blob.type || type }));
+      }
+      if (images.length === 0) return;
+      this._undoDefaultPaste(before);
+      this._onAttachFiles?.(images);
+    } catch {
+      /* Clipboard API unavailable or permission denied */
+    }
+  }
+
+  /** Insert text at the caret as a paste would, keeping the field's undo history. */
+  private _insertText(text: string): void {
+    if (!text) return;
+    const field = this._fieldEl;
+    field.focus();
+    const viaCommand =
+      typeof document.execCommand === "function" && document.execCommand("insertText", false, text);
+    if (!viaCommand) {
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? field.value.length;
+      field.setRangeText(text, start, end, "end");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    this._autoGrow();
+  }
+
+  /**
    * Record what the field held before a default paste, and what it holds
    * immediately after — the two values {@link _undoDefaultPaste} needs.
    *
@@ -416,13 +545,16 @@ export class Input {
    * {@link looksLikeImageFallbackText}. Anything else stays, and becomes the
    * staged image's caption (#84), which is visible and removable either way.
    */
-  private _undoDefaultPaste(undo: PasteUndo): void {
+  private _undoDefaultPaste(
+    undo: PasteUndo,
+    isStandIn: (inserted: string) => boolean = looksLikeImageFallbackText,
+  ): void {
     if (undo.pasted === null) return; // the default paste has not landed yet
     if (this._fieldEl.value !== undo.pasted) return; // the user has typed since
     if (undo.pasted === undo.value) return; // nothing was inserted
     // …and only when what landed was the image's own stand-in, not text the
     // user meant to paste alongside it.
-    if (!looksLikeImageFallbackText(insertedText(undo.value, undo.pasted))) return;
+    if (!isStandIn(insertedText(undo.value, undo.pasted))) return;
     this._fieldEl.value = undo.value;
     if (undo.caret !== null) {
       this._fieldEl.selectionStart = this._fieldEl.selectionEnd = undo.caret;
@@ -438,6 +570,15 @@ export class Input {
    */
   onAttachFiles(handler: (files: File[]) => void): void {
     this._onAttachFiles = handler;
+  }
+
+  /**
+   * Register how a paste reads files a file manager copied to the OS clipboard
+   * (`read_clipboard_files`). Without one, a paste of copied files falls back
+   * to pasting their text.
+   */
+  setClipboardFileReader(reader: ClipboardFileReader): void {
+    this._readClipboardFiles = reader;
   }
 
   /**

@@ -1413,6 +1413,21 @@ pub async fn read_dropped_file(
     .map_err(|e| format!("Failed to read dropped file: {e}"))?
 }
 
+/// Read the files a file manager copied to the OS clipboard, so a paste can
+/// attach them (WebKitGTK shows the page only their `file://` text). Takes no
+/// path from the frontend: it reads only what the OS clipboard lists — see
+/// `clipboard_files`. Empty when the clipboard holds no file list.
+#[tauri::command]
+pub async fn read_clipboard_files() -> Result<crate::clipboard_files::ClipboardFiles, String> {
+    // A clipboard owner that never answers would otherwise hold the paste open
+    // for good; the blocking read is abandoned (not cancelled) past this.
+    let read = tauri::async_runtime::spawn_blocking(crate::clipboard_files::read_clipboard_files);
+    match tokio::time::timeout(std::time::Duration::from_secs(5), read).await {
+        Ok(joined) => joined.map_err(|e| format!("Failed to read the clipboard: {e}"))?,
+        Err(_) => Err("The clipboard didn't answer".into()),
+    }
+}
+
 /// Upload file data (base64-encoded) and send it as an m.file event.
 /// Used for the file picker attach flow.
 #[tauri::command]
