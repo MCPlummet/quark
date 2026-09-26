@@ -137,6 +137,20 @@ describe("Timeline", () => {
       expect(body).toBeNull();
     });
 
+    // MSC2530 captions ride on any media type; a staged file or video sent
+    // with typed text carries one.
+    it("renders the caption beneath a file and a video", () => {
+      timeline.setMessages([
+        makeMsg({ id: "$f", type: "file", mediaUrl: "mxc://x/f", mediaAlt: "notes.pdf", caption: "the notes" }),
+        makeMsg({ id: "$v", type: "video", mediaUrl: "mxc://x/v", mediaAlt: "clip.mp4", caption: "watch this" }),
+      ]);
+
+      const captions = [...timeline.getElement().querySelectorAll(".message__image-caption")].map(
+        (el) => el.textContent,
+      );
+      expect(captions).toEqual(["the notes", "watch this"]);
+    });
+
     it("renders the caption beneath an image when present", () => {
       timeline.setMessages([
         makeMsg({ type: "image", mediaUrl: "https://x.com/img.png", caption: "a wild sunset" }),

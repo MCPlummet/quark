@@ -919,12 +919,10 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
 /// the same `innerHTML` sink.
 pub(crate) fn extract_caption(msgtype: &MessageType) -> (Option<String>, Option<String>) {
     match msgtype {
-        MessageType::Image(image) => (
-            image.caption().map(|c| c.to_owned()),
-            image
-                .formatted_caption()
-                .map(|f| crate::matrix::html::sanitize(&f.body)),
-        ),
+        MessageType::Image(m) => caption_of(m.caption(), m.formatted_caption()),
+        MessageType::Video(m) => caption_of(m.caption(), m.formatted_caption()),
+        MessageType::File(m) => caption_of(m.caption(), m.formatted_caption()),
+        MessageType::Audio(m) => caption_of(m.caption(), m.formatted_caption()),
         _ => (None, None),
     }
 }
@@ -1234,7 +1232,30 @@ pub async fn edit_message(
     Ok(response_event_id)
 }
 
-/// MSC2530 body mapping for outgoing images: with a caption, the event body is
+/// A caption's `formatted_body`, set only when the body represents a caption —
+/// which is exactly when a `filename` field was split out of it. An uncaptioned
+/// upload's body is the filename, and a formatted filename is not a thing the
+/// spec has a meaning for.
+fn caption_html(filename_field: &Option<String>, caption: Caption<'_>) -> Option<FormattedBody> {
+    filename_field
+        .as_ref()
+        .and(caption.formatted)
+        .map(|html| FormattedBody::html(html.to_owned()))
+}
+
+/// A received caption, and its HTML sanitised for the webview.
+fn caption_of(
+    caption: Option<&str>,
+    formatted: Option<&FormattedBody>,
+) -> (Option<String>, Option<String>) {
+    (
+        caption.map(str::to_owned),
+        formatted.map(|f| crate::matrix::html::sanitize(&f.body)),
+    )
+}
+
+/// MSC2530 body mapping for outgoing media (`m.image`, `m.video`, `m.file`
+/// alike): with a caption, the event body is
 /// the caption and `filename` carries the real name; without one, the body is
 /// the filename and the field is omitted — matching the pre-caption wire format,
 /// which ruma's `caption()` reader treats as captionless.
@@ -1296,10 +1317,7 @@ fn build_image_content(
     // `formatted` is only set when the body represents a caption — an
     // uncaptioned upload's body is the filename, and a formatted filename is
     // not a thing the spec has a meaning for.
-    img_content.formatted = filename_field
-        .as_ref()
-        .and(caption.formatted)
-        .map(|html| FormattedBody::html(html.to_owned()));
+    img_content.formatted = caption_html(&filename_field, caption);
     img_content.filename = filename_field;
     img_content
 }
@@ -1406,9 +1424,11 @@ pub(crate) fn sent_echo(
         .ok_or_else(|| "Sent event did not convert".to_owned())
 }
 
-/// Build the `m.file` content for a media source. See `build_image_content`.
+/// Build the `m.file` content for a media source, with an optional MSC2530
+/// caption mapped exactly as an image's is. See `build_image_content`.
 fn build_file_content(
-    body: &str,
+    filename: &str,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     file_size: Option<u64>,
@@ -1417,17 +1437,22 @@ fn build_file_content(
     file_info.mimetype = Some(mime_type.to_string());
     file_info.size = file_size.and_then(|s| UInt::try_from(s).ok());
 
-    let mut file_content = FileMessageEventContent::new(body.to_string(), source);
+    let (body, filename_field) = build_image_body(filename, caption.body);
+    let mut file_content = FileMessageEventContent::new(body, source);
     file_content.info = Some(Box::new(file_info));
+    file_content.formatted = caption_html(&filename_field, caption);
+    file_content.filename = filename_field;
     file_content
 }
 
-/// Send a generic file (m.file) event to a room, optionally into a thread or as
-/// a reply.
+/// Send a generic file (m.file) event to a room, with an optional MSC2530
+/// caption, optionally into a thread or as a reply.
+#[allow(clippy::too_many_arguments)]
 pub async fn send_file(
     client: &Client,
     room_id: &str,
-    body: &str,
+    filename: &str,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     file_size: Option<u64>,
@@ -1438,7 +1463,7 @@ pub async fn send_file(
         .get_room(&room_id)
         .ok_or_else(|| format!("Room {} not found", room_id))?;
 
-    let file_content = build_file_content(body, source, mime_type, file_size);
+    let file_content = build_file_content(filename, caption, source, mime_type, file_size);
 
     let mut msg_content = RoomMessageEventContent::new(MessageType::File(file_content));
     msg_content.relates_to = target.relation()?;
@@ -1446,9 +1471,12 @@ pub async fn send_file(
     send_with_echo(client, &room, msg_content, "file").await
 }
 
-/// Build the `m.video` content for a media source. See `build_image_content`.
+/// Build the `m.video` content for a media source, with an optional MSC2530
+/// caption. See `build_image_content`.
+#[allow(clippy::too_many_arguments)]
 fn build_video_content(
-    body: &str,
+    filename: &str,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
@@ -1465,17 +1493,22 @@ fn build_video_content(
     video_info.size = file_size.and_then(|s| UInt::try_from(s).ok());
     video_info.duration = duration_ms.map(Duration::from_millis);
 
-    let mut video_content = VideoMessageEventContent::new(body.to_string(), source);
+    let (body, filename_field) = build_image_body(filename, caption.body);
+    let mut video_content = VideoMessageEventContent::new(body, source);
     video_content.info = Some(Box::new(video_info));
+    video_content.formatted = caption_html(&filename_field, caption);
+    video_content.filename = filename_field;
     video_content
 }
 
-/// Send a video (m.video) event to a room, optionally into a thread or as a
-/// reply.
+/// Send a video (m.video) event to a room, with an optional MSC2530 caption,
+/// optionally into a thread or as a reply.
+#[allow(clippy::too_many_arguments)]
 pub async fn send_video(
     client: &Client,
     room_id: &str,
-    body: &str,
+    filename: &str,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
@@ -1490,7 +1523,7 @@ pub async fn send_video(
         .ok_or_else(|| format!("Room {} not found", room_id))?;
 
     let video_content = build_video_content(
-        body, source, mime_type, width, height, duration_ms, file_size,
+        filename, caption, source, mime_type, width, height, duration_ms, file_size,
     );
 
     let mut msg_content = RoomMessageEventContent::new(MessageType::Video(video_content));
@@ -1682,6 +1715,7 @@ mod tests {
         // synced event, so the relation has to survive the conversion.
         let file = build_file_content(
             "notes.pdf",
+            Caption::none(),
             MediaSource::Plain("mxc://example.com/notes".into()),
             "application/pdf",
             Some(1234),
@@ -2192,6 +2226,7 @@ mod tests {
     fn test_file_content_from_encrypted_source_has_no_plaintext_url() {
         let content = super::build_file_content(
             "notes.pdf",
+            Caption::none(),
             MediaSource::Encrypted(Box::new(test_encrypted_file())),
             "application/pdf",
             Some(1024),
@@ -2206,6 +2241,7 @@ mod tests {
     fn test_video_content_from_encrypted_source_has_no_plaintext_url() {
         let content = super::build_video_content(
             "clip.mp4",
+            Caption::none(),
             MediaSource::Encrypted(Box::new(test_encrypted_file())),
             "video/mp4",
             Some(640),
@@ -2281,6 +2317,59 @@ mod tests {
         let json = serde_json::to_value(&content).expect("serialisable");
         assert_eq!(json["body"], "cat.png");
         assert!(json.get("formatted_body").is_none(), "no caption, no html: {json}");
+    }
+
+    /// MSC2530 captions apply to every media type: the composer's text becomes
+    /// the caption of the first staged attachment, whatever it is.
+    #[test]
+    fn test_captioned_file_and_video_map_like_an_image() {
+        let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
+        let caption = Caption { body: Some("the notes"), formatted: Some("<b>the</b> notes") };
+
+        let file = super::build_file_content(
+            "notes.pdf", caption, MediaSource::Plain(uri.to_owned()), "application/pdf", Some(10),
+        );
+        let json = serde_json::to_value(&file).expect("serialisable");
+        assert_eq!(json["body"], "the notes");
+        assert_eq!(json["filename"], "notes.pdf");
+        assert_eq!(json["formatted_body"], "<b>the</b> notes");
+
+        let video = super::build_video_content(
+            "clip.mp4", caption, MediaSource::Plain(uri.to_owned()), "video/mp4",
+            None, None, None, None,
+        );
+        let json = serde_json::to_value(&video).expect("serialisable");
+        assert_eq!(json["body"], "the notes");
+        assert_eq!(json["filename"], "clip.mp4");
+
+        // Uncaptioned: the pre-caption wire format, body = filename.
+        let bare = super::build_file_content(
+            "notes.pdf", Caption::none(), MediaSource::Plain(uri.to_owned()), "application/pdf", None,
+        );
+        let json = serde_json::to_value(&bare).expect("serialisable");
+        assert_eq!(json["body"], "notes.pdf");
+        assert!(json.get("filename").is_none());
+        assert!(json.get("formatted_body").is_none());
+    }
+
+    /// The read path surfaces a file's or video's caption as it does an image's,
+    /// so a captioned upload renders its caption instead of losing it.
+    #[test]
+    fn test_captions_are_read_back_from_files_and_videos() {
+        let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
+        let file = super::build_file_content(
+            "notes.pdf", Caption::plain(Some("the notes")), MediaSource::Plain(uri.to_owned()),
+            "application/pdf", None,
+        );
+        assert_eq!(
+            super::extract_caption(&MessageType::File(file)),
+            (Some("the notes".to_owned()), None)
+        );
+        let video = super::build_video_content(
+            "clip.mp4", Caption::plain(Some("watch")), MediaSource::Plain(uri.to_owned()),
+            "video/mp4", None, None, None, None,
+        );
+        assert_eq!(super::extract_caption(&MessageType::Video(video)).0.as_deref(), Some("watch"));
     }
 
     #[test]

@@ -1428,8 +1428,8 @@ pub async fn read_clipboard_files() -> Result<crate::clipboard_files::ClipboardF
     }
 }
 
-/// Upload file data (base64-encoded) and send it as an m.file event.
-/// Used for the file picker attach flow.
+/// Upload file data (base64-encoded) and send it as an m.file event, with an
+/// optional MSC2530 caption. Used for the file picker attach flow.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn send_file(
@@ -1440,6 +1440,8 @@ pub async fn send_file(
     mime_type: String,
     filename: String,
     file_size: Option<u64>,
+    caption: Option<String>,
+    formatted_caption: Option<String>,
     reply_to_event_id: Option<String>,
     thread_root_event_id: Option<String>,
     upload_id: Option<String>,
@@ -1455,6 +1457,7 @@ pub async fn send_file(
         &client,
         &room_id,
         &filename,
+        Caption { body: caption.as_deref(), formatted: formatted_caption.as_deref() },
         source,
         &mime_type,
         file_size,
@@ -1482,6 +1485,8 @@ pub async fn send_video(
     height: Option<u64>,
     duration_ms: Option<u64>,
     file_size: Option<u64>,
+    caption: Option<String>,
+    formatted_caption: Option<String>,
     reply_to_event_id: Option<String>,
     thread_root_event_id: Option<String>,
     upload_id: Option<String>,
@@ -1497,6 +1502,7 @@ pub async fn send_video(
         &client,
         &room_id,
         &filename,
+        Caption { body: caption.as_deref(), formatted: formatted_caption.as_deref() },
         source,
         &mime_type,
         width,

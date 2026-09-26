@@ -230,7 +230,7 @@ export interface MessageData {
   /** Natural pixel dimensions of the image — used to reserve layout space before src loads */
   mediaWidth?: number;
   mediaHeight?: number;
-  /** Media caption (MSC2530) shown beneath an image; absent when the body is just a filename. */
+  /** Media caption (MSC2530) shown beneath the media; absent when the body is just a filename. */
   caption?: string;
   /**
    * The caption's `formatted_body`, when it has one. Rendered in place of the
@@ -557,6 +557,8 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     row.classList.add("message--video");
     const aff = buildVideoAffordance(msg.mediaUrl, msg.mediaAlt, msg.mediaMimeType, msg.mediaEncryptionInfo, msg.mediaThumbnailUrl, msg.mediaThumbnailEncryptionInfo);
     row.appendChild(aff);
+    // MSC2530 captions ride on any media type, not only images.
+    appendCaption(row, "message__body", msg.caption, msg.captionHtml);
   } else if (type === "sticker") {
     const img = document.createElement("img");
     img.className = "message__sticker";
@@ -576,6 +578,7 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     // where the body is the filename.
     const aff = buildFileAffordance(msg.mediaUrl, msg.mediaAlt ?? msg.body, msg.mediaMimeType, msg.mediaEncryptionInfo);
     row.appendChild(aff);
+    appendCaption(row, "message__body", msg.caption, msg.captionHtml);
   } else {
     // Text / system
     const body = document.createElement("div");
