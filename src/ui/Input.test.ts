@@ -127,12 +127,21 @@ describe("Input", () => {
         createObjectURL: vi.fn(() => "blob:mock"),
         revokeObjectURL: vi.fn(),
       });
+      attached = [];
+      // Stand-in for the app's `attachFiles`: record what the composer handed
+      // over, and stage the first image the way the app does.
+      input.onAttachFiles((files) => {
+        attached.push(files);
+        const img = files.find((f) => f.type.startsWith("image/"));
+        if (img) input.showImagePreview(img, img.name || undefined);
+      });
     });
 
     afterEach(() => {
       vi.unstubAllGlobals();
     });
 
+    let attached: File[][] = [];
     const blob = () => new Blob(["x"], { type: "image/png" });
     const preview = () => input.getElement().querySelector<HTMLElement>(".paste-preview");
     const field = () => input.getElement().querySelector<HTMLTextAreaElement>(".input-bar__field");
@@ -205,20 +214,62 @@ describe("Input", () => {
     // #83: every branch filtered on `image/`, so a PDF fell through to the
     // browser's default text paste and vanished — even though the attach button
     // beside it has sent those as m.file all along.
-    it("routes a pasted non-image file to the file-pick handler", () => {
-      const picked: File[] = [];
-      input.onFilePick((f) => picked.push(f));
+    it("hands a pasted non-image file to the attach handler", () => {
       const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
 
-      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      const evt = new Event("paste", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
       Object.defineProperty(evt, "clipboardData", {
         value: { items: [{ type: "application/pdf", getAsFile: () => pdf }], files: [] },
       });
       field()?.dispatchEvent(evt);
 
-      expect(picked).toHaveLength(1);
-      expect(picked[0].name).toBe("notes.pdf");
-      expect(input.hasPendingImage()).toBe(false);
+      expect(attached).toHaveLength(1);
+      expect(attached[0].map((f) => f.name)).toEqual(["notes.pdf"]);
+      expect(evt.defaultPrevented).toBe(true);
+    });
+
+    // Copying several files in a file manager puts all of them on the
+    // clipboard; the handler used to return after the first.
+    it("hands over every file on the clipboard, not just the first", () => {
+      const a = new File(["a"], "a.txt", { type: "text/plain" });
+      const b = new File(["b"], "b.zip", { type: "application/zip" });
+      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      Object.defineProperty(evt, "clipboardData", {
+        value: {
+          items: [
+            { type: "text/plain", getAsFile: () => a },
+            { type: "text/plain", getAsFile: () => null }, // a string flavour
+            { type: "application/zip", getAsFile: () => b },
+          ],
+          files: [],
+        },
+      });
+      field()?.dispatchEvent(evt);
+
+      expect(attached[0].map((f) => f.name)).toEqual(["a.txt", "b.zip"]);
+    });
+
+    it("falls back to clipboardData.files when items carry none", () => {
+      const a = new File(["a"], "a.txt", { type: "text/plain" });
+      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      Object.defineProperty(evt, "clipboardData", { value: { items: [], files: [a] } });
+      field()?.dispatchEvent(evt);
+
+      expect(attached[0]).toEqual([a]);
+    });
+
+    // An engine that hands back an untyped File for an image clipboard target
+    // would otherwise send the picture as a nameless `m.file`.
+    it("keeps the clipboard item's image type when the file has none", () => {
+      const untyped = new File(["x"], "", { type: "" });
+      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      Object.defineProperty(evt, "clipboardData", {
+        value: { items: [{ type: "image/bmp", getAsFile: () => untyped }], files: [] },
+      });
+      field()?.dispatchEvent(evt);
+
+      expect(attached[0][0].type).toBe("image/bmp");
+      expect(input.hasPendingImage()).toBe(true);
     });
 
     it("keeps a pasted image file's own name instead of inventing one", () => {

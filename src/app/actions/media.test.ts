@@ -66,7 +66,7 @@ vi.mock("./messages.js", () => ({
   cancelReply: () => cancelReply(),
 }));
 
-import { sendPendingImage, handleFilePick } from "./media.js";
+import { sendPendingImage, handleFilePick, attachFiles } from "./media.js";
 import { setComponents, _shortcodeToMxc } from "./context.js";
 import { AppState } from "../state.js";
 
@@ -538,5 +538,88 @@ describe("untyped attachments still upload (#83)", () => {
     await sendPendingImage(b, null);
 
     expect(sendPastedImage.mock.calls[0][0].filename).toMatch(/^pasted-image-\d+\.svg$/);
+  });
+});
+
+// #83: the picker, a paste and a drop all end here, so the routing rule is
+// asserted once rather than per entry point.
+describe("attachFiles", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]);
+
+  it("stages the first image and sends everything else", async () => {
+    const onStaged = vi.fn();
+    const img = new File(["x"], "cat.png", { type: "image/png" });
+    const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
+
+    await attachFiles([pdf, img], { onStaged });
+
+    expect(showImagePreview).toHaveBeenCalledWith(img, "cat.png");
+    expect(onStaged).toHaveBeenCalledTimes(1);
+    expect(sendFile.mock.calls.map(([s]) => s.filename)).toEqual(["notes.pdf"]);
+    expect(sendPastedImage).not.toHaveBeenCalled();
+  });
+
+  // The composer has room to stage one image; the rest of a multi-image drop
+  // must not be silently discarded.
+  it("sends images after the first straight away, uncaptioned", async () => {
+    const a = new File(["a"], "a.png", { type: "image/png" });
+    const b = new File(["b"], "b.jpg", { type: "image/jpeg" });
+
+    await attachFiles([a, b]);
+
+    expect(showImagePreview).toHaveBeenCalledTimes(1);
+    expect(showImagePreview).toHaveBeenCalledWith(a, "a.png");
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.filename).toBe("b.jpg");
+    expect(send.caption).toBeUndefined();
+  });
+
+  // Restoring a failed extra image would replace the one the user staged.
+  it("does not restore a failed extra image over the staged one", async () => {
+    sendPastedImage.mockRejectedValueOnce(new Error("boom"));
+    const a = new File(["a"], "a.png", { type: "image/png" });
+    const b = new File(["b"], "b.png", { type: "image/png" });
+
+    await attachFiles([a, b]);
+
+    expect(showImagePreview).toHaveBeenCalledTimes(1);
+    expect(rowApi.fail).toHaveBeenCalledWith("boom");
+  });
+
+  it("recognises an untyped image by its bytes and stages it", async () => {
+    const untyped = new File([PNG], "shot", { type: "" });
+
+    await attachFiles([untyped]);
+
+    const [staged] = showImagePreview.mock.calls[0] as unknown as [File, string | undefined];
+    expect(staged.type).toBe("image/png");
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it("sends unrecognisable untyped bytes as a file", async () => {
+    const mystery = new File([new Uint8Array([1, 2, 3])], "blob.bin", { type: "" });
+
+    await attachFiles([mystery]);
+
+    expect(showImagePreview).not.toHaveBeenCalled();
+    expect(sendFile.mock.calls[0][0].mimeType).toBe("application/octet-stream");
+  });
+
+  it("names a nameless non-image file rather than uploading it as ''", async () => {
+    await attachFiles([new File(["hi"], "", { type: "text/plain" })]);
+
+    expect(sendFile.mock.calls[0][0].filename).toMatch(/^attachment-\d+$/);
+  });
+
+  it("carries the open thread for every file it sends", async () => {
+    AppState.set("threadRootEventId", "$root");
+    const a = new File(["a"], "a.png", { type: "image/png" });
+    const b = new File(["b"], "b.png", { type: "image/png" });
+    const t = new File(["t"], "t.txt", { type: "text/plain" });
+
+    await attachFiles([a, b, t]);
+
+    expect(sendPastedImage.mock.calls[0][0].threadRootEventId).toBe("$root");
+    expect(sendFile.mock.calls[0][0].threadRootEventId).toBe("$root");
   });
 });
