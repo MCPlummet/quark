@@ -262,6 +262,7 @@ async fn maybe_notify(
         .try_state::<Mutex<NotificationConfig>>()
         .and_then(|s| s.lock().ok().map(|c| c.clone()))
     else {
+        crate::push_wake::note_warm_event(&timeline_event.event_id);
         return;
     };
 
@@ -299,6 +300,9 @@ async fn maybe_notify(
             crate::notify::deliver(app, &spec);
         }
     }
+    // Last, so a push waiting on this event (`WakePlan::HandOff`) is released
+    // only once whatever notification it deserved is already on screen.
+    crate::push_wake::note_warm_event(&timeline_event.event_id);
 }
 
 /// Register matrix-sdk event handlers that push sync events to the frontend.

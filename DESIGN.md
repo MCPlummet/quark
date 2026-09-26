@@ -305,6 +305,19 @@ overwhelmed its own homeserver with:
   The progress stamp comes from `sync_with_callback`, because `Client::sync`
   loops internally and returns only on error: its success arm is reached about
   as often as never.
+
+  Even a loop inside that window only *probably* delivers, so an event push
+  does not stand down flat: it **hands off** (`WakePlan::HandOff`), waiting up
+  to `WARM_HANDOFF` (10 s) for the warm handler to report that it has processed
+  that very event id (`note_warm_event`, stamped at the end of
+  `events::maybe_notify`), and syncs itself only if it never does. Standing
+  down outright lost the event in the commonest Android state of all — a
+  resident process the OS has frozen. The clock was stamped just before the
+  freeze and read as live; the push service stopped at once, and the process
+  was re-frozen before the loop it deferred to had run (#90). The wait is what
+  keeps it thawed: the service holds the foreground, which also exempts it from
+  Doze's network cut, for as long as the loop needs. Counts-only pushes still
+  stand down, since a warm app clears the room from the receipt itself.
 - **A burst coalesces.** `WakeGuard` admits one push sync at a time, released on
   `Drop` so a panicking sync reopens it instead of wedging push shut.
 - **One `Client` per store.** `background_client` reuses the app's client when
