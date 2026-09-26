@@ -752,6 +752,13 @@ pub async fn register(
     let result = client.pusher().set(registration.to_pusher()).await;
 
     if result.is_ok() {
+        // The one line that proves the homeserver holds a pusher for this
+        // device. Without it, "registered" is only ever inferred from Settings.
+        tracing::info!(
+            "Registered pusher {} with the homeserver (gateway {})",
+            next.app_id,
+            next.gateway_url
+        );
         state.pending_delete.retain(|p| p != &next);
         state.last = Some(next);
     }

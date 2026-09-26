@@ -965,7 +965,13 @@ async fn collect(
     // A wake syncs a batch, so most of what arrives may already have been read
     // on another device. Delivered-to-this-phone and seen-by-this-person are
     // different things, and only the second earns silence.
-    if already_seen(event.timestamp, collector.read_marker(room).await) {
+    let marker = collector.read_marker(room).await;
+    if already_seen(event.timestamp, marker) {
+        tracing::debug!(
+            "Push wake: {} in {room_id} is already read (event ts {}, read marker {marker:?})",
+            event.event_id,
+            event.timestamp
+        );
         collector.suppressed.fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -996,10 +1002,19 @@ async fn collect(
         push: crate::notify::PushEval::from_actions(push_actions),
     };
 
-    let Some(spec) = crate::notify::evaluate(&input, &collector.config) else { return };
+    let spec = match crate::notify::assess(&input, &collector.config) {
+        Ok(spec) => spec,
+        Err(reason) => {
+            // One line per declined event: a wake's batch is small, and the
+            // reason is the whole diagnosis when a push "does nothing".
+            tracing::info!("Push wake: not notifying {} in {room_id}: {reason:?}", input.event_id);
+            return;
+        }
+    };
     // Shares the warm path's dedup ring, so a push that arrives for an event the
     // app already showed before its webview died does not show it twice.
     if !crate::events::claim_notification(&spec.event_id) {
+        tracing::info!("Push wake: {} was already notified in this process", spec.event_id);
         return;
     }
     if let Ok(mut out) = collector.out.lock() {
