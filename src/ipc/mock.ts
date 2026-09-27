@@ -1,7 +1,7 @@
 // Mock IPC layer for browser-only dev mode (no Tauri backend)
 // Provides fake data so the UI renders and can be interacted with
 
-import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember } from "./types.js";
+import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember, SentMessage } from "./types.js";
 
 export interface CacheStats {
   total_size_bytes: number;
@@ -56,6 +56,12 @@ function mockRelation(args?: Record<string, unknown>): Partial<TimelineEvent> {
     in_reply_to: (args?.replyToEventId as string | null) ?? null,
     thread_root: (args?.threadRootEventId as string | null) ?? null,
   };
+}
+
+/** Record a sent attachment and answer the way the backend does: id plus echo. */
+function mockSent(event: TimelineEvent): SentMessage {
+  MOCK_TIMELINE.push(event);
+  return { event_id: event.event_id, echo: event };
 }
 
 function mockEvent(sender: string, body: string, minutesAgo: number): TimelineEvent {
@@ -214,6 +220,10 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         prev_batch: start > 0 ? `mock-prev-${start}` : null,
         next_batch: end < MOCK_TIMELINE.length ? `mock-next-${end}` : null,
       };
+    }
+    case "get_event": {
+      const targetId = (args?.eventId as string) ?? "";
+      return MOCK_TIMELINE.find((e) => e.event_id === targetId) ?? null;
     }
     case "paginate_forward": {
       // Mock token format: "mock-next-<index>" — index is the next event to return
@@ -432,7 +442,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "send_pasted_image": {
       const filename = (args?.filename as string) ?? "pasted-image.png";
       const caption = (args?.caption as string | null) ?? null;
-      MOCK_TIMELINE.push({
+      return mockSent({
         ...mockEvent("@you:matrix.org", caption ?? `[Image: ${filename}]`, 0),
         msg_type: "m.image",
         media_url: "",
@@ -441,32 +451,51 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         caption_formatted: (args?.formattedCaption as string | null) ?? null,
         ...mockRelation(args),
       } as TimelineEvent);
-      return "$mock-paste-event-id";
     }
     case "send_file": {
       const filename = (args?.filename as string) ?? "file";
-      MOCK_TIMELINE.push({
-        ...mockEvent("@you:matrix.org", `[File: ${filename}]`, 0),
+      const caption = (args?.caption as string | null) ?? null;
+      return mockSent({
+        ...mockEvent("@you:matrix.org", caption ?? `[File: ${filename}]`, 0),
         msg_type: "m.file",
         media_url: "",
         media_mimetype: (args?.mimeType as string) ?? "application/octet-stream",
+        filename: caption ? filename : null,
+        caption,
+        caption_formatted: (args?.formattedCaption as string | null) ?? null,
         ...mockRelation(args),
       } as TimelineEvent);
-      return "$mock-file-event-id";
     }
     case "send_video": {
       const filename = (args?.filename as string) ?? "video.mp4";
-      MOCK_TIMELINE.push({
-        ...mockEvent("@you:matrix.org", `[Video: ${filename}]`, 0),
+      const caption = (args?.caption as string | null) ?? null;
+      return mockSent({
+        ...mockEvent("@you:matrix.org", caption ?? `[Video: ${filename}]`, 0),
         msg_type: "m.video",
+        filename: caption ? filename : null,
+        caption,
+        caption_formatted: (args?.formattedCaption as string | null) ?? null,
         media_url: "",
         media_mimetype: (args?.mimeType as string) ?? "video/mp4",
         media_width: (args?.width as number) ?? null,
         media_height: (args?.height as number) ?? null,
         ...mockRelation(args),
       } as TimelineEvent);
-      return "$mock-video-event-id";
     }
+    case "read_dropped_file": {
+      // Mock mode has no native drop events to produce a path, so this only
+      // answers a direct call — a small text file named after the path.
+      const path = (args?.path as string) ?? "dropped.txt";
+      return {
+        data_base64: btoa("mock dropped file"),
+        mime_type: "text/plain",
+        filename: path.split(/[\\/]/).pop() || "dropped.txt",
+      };
+    }
+    case "read_clipboard_files":
+      // The browser has no OS clipboard for the backend to read: report "no
+      // file list", which is what every ordinary text paste gets too.
+      return { files: [], errors: [] };
     case "send_sticker": {
       // Pushed to the timeline like every other send: a mock that returns an id
       // and nothing else cannot show browser dev mode where a sticker lands,

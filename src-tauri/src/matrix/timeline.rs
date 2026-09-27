@@ -829,6 +829,7 @@ fn convert_sync_encrypted(
     >,
 ) -> TimelineEvent {
     let timestamp: u64 = ev.origin_server_ts.get().into();
+    let (in_reply_to, thread_root) = extract_encrypted_relations(ev.content.relates_to.as_ref());
     TimelineEvent {
         event_id: ev.event_id.to_string(),
         sender: ev.sender.to_string(),
@@ -838,8 +839,8 @@ fn convert_sync_encrypted(
         msg_type: "m.room.encrypted".to_string(),
         is_edit: false,
         relates_to_event_id: None,
-        in_reply_to: None,
-        thread_root: None,
+        in_reply_to,
+        thread_root,
         media_url: None,
         media_mimetype: None,
         media_width: None,
@@ -918,12 +919,10 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
 /// the same `innerHTML` sink.
 pub(crate) fn extract_caption(msgtype: &MessageType) -> (Option<String>, Option<String>) {
     match msgtype {
-        MessageType::Image(image) => (
-            image.caption().map(|c| c.to_owned()),
-            image
-                .formatted_caption()
-                .map(|f| crate::matrix::html::sanitize(&f.body)),
-        ),
+        MessageType::Image(m) => caption_of(m.caption(), m.formatted_caption()),
+        MessageType::Video(m) => caption_of(m.caption(), m.formatted_caption()),
+        MessageType::File(m) => caption_of(m.caption(), m.formatted_caption()),
+        MessageType::Audio(m) => caption_of(m.caption(), m.formatted_caption()),
         _ => (None, None),
     }
 }
@@ -1088,15 +1087,48 @@ pub(crate) fn extract_relations<C>(
             }
             Relation::Thread(thread) => {
                 thread_root = Some(thread.event_id.to_string());
-                if let Some(r) = &thread.in_reply_to {
-                    in_reply_to = Some(r.event_id.to_string());
-                }
+                in_reply_to = thread_reply_target(thread);
             }
             _ => {}
         }
     }
 
     (is_edit, relates_to_event_id, in_reply_to, thread_root)
+}
+
+/// The event a threaded message genuinely replies to, if any.
+///
+/// Every threaded event carries an `m.in_reply_to` so clients without thread
+/// support can still show *something*; when `is_falling_back` is set that
+/// pointer is just "the latest event in the thread", not a reply the sender
+/// chose, and must not be surfaced as one.
+fn thread_reply_target(thread: &matrix_sdk::ruma::events::relation::Thread) -> Option<String> {
+    if thread.is_falling_back {
+        return None;
+    }
+    thread.in_reply_to.as_ref().map(|r| r.event_id.to_string())
+}
+
+/// Reply and thread pointers from an event that is still encrypted.
+///
+/// `m.relates_to` travels in the clear on an encrypted event, so a message we
+/// cannot read yet still says what it replies to and which thread it belongs
+/// in. Hardcoding both to `None` rendered an undecryptable reply without its
+/// reply banner and an undecryptable thread reply in the main timeline (#106).
+///
+/// Edits are deliberately not reported: marking an unreadable replacement as an
+/// edit would overwrite the original's body with the UTD placeholder.
+fn extract_encrypted_relations(
+    relates_to: Option<&matrix_sdk::ruma::events::room::encrypted::Relation>,
+) -> (Option<String>, Option<String>) {
+    use matrix_sdk::ruma::events::room::encrypted::Relation as EncRelation;
+    match relates_to {
+        Some(EncRelation::Reply { in_reply_to }) => (Some(in_reply_to.event_id.to_string()), None),
+        Some(EncRelation::Thread(thread)) => {
+            (thread_reply_target(thread), Some(thread.event_id.to_string()))
+        }
+        _ => (None, None),
+    }
 }
 
 /// Send a plain text message to a room, optionally as a reply.
@@ -1200,7 +1232,30 @@ pub async fn edit_message(
     Ok(response_event_id)
 }
 
-/// MSC2530 body mapping for outgoing images: with a caption, the event body is
+/// A caption's `formatted_body`, set only when the body represents a caption —
+/// which is exactly when a `filename` field was split out of it. An uncaptioned
+/// upload's body is the filename, and a formatted filename is not a thing the
+/// spec has a meaning for.
+fn caption_html(filename_field: &Option<String>, caption: Caption<'_>) -> Option<FormattedBody> {
+    filename_field
+        .as_ref()
+        .and(caption.formatted)
+        .map(|html| FormattedBody::html(html.to_owned()))
+}
+
+/// A received caption, and its HTML sanitised for the webview.
+fn caption_of(
+    caption: Option<&str>,
+    formatted: Option<&FormattedBody>,
+) -> (Option<String>, Option<String>) {
+    (
+        caption.map(str::to_owned),
+        formatted.map(|f| crate::matrix::html::sanitize(&f.body)),
+    )
+}
+
+/// MSC2530 body mapping for outgoing media (`m.image`, `m.video`, `m.file`
+/// alike): with a caption, the event body is
 /// the caption and `filename` carries the real name; without one, the body is
 /// the filename and the field is omitted — matching the pre-caption wire format,
 /// which ruma's `caption()` reader treats as captionless.
@@ -1262,10 +1317,7 @@ fn build_image_content(
     // `formatted` is only set when the body represents a caption — an
     // uncaptioned upload's body is the filename, and a formatted filename is
     // not a thing the spec has a meaning for.
-    img_content.formatted = filename_field
-        .as_ref()
-        .and(caption.formatted)
-        .map(|html| FormattedBody::html(html.to_owned()));
+    img_content.formatted = caption_html(&filename_field, caption);
     img_content.filename = filename_field;
     img_content
 }
@@ -1287,7 +1339,7 @@ pub async fn send_image(
     width: Option<u64>,
     height: Option<u64>,
     target: SendTarget<'_>,
-) -> Result<String, String> {
+) -> Result<SentMessage, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
         .get_room(&room_id)
@@ -1299,19 +1351,84 @@ pub async fn send_image(
     let mut msg_content = RoomMessageEventContent::new(MessageType::Image(img_content));
     msg_content.relates_to = target.relation()?;
 
-    let response = room
-        .send(msg_content)
-        .await
-        .map_err(|e| format!("Failed to send image: {e}"))?;
-
-    let event_id = response.event_id.to_string();
-    info!(event_id = %event_id, "Image sent");
-    Ok(event_id)
+    send_with_echo(client, &room, msg_content, "image").await
 }
 
-/// Build the `m.file` content for a media source. See `build_image_content`.
+/// What an attachment send hands back: the new event's id, and the event itself
+/// as the timeline will show it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SentMessage {
+    pub event_id: String,
+    /// The sent event, converted exactly as its sync echo will be. The frontend
+    /// paints this the moment the send returns rather than waiting on the sync
+    /// loop to bring it back (#112). `None` only if the conversion somehow
+    /// failed — the send itself still succeeded, and the sync echo still comes.
+    pub echo: Option<TimelineEvent>,
+}
+
+/// Send `content` to `room` and return it as a [`SentMessage`].
+async fn send_with_echo(
+    client: &Client,
+    room: &matrix_sdk::Room,
+    content: RoomMessageEventContent,
+    what: &str,
+) -> Result<SentMessage, String> {
+    let echo_content = content.clone();
+    let response = room
+        .send(content)
+        .await
+        .map_err(|e| format!("Failed to send {what}: {e}"))?;
+    let event_id = response.event_id;
+    info!(event_id = %event_id, "Sent {what}");
+
+    let echo = match client.user_id() {
+        Some(own) => sent_echo(
+            own,
+            &event_id,
+            echo_content,
+            matrix_sdk::ruma::MilliSecondsSinceUnixEpoch::now(),
+        ),
+        None => Err("no own user id".to_owned()),
+    };
+    let echo = echo
+        .map_err(|e| tracing::warn!("No local echo for sent {what} {event_id}: {e}"))
+        .ok();
+    Ok(SentMessage { event_id: event_id.to_string(), echo })
+}
+
+/// The event this device just sent, as its sync echo will be converted.
+///
+/// Built by the same converter the sync handler uses, fed the event the
+/// homeserver will send back — same content, same id, our own sender — so the
+/// local echo and the real one cannot drift apart. The timestamp is this
+/// device's clock rather than the server's; nothing keys on it, and the id the
+/// two share is what the frontend deduplicates by.
+pub(crate) fn sent_echo(
+    own_user_id: &matrix_sdk::ruma::UserId,
+    event_id: &EventId,
+    content: RoomMessageEventContent,
+    origin_server_ts: matrix_sdk::ruma::MilliSecondsSinceUnixEpoch,
+) -> Result<TimelineEvent, String> {
+    // Through JSON rather than a struct literal: ruma's event structs are not
+    // ours to construct field by field, and this is the shape sync delivers.
+    let raw = serde_json::json!({
+        "type": "m.room.message",
+        "event_id": event_id,
+        "sender": own_user_id,
+        "origin_server_ts": origin_server_ts,
+        "content": content,
+    });
+    let event: OriginalSyncRoomMessageEvent =
+        serde_json::from_value(raw).map_err(|e| format!("Unreadable sent event: {e}"))?;
+    crate::events::convert_room_message_event(event)
+        .ok_or_else(|| "Sent event did not convert".to_owned())
+}
+
+/// Build the `m.file` content for a media source, with an optional MSC2530
+/// caption mapped exactly as an image's is. See `build_image_content`.
 fn build_file_content(
-    body: &str,
+    filename: &str,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     file_size: Option<u64>,
@@ -1320,45 +1437,46 @@ fn build_file_content(
     file_info.mimetype = Some(mime_type.to_string());
     file_info.size = file_size.and_then(|s| UInt::try_from(s).ok());
 
-    let mut file_content = FileMessageEventContent::new(body.to_string(), source);
+    let (body, filename_field) = build_image_body(filename, caption.body);
+    let mut file_content = FileMessageEventContent::new(body, source);
     file_content.info = Some(Box::new(file_info));
+    file_content.formatted = caption_html(&filename_field, caption);
+    file_content.filename = filename_field;
     file_content
 }
 
-/// Send a generic file (m.file) event to a room, optionally into a thread or as
-/// a reply.
+/// Send a generic file (m.file) event to a room, with an optional MSC2530
+/// caption, optionally into a thread or as a reply.
+#[allow(clippy::too_many_arguments)]
 pub async fn send_file(
     client: &Client,
     room_id: &str,
-    body: &str,
+    filename: &str,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     file_size: Option<u64>,
     target: SendTarget<'_>,
-) -> Result<String, String> {
+) -> Result<SentMessage, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
         .get_room(&room_id)
         .ok_or_else(|| format!("Room {} not found", room_id))?;
 
-    let file_content = build_file_content(body, source, mime_type, file_size);
+    let file_content = build_file_content(filename, caption, source, mime_type, file_size);
 
     let mut msg_content = RoomMessageEventContent::new(MessageType::File(file_content));
     msg_content.relates_to = target.relation()?;
 
-    let response = room
-        .send(msg_content)
-        .await
-        .map_err(|e| format!("Failed to send file: {e}"))?;
-
-    let event_id = response.event_id.to_string();
-    info!(event_id = %event_id, "File sent");
-    Ok(event_id)
+    send_with_echo(client, &room, msg_content, "file").await
 }
 
-/// Build the `m.video` content for a media source. See `build_image_content`.
+/// Build the `m.video` content for a media source, with an optional MSC2530
+/// caption. See `build_image_content`.
+#[allow(clippy::too_many_arguments)]
 fn build_video_content(
-    body: &str,
+    filename: &str,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
@@ -1375,17 +1493,22 @@ fn build_video_content(
     video_info.size = file_size.and_then(|s| UInt::try_from(s).ok());
     video_info.duration = duration_ms.map(Duration::from_millis);
 
-    let mut video_content = VideoMessageEventContent::new(body.to_string(), source);
+    let (body, filename_field) = build_image_body(filename, caption.body);
+    let mut video_content = VideoMessageEventContent::new(body, source);
     video_content.info = Some(Box::new(video_info));
+    video_content.formatted = caption_html(&filename_field, caption);
+    video_content.filename = filename_field;
     video_content
 }
 
-/// Send a video (m.video) event to a room, optionally into a thread or as a
-/// reply.
+/// Send a video (m.video) event to a room, with an optional MSC2530 caption,
+/// optionally into a thread or as a reply.
+#[allow(clippy::too_many_arguments)]
 pub async fn send_video(
     client: &Client,
     room_id: &str,
-    body: &str,
+    filename: &str,
+    caption: Caption<'_>,
     source: MediaSource,
     mime_type: &str,
     width: Option<u64>,
@@ -1393,27 +1516,20 @@ pub async fn send_video(
     duration_ms: Option<u64>,
     file_size: Option<u64>,
     target: SendTarget<'_>,
-) -> Result<String, String> {
+) -> Result<SentMessage, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let room = client
         .get_room(&room_id)
         .ok_or_else(|| format!("Room {} not found", room_id))?;
 
     let video_content = build_video_content(
-        body, source, mime_type, width, height, duration_ms, file_size,
+        filename, caption, source, mime_type, width, height, duration_ms, file_size,
     );
 
     let mut msg_content = RoomMessageEventContent::new(MessageType::Video(video_content));
     msg_content.relates_to = target.relation()?;
 
-    let response = room
-        .send(msg_content)
-        .await
-        .map_err(|e| format!("Failed to send video: {e}"))?;
-
-    let event_id = response.event_id.to_string();
-    info!(event_id = %event_id, "Video sent");
-    Ok(event_id)
+    send_with_echo(client, &room, msg_content, "video").await
 }
 
 /// Fetch events surrounding a specific event using the Matrix /context endpoint.
@@ -1473,6 +1589,31 @@ pub async fn get_event_context(
         prev_batch: response.prev_batch_token,
         next_batch: response.next_batch_token,
     })
+}
+
+/// Fetch one displayable event by ID, converted like any timeline event.
+///
+/// Resolves the reply banner of a message whose original is not in the loaded
+/// window — typically because it is older than the history fetched so far
+/// (#106). `Room::event` decrypts where it can, so an encrypted original comes
+/// back readable when its keys are held. Returns `None` for an event that is
+/// not a message (state, a redaction's tombstone, …) rather than an error: the
+/// caller has nothing to show either way, but a missing preview is not a fault.
+pub async fn get_event(
+    client: &Client,
+    room_id: &str,
+    event_id: &str,
+) -> Result<Option<TimelineEvent>, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let event_id = EventId::parse(event_id).map_err(|e| format!("Invalid event ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {} not found", room_id))?;
+    let ev = room
+        .event(&event_id, None)
+        .await
+        .map_err(|e| format!("Failed to fetch event: {e}"))?;
+    Ok(convert_raw_message_like(ev.raw()))
 }
 
 /// Fetch all edit-revision events (m.replace relations) for a given event.
@@ -1535,6 +1676,59 @@ pub async fn redact_message(
 mod tests {
     use super::*;
     use serde_json;
+
+    // ── Local echo of a sent attachment (#112) ────────────────────────────────
+
+    fn echo_of(content: RoomMessageEventContent) -> TimelineEvent {
+        let own = matrix_sdk::ruma::user_id!("@me:example.com");
+        let event_id = matrix_sdk::ruma::event_id!("$sent:example.com");
+        let ts = matrix_sdk::ruma::MilliSecondsSinceUnixEpoch(UInt::new(1_700_000_000_000).expect("in range"));
+        sent_echo(own, event_id, content, ts).expect("a sent event converts")
+    }
+
+    #[test]
+    fn a_sent_image_echoes_as_the_image_sync_would_deliver() {
+        let image = build_image_content(
+            "cat.png",
+            Caption { body: Some("look"), formatted: None },
+            MediaSource::Plain("mxc://example.com/cat".into()),
+            "image/png",
+            Some(640),
+            Some(480),
+        );
+        let echo = echo_of(RoomMessageEventContent::new(MessageType::Image(image)));
+
+        assert_eq!(echo.event_id, "$sent:example.com");
+        assert_eq!(echo.sender, "@me:example.com");
+        assert_eq!(echo.msg_type, "m.image");
+        assert_eq!(echo.media_url.as_deref(), Some("mxc://example.com/cat"));
+        assert_eq!(echo.media_mimetype.as_deref(), Some("image/png"));
+        assert_eq!((echo.media_width, echo.media_height), (Some(640), Some(480)));
+        assert_eq!(echo.caption.as_deref(), Some("look"));
+        assert_eq!(echo.filename.as_deref(), Some("cat.png"));
+        assert_eq!(echo.thread_root, None);
+    }
+
+    #[test]
+    fn a_sent_file_into_a_thread_echoes_with_its_thread() {
+        // The frontend routes an echo by `thread_root` exactly as it routes a
+        // synced event, so the relation has to survive the conversion.
+        let file = build_file_content(
+            "notes.pdf",
+            Caption::none(),
+            MediaSource::Plain("mxc://example.com/notes".into()),
+            "application/pdf",
+            Some(1234),
+        );
+        let mut content = RoomMessageEventContent::new(MessageType::File(file));
+        content.relates_to = SendTarget { thread_root: Some("$root:example.com"), in_reply_to: None }
+            .relation()
+            .expect("thread relation");
+        let echo = echo_of(content);
+
+        assert_eq!(echo.msg_type, "m.file");
+        assert_eq!(echo.thread_root.as_deref(), Some("$root:example.com"));
+    }
 
     // ── Filename extraction ───────────────────────────────────────────────────
 
@@ -2032,6 +2226,7 @@ mod tests {
     fn test_file_content_from_encrypted_source_has_no_plaintext_url() {
         let content = super::build_file_content(
             "notes.pdf",
+            Caption::none(),
             MediaSource::Encrypted(Box::new(test_encrypted_file())),
             "application/pdf",
             Some(1024),
@@ -2046,6 +2241,7 @@ mod tests {
     fn test_video_content_from_encrypted_source_has_no_plaintext_url() {
         let content = super::build_video_content(
             "clip.mp4",
+            Caption::none(),
             MediaSource::Encrypted(Box::new(test_encrypted_file())),
             "video/mp4",
             Some(640),
@@ -2121,6 +2317,59 @@ mod tests {
         let json = serde_json::to_value(&content).expect("serialisable");
         assert_eq!(json["body"], "cat.png");
         assert!(json.get("formatted_body").is_none(), "no caption, no html: {json}");
+    }
+
+    /// MSC2530 captions apply to every media type: the composer's text becomes
+    /// the caption of the first staged attachment, whatever it is.
+    #[test]
+    fn test_captioned_file_and_video_map_like_an_image() {
+        let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
+        let caption = Caption { body: Some("the notes"), formatted: Some("<b>the</b> notes") };
+
+        let file = super::build_file_content(
+            "notes.pdf", caption, MediaSource::Plain(uri.to_owned()), "application/pdf", Some(10),
+        );
+        let json = serde_json::to_value(&file).expect("serialisable");
+        assert_eq!(json["body"], "the notes");
+        assert_eq!(json["filename"], "notes.pdf");
+        assert_eq!(json["formatted_body"], "<b>the</b> notes");
+
+        let video = super::build_video_content(
+            "clip.mp4", caption, MediaSource::Plain(uri.to_owned()), "video/mp4",
+            None, None, None, None,
+        );
+        let json = serde_json::to_value(&video).expect("serialisable");
+        assert_eq!(json["body"], "the notes");
+        assert_eq!(json["filename"], "clip.mp4");
+
+        // Uncaptioned: the pre-caption wire format, body = filename.
+        let bare = super::build_file_content(
+            "notes.pdf", Caption::none(), MediaSource::Plain(uri.to_owned()), "application/pdf", None,
+        );
+        let json = serde_json::to_value(&bare).expect("serialisable");
+        assert_eq!(json["body"], "notes.pdf");
+        assert!(json.get("filename").is_none());
+        assert!(json.get("formatted_body").is_none());
+    }
+
+    /// The read path surfaces a file's or video's caption as it does an image's,
+    /// so a captioned upload renders its caption instead of losing it.
+    #[test]
+    fn test_captions_are_read_back_from_files_and_videos() {
+        let uri = <&matrix_sdk::ruma::MxcUri>::try_from("mxc://example.org/plain").unwrap();
+        let file = super::build_file_content(
+            "notes.pdf", Caption::plain(Some("the notes")), MediaSource::Plain(uri.to_owned()),
+            "application/pdf", None,
+        );
+        assert_eq!(
+            super::extract_caption(&MessageType::File(file)),
+            (Some("the notes".to_owned()), None)
+        );
+        let video = super::build_video_content(
+            "clip.mp4", Caption::plain(Some("watch")), MediaSource::Plain(uri.to_owned()),
+            "video/mp4", None, None, None, None,
+        );
+        assert_eq!(super::extract_caption(&MessageType::Video(video)).0.as_deref(), Some("watch"));
     }
 
     #[test]
@@ -2382,5 +2631,99 @@ mod tests {
             serde_json::from_value(json).expect("deserialize image event");
         let te = convert_sync_room_message(ev);
         assert_eq!(te.caption, None);
+    }
+
+    // --- Reply pointers (#106) ---
+
+    fn message_with_relation(relates_to: serde_json::Value) -> OriginalSyncRoomMessageEvent {
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$msg:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": { "msgtype": "m.text", "body": "hi", "m.relates_to": relates_to }
+        }))
+        .expect("deserialize message")
+    }
+
+    fn encrypted_with_relation(
+        relates_to: serde_json::Value,
+    ) -> matrix_sdk::ruma::events::OriginalSyncMessageLikeEvent<
+        matrix_sdk::ruma::events::room::encrypted::RoomEncryptedEventContent,
+    > {
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.encrypted",
+            "event_id": "$enc:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1_700_000_000_000i64,
+            "content": {
+                "algorithm": "m.megolm.v1.aes-sha2",
+                "ciphertext": "AwgAEnAC",
+                "sender_key": "sender_key",
+                "device_id": "DEVICE",
+                "session_id": "session",
+                "m.relates_to": relates_to
+            }
+        }))
+        .expect("deserialize encrypted event")
+    }
+
+    #[test]
+    fn thread_fallback_pointer_is_not_a_reply() {
+        // Every threaded event carries an m.in_reply_to for thread-unaware
+        // clients; with is_falling_back it is not a reply the sender chose.
+        let te = convert_sync_room_message(message_with_relation(serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$root:example.com",
+            "is_falling_back": true,
+            "m.in_reply_to": { "event_id": "$latest:example.com" }
+        })));
+        assert_eq!(te.thread_root.as_deref(), Some("$root:example.com"));
+        assert_eq!(te.in_reply_to, None);
+    }
+
+    #[test]
+    fn genuine_reply_inside_a_thread_is_kept() {
+        let te = convert_sync_room_message(message_with_relation(serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$root:example.com",
+            "m.in_reply_to": { "event_id": "$quoted:example.com" }
+        })));
+        assert_eq!(te.in_reply_to.as_deref(), Some("$quoted:example.com"));
+    }
+
+    #[test]
+    fn undecryptable_reply_keeps_its_reply_pointer() {
+        // m.relates_to is cleartext on an encrypted event, so an unreadable
+        // reply still knows what it answers and gets its banner.
+        let te = convert_sync_encrypted(encrypted_with_relation(serde_json::json!({
+            "m.in_reply_to": { "event_id": "$parent:example.com" }
+        })));
+        assert_eq!(te.msg_type, "m.room.encrypted");
+        assert_eq!(te.in_reply_to.as_deref(), Some("$parent:example.com"));
+        assert_eq!(te.thread_root, None);
+    }
+
+    #[test]
+    fn undecryptable_thread_reply_stays_in_its_thread() {
+        let te = convert_sync_encrypted(encrypted_with_relation(serde_json::json!({
+            "rel_type": "m.thread",
+            "event_id": "$root:example.com",
+            "is_falling_back": true,
+            "m.in_reply_to": { "event_id": "$latest:example.com" }
+        })));
+        assert_eq!(te.thread_root.as_deref(), Some("$root:example.com"));
+        assert_eq!(te.in_reply_to, None);
+    }
+
+    #[test]
+    fn undecryptable_edit_is_not_reported_as_an_edit() {
+        // Applying it would overwrite the original with the UTD placeholder.
+        let te = convert_sync_encrypted(encrypted_with_relation(serde_json::json!({
+            "rel_type": "m.replace",
+            "event_id": "$orig:example.com"
+        })));
+        assert!(!te.is_edit);
+        assert_eq!(te.relates_to_event_id, None);
     }
 }

@@ -26,6 +26,10 @@ export {
   timelineEventToThreadMessage,
 } from "./actions/context.js";
 
+// Live events: one render path for the sync listener and this device's own
+// attachment sends (#112).
+export { recordLiveEvent, renderLiveEvent, showSentEvent } from "./actions/live.js";
+
 // Session lifecycle.
 export { login, attemptSessionRestore, logout, maybePromptSessionVerification } from "./actions/session.js";
 
@@ -43,6 +47,7 @@ export {
   selectRoom,
   markRoomAsRead,
   jumpToMessage,
+  resolveReplyPreview,
   jumpToLatest,
   reloadCurrentRoomTimeline,
   appendRoomTimelineCache,
@@ -111,7 +116,7 @@ export {
 export { openEmojiPicker, openStickerPicker, openGifPicker } from "./actions/gif.js";
 
 // Media paste/pick, message hover-action handlers.
-export { sendPendingImage, handleFilePick, setupMessageActionHandlers } from "./actions/media.js";
+export { sendStagedAttachments, attachFiles, readCopiedFiles, setupMessageActionHandlers } from "./actions/media.js";
 
 // `:` command executor.
 export { executeCommand } from "./actions/commands.js";

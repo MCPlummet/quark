@@ -79,6 +79,27 @@ pub fn parse_wake(payload: &str) -> Result<PushWake, String> {
 pub enum WakePlan {
     /// Run a bounded sync and let the notification pipeline decide the rest.
     Sync,
+    /// The app's own sync loop claims to be live, so give it a bounded window
+    /// to show it has handled this event before syncing ourselves.
+    ///
+    /// This used to be a flat `Ignore(WarmSyncRunning)`, and that was the
+    /// wrong answer for exactly the process push exists for: one Android keeps
+    /// resident but has frozen. The loop's clock was stamped seconds before the
+    /// freeze, so it read as live; the push stood down, the service stopped at
+    /// once, and the OS re-froze the process before the loop it deferred to
+    /// had run a single instruction. The event was delivered to nobody (#90).
+    ///
+    /// Waiting is what makes deferring honest. The push service holds the
+    /// process in the foreground — unfrozen, and exempt from Doze's network
+    /// cut — while the loop gets its chance, and only a loop that then fails
+    /// to show the event is raced.
+    HandOff { room_id: String, event_id: String },
+    /// The app's own loop exists but has stopped delivering. Restart it and let
+    /// *it* deliver, rather than syncing alongside it: a second sync on the same
+    /// `Client` doubles the E2EE outgoing-request flush (#52). The restart
+    /// leaves exactly one syncer, and the push is what says now is a good time
+    /// to try again.
+    RestartWarmSync,
     /// Take down this room's notifications. The user read it somewhere else, so
     /// the work is subtraction: no network, no store, no lease — just tell the
     /// OS to drop what it is still showing.
@@ -94,11 +115,11 @@ pub enum IgnoreReason {
     /// opt-out we could not deliver to the homeserver is owed, not applied —
     /// so pushes keep arriving for a while afterwards.
     PushDisabled,
-    /// The app's own sync loop is live *and recently made progress*, so it will
-    /// deliver this event itself. Liveness is half the claim: a loop that
-    /// exists but has been stalled in backoff (or frozen by Doze) is not going
-    /// to deliver anything, and standing down for it is how push comes to do
-    /// nothing in exactly the situation it was added for.
+    /// A counts-only push arrived while the app's own sync loop is live *and
+    /// recently made progress*; that loop will see the receipt and clear the
+    /// room itself. Event pushes no longer stand down on this — they hand off
+    /// ([`WakePlan::HandOff`]) — because a loop that merely claims liveness is
+    /// not a loop that will deliver, and a message push is not safe to drop.
     WarmSyncRunning,
     /// A counts-only push that named no room. Nothing to render and nothing to
     /// dismiss against.
@@ -140,14 +161,26 @@ impl WakeOutcome {
 }
 
 /// Decide what to do about a wake-up, before any network or store access.
-pub fn plan_wake(wake: &PushWake, push_enabled: bool, warm_sync_active: bool) -> WakePlan {
+pub fn plan_wake(wake: &PushWake, push_enabled: bool, warm: WarmSync) -> WakePlan {
     if !push_enabled {
         return WakePlan::Ignore(IgnoreReason::PushDisabled);
     }
-    if warm_sync_active {
-        return WakePlan::Ignore(IgnoreReason::WarmSyncRunning);
+    if warm == WarmSync::Live {
+        return match wake {
+            PushWake::Event { room_id, event_id } => WakePlan::HandOff {
+                room_id: room_id.clone(),
+                event_id: event_id.clone(),
+            },
+            // A warm app clears its own notifications from the receipt it is
+            // about to see; there is nothing here worth holding the process for.
+            PushWake::Clear { .. } => WakePlan::Ignore(IgnoreReason::WarmSyncRunning),
+        };
     }
     match wake {
+        // A stalled loop is restarted, never raced: it is still polling the
+        // same `Client` a wake would sync on. (A dismissal needs no sync, so a
+        // stalled loop does not stand in its way.)
+        PushWake::Event { .. } if warm == WarmSync::Stalled => WakePlan::RestartWarmSync,
         PushWake::Event { .. } => WakePlan::Sync,
         // A dismissal is cheap enough that it could run unconditionally, but it
         // stays behind the two gates above on purpose: a warm app clears its own
@@ -391,6 +424,8 @@ pub fn set_warm_sync_active(active: bool) {
 /// Note that the warm loop completed a sync. Called from the loop's success arm.
 pub fn note_warm_sync_progress() {
     WARM_SYNC_PROGRESS_MS.store(now_ms(), Ordering::Release);
+    WARM_SYNC_COMPLETIONS.fetch_add(1, Ordering::AcqRel);
+    WARM_SYNC_PROGRESSED.notify_waiters();
 }
 
 /// Whether the warm loop is both running and recently alive.
@@ -406,12 +441,163 @@ pub fn warm_sync_is_live(running: bool, last_progress_ms: u64, now_ms: u64) -> b
     running && now_ms.saturating_sub(last_progress_ms) <= WARM_SYNC_LIVENESS_MS
 }
 
-pub fn warm_sync_active() -> bool {
-    warm_sync_is_live(
+/// What the app's own sync loop is doing, as far as a push is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmSync {
+    /// No loop in this process — the push has the client to itself.
+    Absent,
+    /// A loop that has completed a sync recently. It will deliver this event.
+    Live,
+    /// A loop that exists but has not completed a sync within
+    /// `WARM_SYNC_LIVENESS_MS`. It is not going to deliver this event, but it is
+    /// still polling the client, so nothing else may sync alongside it.
+    Stalled,
+}
+
+/// Classify the warm loop. Pure for the same reason `warm_sync_is_live` is.
+pub fn classify_warm_sync(running: bool, last_progress_ms: u64, now_ms: u64) -> WarmSync {
+    if !running {
+        WarmSync::Absent
+    } else if warm_sync_is_live(running, last_progress_ms, now_ms) {
+        WarmSync::Live
+    } else {
+        WarmSync::Stalled
+    }
+}
+
+pub fn warm_sync_state() -> WarmSync {
+    classify_warm_sync(
         WARM_SYNC_ACTIVE.load(Ordering::Acquire),
         WARM_SYNC_PROGRESS_MS.load(Ordering::Acquire),
         now_ms(),
     )
+}
+
+// ─── Handing a push to the warm loop ─────────────────────────────────────────
+
+/// Event ids the warm loop's notification handler has finished with, newest
+/// last. What a [`WakePlan::HandOff`] waits to see.
+///
+/// Progress on the loop's clock is not the same claim: a response the server
+/// composed just before the event arrived still stamps progress when it is
+/// finally read. "The warm handler has processed *this event*" is the question
+/// the push actually needs answered, and it is cheap to ask.
+static WARM_SEEN: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+/// How many recent event ids [`WARM_SEEN`] keeps. A push names one event and
+/// is answered within seconds, so this only has to outlast a burst.
+const WARM_SEEN_CAPACITY: usize = 128;
+
+/// How long a push waits for the warm loop before syncing itself.
+///
+/// A healthy loop answers in well under a second once it can run: the push
+/// means the homeserver has something, so its long-poll returns at once. Ten
+/// seconds covers thawing and a reconnect after Doze. A loop still silent after
+/// that is stuck — typically in a long-poll whose socket died while the process
+/// was frozen, which it will not notice until its own request timeout.
+pub const WARM_HANDOFF: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Record that the warm loop has handled an event. Called by
+/// `events::maybe_notify` for every message it processes, after any
+/// notification has been posted — whether or not one was — and by the
+/// catch-all timeline handler for every event that pipeline never sees
+/// (undecryptable, redacted, polls, calls…), which the default push rules
+/// still push for.
+pub fn note_warm_event(event_id: &str) {
+    let mut seen = WARM_SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    remember(&mut seen, event_id, WARM_SEEN_CAPACITY);
+}
+
+fn remember(ring: &mut std::collections::VecDeque<String>, id: &str, capacity: usize) {
+    if ring.iter().any(|seen| seen == id) {
+        return;
+    }
+    ring.push_back(id.to_owned());
+    while ring.len() > capacity {
+        ring.pop_front();
+    }
+}
+
+/// Whether the warm loop has already handled `event_id`.
+pub fn warm_has_seen(event_id: &str) -> bool {
+    WARM_SEEN
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|seen| seen == event_id)
+}
+
+/// Whether the warm client already holds `room_id` as an invite.
+///
+/// The one push the event-id ring cannot answer: an invite arrives as stripped
+/// state, which carries no event id, so the id the push names is never seen.
+/// The room turning up in the invited state is the same claim made another
+/// way — the loop has synced the invite. A room that is joined by now reads
+/// `false`, so an old invite cannot vouch for a later message in the room.
+fn warm_holds_invite(room_id: &str) -> bool {
+    use tauri::Manager;
+
+    let Ok(room_id) = matrix_sdk::ruma::RoomId::parse(room_id) else {
+        return false;
+    };
+    app_handle()
+        .and_then(|app| app.try_state::<crate::matrix::client::MatrixState>())
+        .and_then(|state| state.0.lock().ok().and_then(|guard| guard.clone()))
+        .and_then(|client| client.get_room(&room_id))
+        .is_some_and(|room| room.state() == matrix_sdk::RoomState::Invited)
+}
+
+/// Whether the warm loop has handled the push for `event_id` in `room_id`.
+fn warm_has_handled(room_id: &str, event_id: &str) -> bool {
+    warm_has_seen(event_id) || warm_holds_invite(room_id)
+}
+
+/// Wait up to `budget` for the warm loop to handle `event_id` in `room_id`.
+///
+/// `true` means the loop got there and the push has nothing left to do. The
+/// caller holds a foreground service for the duration, which is the point: it
+/// keeps the process thawed and on the network long enough for the loop to run.
+async fn await_warm_handoff(room_id: &str, event_id: &str, budget: std::time::Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        if warm_has_handled(room_id, event_id) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// How many syncs the warm loop has completed in this process's life.
+///
+/// The progress clock cannot answer "has the loop synced *since* I restarted
+/// it?": starting a loop stamps it too, so that a fresh loop counts as live
+/// through its first window. A counter only moves on a real completion.
+static WARM_SYNC_COMPLETIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Woken on every warm-loop completion, for a wake waiting on a restarted loop.
+static WARM_SYNC_PROGRESSED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Wait until the warm loop has completed more than `before` syncs.
+///
+/// Unbounded on purpose — the caller owns the budget, and a `timeout` around
+/// this is the only sensible way to give up.
+async fn warm_sync_completed_since(before: u64) {
+    loop {
+        // Register interest before reading the counter, so a completion landing
+        // between the read and the `await` cannot be missed.
+        let notified = WARM_SYNC_PROGRESSED.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if WARM_SYNC_COMPLETIONS.load(Ordering::Acquire) > before {
+            return;
+        }
+        notified.await;
+    }
 }
 
 /// The one wake allowed to sync at a time, for the life of the process.
@@ -612,8 +798,32 @@ pub async fn run_wake(
     wake: &PushWake,
 ) -> Result<WakeOutcome, String> {
     let config = crate::notifications::load_notification_config_from(data_dir);
-    match plan_wake(wake, config.push_enabled, warm_sync_active()) {
+    if let PushWake::Event { room_id, event_id } = wake {
+        tracing::info!("Push wake for {event_id} in {room_id}");
+    }
+    match plan_wake(wake, config.push_enabled, warm_sync_state()) {
         WakePlan::Sync => {}
+        WakePlan::HandOff { room_id, event_id } => {
+            if await_warm_handoff(&room_id, &event_id, WARM_HANDOFF).await {
+                tracing::info!("Push wake handed {event_id} to the warm sync loop, which handled it");
+                return Ok(WakeOutcome::nothing());
+            }
+            // The loop claimed to be live and did not deliver. Syncing beside it
+            // would put two syncs on one `Client` (#52) — and would only queue
+            // behind the loop's `SYNC_TURN` anyway. Restart it instead, so the
+            // event is delivered by exactly one syncer.
+            tracing::warn!(
+                "Warm sync loop did not handle {event_id} within {WARM_HANDOFF:?}; restarting it"
+            );
+            return restart_warm_sync(Some((&room_id, &event_id))).await;
+        }
+        WakePlan::RestartWarmSync => {
+            let pushed = match wake {
+                PushWake::Event { room_id, event_id } => Some((room_id.as_str(), event_id.as_str())),
+                PushWake::Clear { .. } => None,
+            };
+            return restart_warm_sync(pushed).await;
+        }
         // Answered without a client, a lease or a byte of network: the whole
         // point of recognising this push is that it costs nothing to honour.
         WakePlan::Dismiss { room_id } => {
@@ -660,6 +870,81 @@ pub async fn run_wake(
     salvage(end, collected).map(WakeOutcome::posting)
 }
 
+/// Answer a push that found the warm loop stalled: restart the loop, then wait
+/// (within [`WAKE_BUDGET`]) for the restarted loop to complete a sync.
+///
+/// The wake never syncs itself here. The stalled loop is still polling the
+/// app's `Client`, and a `sync_once` beside it is two concurrent E2EE
+/// outgoing-request flushes from one device (#52). Restarting tears the stalled
+/// task down and respawns it, and the respawned task cannot begin syncing until
+/// the old one has been dropped (`client::take_sync_turn`), so at no point do
+/// two syncs share the client. The restarted loop delivers the event through
+/// the warm path's own handlers, which post the notification themselves — so
+/// this wake has nothing to hand Kotlin, and says so.
+///
+/// Waiting matters on Android: once the push service returns, Doze is free to
+/// freeze the process again, and a loop restarted but never given the chance
+/// to finish its first sync would deliver nothing.
+async fn restart_warm_sync(pushed: Option<(&str, &str)>) -> Result<WakeOutcome, String> {
+    // Serialised with every other wake: a burst of pushes restarts the loop
+    // once, and the restart stamps the liveness clock, so the pushes behind it
+    // see a live loop and stand down rather than restarting it again.
+    let Some(_lease) = WAKE_GUARD.try_enter() else {
+        tracing::info!("Push wake coalesced into the wake already running");
+        return Ok(WakeOutcome::nothing());
+    };
+    // A wake that queued behind this guard, or waited out a handoff, may find
+    // the loop has since delivered its event after all.
+    if pushed.is_some_and(|(room_id, event_id)| warm_has_handled(room_id, event_id)) {
+        tracing::info!("Warm sync loop handled the pushed event before a restart was needed");
+        return Ok(WakeOutcome::nothing());
+    }
+    let Some(app) = app_handle() else {
+        // A warm loop cannot exist without Tauri, so this is a flag that
+        // outlived its app. Nothing to restart and nothing to race.
+        return Err("Warm sync reported stalled but no app is running".to_owned());
+    };
+
+    let before = WARM_SYNC_COMPLETIONS.load(Ordering::Acquire);
+    tracing::warn!(
+        "Push wake is restarting the warm sync loop (stalled past {WARM_SYNC_LIVENESS_MS} ms, or silent through a handoff)"
+    );
+    let restarted = tokio::time::timeout(WAKE_BUDGET, async {
+        if !crate::matrix::client::restart_sync(app.clone()).await? {
+            // Stopped between the plan and the restart — a logout, most likely.
+            // Not ours to bring back.
+            return Ok::<_, String>(false);
+        }
+        // Done when the new loop completes a sync, or as soon as the warm
+        // handler reports the pushed event — whichever comes first.
+        let seen = async {
+            match pushed {
+                Some((room_id, event_id))
+                    if await_warm_handoff(room_id, event_id, WAKE_BUDGET).await => {}
+                _ => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            _ = warm_sync_completed_since(before) => {}
+            _ = seen => {}
+        }
+        Ok(true)
+    })
+    .await;
+
+    match restarted {
+        Ok(Ok(true)) => tracing::info!("Restarted warm sync loop completed a sync"),
+        Ok(Ok(false)) => tracing::info!("Warm sync loop was stopped before it could be restarted"),
+        Ok(Err(e)) => return Err(format!("Could not restart the warm sync loop: {e}")),
+        // Not an error: the loop is running and will deliver when it can. The
+        // wake only stops holding the service open for it.
+        Err(_) => tracing::warn!(
+            "Restarted warm sync loop has not completed a sync within the wake budget"
+        ),
+    }
+    Ok(WakeOutcome::nothing())
+}
+
 async fn sync_and_collect(
     data_dir: &std::path::Path,
     config: crate::notifications::NotificationConfig,
@@ -668,6 +953,11 @@ async fn sync_and_collect(
     use matrix_sdk::config::SyncSettings;
 
     let client = background_client(data_dir).await?;
+    // Only one party syncs on a client at a time. When the app's client is the
+    // one handed back, a warm loop started while this wake runs waits for its
+    // turn instead of flushing E2EE requests alongside it. Held until this
+    // function returns — or until `WAKE_BUDGET` drops the whole future.
+    let _turn = crate::matrix::client::take_sync_turn().await;
 
     let suppressed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let span: std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>> = Default::default();
@@ -859,7 +1149,13 @@ async fn collect(
     // A wake syncs a batch, so most of what arrives may already have been read
     // on another device. Delivered-to-this-phone and seen-by-this-person are
     // different things, and only the second earns silence.
-    if already_seen(event.timestamp, collector.read_marker(room).await) {
+    let marker = collector.read_marker(room).await;
+    if already_seen(event.timestamp, marker) {
+        tracing::debug!(
+            "Push wake: {} in {room_id} is already read (event ts {}, read marker {marker:?})",
+            event.event_id,
+            event.timestamp
+        );
         collector.suppressed.fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -890,10 +1186,19 @@ async fn collect(
         push: crate::notify::PushEval::from_actions(push_actions),
     };
 
-    let Some(spec) = crate::notify::evaluate(&input, &collector.config) else { return };
+    let spec = match crate::notify::assess(&input, &collector.config) {
+        Ok(spec) => spec,
+        Err(reason) => {
+            // One line per declined event: a wake's batch is small, and the
+            // reason is the whole diagnosis when a push "does nothing".
+            tracing::info!("Push wake: not notifying {} in {room_id}: {reason:?}", input.event_id);
+            return;
+        }
+    };
     // Shares the warm path's dedup ring, so a push that arrives for an event the
     // app already showed before its webview died does not show it twice.
     if !crate::events::claim_notification(&spec.event_id) {
+        tracing::info!("Push wake: {} was already notified in this process", spec.event_id);
         return;
     }
     if let Ok(mut out) = collector.out.lock() {
@@ -1099,7 +1404,7 @@ mod tests {
     #[test]
     fn an_event_push_syncs() {
         let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
-        assert_eq!(plan_wake(&wake, true, false), WakePlan::Sync);
+        assert_eq!(plan_wake(&wake, true, WarmSync::Absent), WakePlan::Sync);
     }
 
     #[test]
@@ -1108,16 +1413,58 @@ mod tests {
         // the homeserver (offline, broken session) leaves it pushing for a
         // while. Syncing here would be doing the exact work they switched off.
         let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
-        assert_eq!(plan_wake(&wake, false, false), WakePlan::Ignore(IgnoreReason::PushDisabled));
+        assert_eq!(plan_wake(&wake, false, WarmSync::Absent), WakePlan::Ignore(IgnoreReason::PushDisabled));
     }
 
     #[test]
-    fn a_push_is_ignored_while_the_app_is_already_syncing() {
-        // The warm loop will deliver this event through the same pipeline. A
-        // second sync would duplicate the notification and — worse — put two
-        // concurrent syncs on the homeserver from one device.
+    fn a_push_is_handed_to_a_warm_loop_rather_than_dropped() {
+        // The warm loop should deliver this event through the same pipeline,
+        // and a second sync would put two on the homeserver from one device —
+        // but "should" is all a liveness clock can say. A process Android has
+        // frozen reads as live for the clock's whole window, and standing down
+        // flat let the OS re-freeze it before the loop ever ran (#90). So the
+        // push waits for the loop to show it handled *this* event.
         let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
-        assert_eq!(plan_wake(&wake, true, true), WakePlan::Ignore(IgnoreReason::WarmSyncRunning));
+        assert_eq!(plan_wake(&wake, true, WarmSync::Live), WakePlan::HandOff { room_id: "!a:x".into(), event_id: "$e".into() });
+    }
+
+    #[test]
+    fn the_seen_ring_dedupes_and_forgets_the_oldest() {
+        let mut ring = std::collections::VecDeque::new();
+        remember(&mut ring, "$a", 2);
+        remember(&mut ring, "$a", 2);
+        assert_eq!(ring.len(), 1, "a repeat is not a second entry");
+        remember(&mut ring, "$b", 2);
+        remember(&mut ring, "$c", 2);
+        assert_eq!(ring, ["$b", "$c"], "capacity evicts the oldest");
+    }
+
+    #[tokio::test]
+    async fn a_handoff_returns_as_soon_as_the_warm_loop_has_the_event() {
+        let id = "$handoff-seen:test";
+        note_warm_event(id);
+        assert!(await_warm_handoff("!a:x", id, std::time::Duration::from_millis(10)).await);
+    }
+
+    #[tokio::test]
+    async fn a_handoff_notices_the_event_arriving_mid_wait() {
+        let id = "$handoff-late:test";
+        let waiter = tokio::spawn(async move {
+            await_warm_handoff("!a:x", id, std::time::Duration::from_secs(5)).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        note_warm_event(id);
+        assert!(waiter.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_handoff_to_a_silent_loop_gives_up_at_its_budget() {
+        // Giving up is what hands the event back to the push's own sync; a
+        // wait that never ended would be the old stand-down with extra steps.
+        let budget = std::time::Duration::from_millis(500);
+        let started = tokio::time::Instant::now();
+        assert!(!await_warm_handoff("!a:x", "$handoff-never:test", budget).await);
+        assert!(started.elapsed() >= budget);
     }
 
     #[test]
@@ -1125,7 +1472,7 @@ mod tests {
         // Both apply; the user's explicit "off" is the more informative reason
         // to report, and it holds whether or not the app happens to be running.
         let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
-        assert_eq!(plan_wake(&wake, false, true), WakePlan::Ignore(IgnoreReason::PushDisabled));
+        assert_eq!(plan_wake(&wake, false, WarmSync::Live), WakePlan::Ignore(IgnoreReason::PushDisabled));
     }
 
     #[test]
@@ -1133,7 +1480,7 @@ mod tests {
         // Nothing to show and nothing to dismiss against: spending a sync on it
         // would burn battery for a push whose whole meaning is "less".
         assert_eq!(
-            plan_wake(&PushWake::Clear { room_id: None, unread: None }, true, false),
+            plan_wake(&PushWake::Clear { room_id: None, unread: None }, true, WarmSync::Absent),
             WakePlan::Ignore(IgnoreReason::NothingToShow)
         );
     }
@@ -1144,7 +1491,7 @@ mod tests {
         // another device. It carries a room id, and taking the notifications
         // down is both the right answer and a free one — no sync involved.
         assert_eq!(
-            plan_wake(&PushWake::Clear { room_id: Some("!a:x".into()), unread: None }, true, false),
+            plan_wake(&PushWake::Clear { room_id: Some("!a:x".into()), unread: None }, true, WarmSync::Absent),
             WakePlan::Dismiss { room_id: "!a:x".to_owned() }
         );
     }
@@ -1155,8 +1502,8 @@ mod tests {
         // notifications from the receipt it is about to see, and a user who
         // switched push off should not have this device acting on pushes.
         let wake = PushWake::Clear { room_id: Some("!a:x".into()), unread: None };
-        assert_eq!(plan_wake(&wake, true, true), WakePlan::Ignore(IgnoreReason::WarmSyncRunning));
-        assert_eq!(plan_wake(&wake, false, false), WakePlan::Ignore(IgnoreReason::PushDisabled));
+        assert_eq!(plan_wake(&wake, true, WarmSync::Live), WakePlan::Ignore(IgnoreReason::WarmSyncRunning));
+        assert_eq!(plan_wake(&wake, false, WarmSync::Absent), WakePlan::Ignore(IgnoreReason::PushDisabled));
     }
 
     #[test]
@@ -1184,6 +1531,79 @@ mod tests {
         assert!(!warm_sync_is_live(false, now, now), "no loop is never live");
         // A clock corrected backwards must not read as wildly stale.
         assert!(warm_sync_is_live(true, now + 5_000, now), "a backwards clock stays live");
+    }
+
+    #[test]
+    fn the_warm_loop_is_absent_live_or_stalled() {
+        let now = 1_000_000;
+        assert_eq!(classify_warm_sync(false, now, now), WarmSync::Absent);
+        assert_eq!(classify_warm_sync(false, 0, now), WarmSync::Absent);
+        assert_eq!(classify_warm_sync(true, now - 89_000, now), WarmSync::Live);
+        assert_eq!(classify_warm_sync(true, now - 91_000, now), WarmSync::Stalled);
+        assert_eq!(classify_warm_sync(true, now + 5_000, now), WarmSync::Live);
+    }
+
+    #[test]
+    fn an_event_push_restarts_a_stalled_loop_instead_of_racing_it() {
+        // #52: a wake that synced past a stalled loop ran `sync_once` on the
+        // very `Client` that loop was still polling — two concurrent E2EE
+        // outgoing-request flushes from one device. Standing down is no better:
+        // that is push doing nothing in the situation it exists for.
+        let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
+        assert_eq!(plan_wake(&wake, true, WarmSync::Stalled), WakePlan::RestartWarmSync);
+    }
+
+    #[test]
+    fn a_stalled_loop_is_not_restarted_for_a_user_who_turned_push_off() {
+        let wake = PushWake::Event { room_id: "!a:x".into(), event_id: "$e".into() };
+        assert_eq!(
+            plan_wake(&wake, false, WarmSync::Stalled),
+            WakePlan::Ignore(IgnoreReason::PushDisabled)
+        );
+    }
+
+    #[test]
+    fn a_dismissal_does_not_restart_a_stalled_loop() {
+        // Taking notifications down needs no sync, so there is nothing to race
+        // and no reason to disturb the loop.
+        let wake = PushWake::Clear { room_id: Some("!a:x".into()), unread: None };
+        assert_eq!(
+            plan_wake(&wake, true, WarmSync::Stalled),
+            WakePlan::Dismiss { room_id: "!a:x".to_owned() }
+        );
+        let nothing = PushWake::Clear { room_id: None, unread: None };
+        assert_eq!(
+            plan_wake(&nothing, true, WarmSync::Stalled),
+            WakePlan::Ignore(IgnoreReason::NothingToShow)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_wake_waiting_on_a_restarted_loop_sees_its_next_completion() {
+        // The counter is process-wide and other tests may bump it, so measure
+        // from wherever it stands now.
+        let before = WARM_SYNC_COMPLETIONS.load(Ordering::Acquire);
+        let waiter = tokio::spawn(warm_sync_completed_since(before));
+        tokio::task::yield_now().await;
+        note_warm_sync_progress();
+        tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("a completion must wake the waiter")
+            .expect("waiter task");
+    }
+
+    #[tokio::test]
+    async fn a_completion_that_already_happened_is_not_waited_for() {
+        // The restart can finish its first sync before the wake gets round to
+        // waiting; that must not read as "never synced".
+        let before = WARM_SYNC_COMPLETIONS.load(Ordering::Acquire);
+        note_warm_sync_progress();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            warm_sync_completed_since(before),
+        )
+        .await
+        .expect("an earlier completion satisfies the wait");
     }
 
     #[test]
@@ -1311,7 +1731,7 @@ mod tests {
         }"#;
         let wake = parse_wake(payload).expect("valid notification");
         assert_eq!(wake, PushWake::Clear { room_id: Some("!a:x".to_owned()), unread: Some(3) });
-        assert_eq!(plan_wake(&wake, true, false), WakePlan::Ignore(IgnoreReason::StillUnread));
+        assert_eq!(plan_wake(&wake, true, WarmSync::Absent), WakePlan::Ignore(IgnoreReason::StillUnread));
     }
 
     #[test]
@@ -1324,7 +1744,7 @@ mod tests {
         }"#;
         let wake = parse_wake(payload).expect("valid notification");
         assert_eq!(wake, PushWake::Clear { room_id: Some("!a:x".to_owned()), unread: Some(0) });
-        assert_eq!(plan_wake(&wake, true, false), WakePlan::Dismiss { room_id: "!a:x".to_owned() });
+        assert_eq!(plan_wake(&wake, true, WarmSync::Absent), WakePlan::Dismiss { room_id: "!a:x".to_owned() });
     }
 
     /// Not every homeserver sends counts, and absence is not evidence the room
@@ -1335,7 +1755,7 @@ mod tests {
         let payload = r#"{ "notification": { "room_id": "!a:x" } }"#;
         let wake = parse_wake(payload).expect("valid notification");
         assert_eq!(wake, PushWake::Clear { room_id: Some("!a:x".to_owned()), unread: None });
-        assert_eq!(plan_wake(&wake, true, false), WakePlan::Dismiss { room_id: "!a:x".to_owned() });
+        assert_eq!(plan_wake(&wake, true, WarmSync::Absent), WakePlan::Dismiss { room_id: "!a:x".to_owned() });
     }
 
     /// The bug this guards. matrix-sdk persists the sync token *before* it

@@ -3,7 +3,7 @@
 import { AppState } from "./state.js";
 import type { AppComponents } from "../ui/App.js";
 import type { TimelineEvent, RoomInfo } from "../ipc/types.js";
-import { refreshRooms, selectRoom, resolveDisplayName, consumeOwnSentEvent, applyIncomingReaction, resolveInlineEmojiForTimeline, handleIncomingVerificationRequest, downloadSyncMessageImage, ensureSenderAvatarDownloaded, applyIncomingRedaction, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, appendRoomTimelineCache, bumpRoomActivity, homeViewHandleMessage, homeViewHandlePresence, timelineEventToMessage, timelineEventToThreadMessage } from "./actions.js";
+import { refreshRooms, selectRoom, resolveDisplayName, applyIncomingReaction, handleIncomingVerificationRequest, ensureSenderAvatarDownloaded, applyIncomingRedaction, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, homeViewHandlePresence, recordLiveEvent, renderLiveEvent } from "./actions.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { handleIncomingMessage } from "./notifications.js";
 
@@ -139,18 +139,8 @@ export async function startSync(components: AppComponents): Promise<() => void> 
     (payload) => {
       const currentRoom = AppState.get("currentRoomId");
 
-      // Keep the per-room timeline cache warm for any room we've loaded this
-      // session (not just the current one), so revisiting it paints the latest
-      // messages instantly instead of a stale tail. No-op for uncached rooms.
-      appendRoomTimelineCache(payload.room_id, payload.event);
-
-      // Bump the room's recency so the pseudo-space views (Home/DMs/Groups)
-      // re-sort as messages arrive — own echoes included, so sending also
-      // floats the room to the top.
-      bumpRoomActivity(payload.room_id, payload.event.timestamp);
-
-      // Keep the Home canvas's bubbles live (no-op when it isn't showing).
-      homeViewHandleMessage(payload.room_id, payload.event);
+      // Timeline cache, recency and the Home canvas — for every room, open or not.
+      recordLiveEvent(payload.room_id, payload.event);
 
       const isCurrentRoomLive = payload.room_id === currentRoom && !isInContextView();
       // In context view we keep the room in focus but skip applying live-tail
@@ -167,73 +157,7 @@ export async function startSync(components: AppComponents): Promise<() => void> 
       let isRendered = false;
 
       if (isCurrentRoomLive) {
-        isRendered = true;
-        // Deduplicate: skip events already in the state cache (e.g. initial sync
-        // replay of messages already loaded via getTimeline, or a second client
-        // emitting the same event in dev hot-reload scenarios).
-        const current = AppState.get("currentTimeline");
-        const alreadyInState = current.some((e) => e.event_id === payload.event.event_id);
-        if (!alreadyInState) {
-          AppState.set("currentTimeline", [...current, payload.event]);
-        }
-
-        // Skip rendering if: (a) already in state (replay), (b) it's our own
-        // echo (deduplication via _ownSentEventIds), or (c) it's already in the
-        // DOM (race: echo arrived after confirmMessage but before add-to-set).
-        const alreadyInDom = !!timeline.getMessageElementById(payload.event.event_id);
-        if (!alreadyInState && !alreadyInDom && !consumeOwnSentEvent(payload.event.event_id)) {
-          const openThreadId = AppState.get("threadRootEventId");
-
-          if (payload.event.thread_root) {
-            // Thread replies never appear in the main timeline. Route to the
-            // thread panel if the matching thread is open, and always update
-            // the reply count indicator on the thread root message.
-            if (openThreadId !== null && payload.event.thread_root === openThreadId) {
-              // Map with the same converter the thread-open path uses, so a
-              // reply that arrives live renders with its media (image/video/
-              // sticker/file) instead of a bare filename line.
-              timeline.appendInlineReply(timelineEventToThreadMessage(payload.event));
-              // …and resolve its mxc:// media into the panel, mirroring what
-              // openThread() does for the replies it loads.
-              downloadSyncMessageImage(payload.event, {
-                updateMessageMedia: (id, url) => timeline.updateInlineThreadMedia(id, url),
-              });
-              // Inline custom emoji in the reply (or its caption) need the same
-              // treatment as the main-timeline append below — the panel renders
-              // into the timeline's list, so one resolver covers both.
-              if (payload.event.formatted_body || payload.event.caption_formatted) {
-                resolveInlineEmojiForTimeline(timeline);
-              }
-            } else {
-              // The panel is closed, or showing a different thread. The reply
-              // lands in neither the main timeline nor the panel, so the toast
-              // is the only signal that it arrived — the reply-count bump below
-              // is a number on an existing message, easily missed.
-              isRendered = false;
-            }
-            timeline.incrementThreadReplyCount(payload.event.thread_root);
-          } else if (payload.event.is_edit && payload.event.relates_to_event_id) {
-            // Edit: update the original message body in place
-            timeline.updateMessageBody(
-              payload.event.relates_to_event_id,
-              payload.event.body,
-              payload.event.formatted_body ?? undefined,
-            );
-            // An edit can introduce custom (MSC2545) emoji that were not in the
-            // original body — resolve their mxc:// srcs like the append path.
-            if (payload.event.formatted_body) resolveInlineEmojiForTimeline(timeline);
-          } else {
-            // `currentTimeline` (already including this event, appended above)
-            // is the lookup list for the reply preview — the same list the
-            // room-load path passes.
-            timeline.appendMessage(
-              timelineEventToMessage(payload.event, AppState.get("currentTimeline")),
-            );
-            downloadSyncMessageImage(payload.event, timeline);
-            ensureSenderAvatarDownloaded(payload.event.sender, timeline);
-            resolveInlineEmojiForTimeline(timeline);
-          }
-        }
+        isRendered = renderLiveEvent(payload.event, timeline);
       } else if (!skipForContextView) {
         // Update unread count on room list item. Skip this for the current
         // room when we're in context view — the user is still focused on it,

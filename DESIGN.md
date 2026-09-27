@@ -204,6 +204,12 @@ can least afford: telling someone it works while nothing delivers it.
 the only one the user can fix — the foreground service remains the fallback
 there.
 
+The push section shows a one-line status for the current state and, beneath
+it, a hint only when there is something for the user to do (install a
+distributor, or re-enable notifications at the top of the tab); other states
+show no hint. Settings copy in general is user guidance, not an explanation of
+how a feature works — rationale like what the gateway sees lives here (#113).
+
 **`muted_account` is the rung that is not about this device at all.**
 `.m.rule.master` is an account-wide kill switch — one override rule matching
 every event and notifying on nothing — which Quark never writes and other
@@ -289,10 +295,34 @@ identical to the warm path — same mutes, same highlight decision, no second
 decision matrix to drift — and the sync sweeps up everything else that arrived
 in the same window. The rendered `NotificationSpec`s serialise back to Kotlin,
 where `PushNotifier` posts them; matching the notification plugin's ids,
-channels, group keys and *intent extras* is what makes a cold notification
-behave like a warm one when tapped.
+channels, group keys and *intent extras* is what makes a tap on one route
+through the plugin's `actionPerformed` event and MainActivity's cold-start
+mirror alike.
 
-Three guards matter here, all of them against work this app has previously
+**Warm notifications on Android post through `PushNotifier` too**, called
+over JNI (`push_jni::post_notifications`) rather than through
+tauri-plugin-notification. `MainActivity.onCreate` hands Rust the JVM, the
+application context and the `PushNotifier` class once (`nativeInstall`) —
+the class resolved on a Java thread, since `FindClass` from a native thread
+sees only the system class loader. The plugin could not stay, for two
+reasons. Every plugin call dispatches onto the Activity, and wry `expect`s
+one: a process that outlived its Activity (kept by a foreground service, or
+just not yet reclaimed) panicked on its first notification, inside the sync
+loop that raised it. And its tap intents use `FLAG_CANCEL_CURRENT`, which
+kills the old PendingIntent before the replacement row is posted — the room
+summary is re-posted under one id per message, so a tap in that window hit a
+dead intent and closed the shade on nothing (#87). One notifier also means
+one set of request codes, flags and summary rules instead of two that
+drifted. Dismissal (`notify::cancel_room`) goes the same way. The plugin
+remains only as a fallback for a notifier that failed to install, and for
+iOS. The summary alerts with `GROUP_ALERT_CHILDREN` and only once, so its
+per-message re-post does not sound on top of the message's own alert.
+
+The foreground-service placeholder ("Checking for new messages") carries a
+launch intent: it sits in the shade beside the real row on every push, and
+without one a tap on it closed the shade and did nothing.
+
+Several guards matter here, all of them against work this app has previously
 overwhelmed its own homeserver with:
 
 - **A warm app wins — while it is actually working.** `push_wake` keeps a
@@ -305,6 +335,41 @@ overwhelmed its own homeserver with:
   The progress stamp comes from `sync_with_callback`, because `Client::sync`
   loops internally and returns only on error: its success arm is reached about
   as often as never.
+
+  Even a loop inside that window only *probably* delivers, so an event push
+  does not stand down flat: it **hands off** (`WakePlan::HandOff`), waiting up
+  to `WARM_HANDOFF` (10 s) for the warm handler to report that it has processed
+  that very event id (`note_warm_event`, stamped at the end of
+  `events::maybe_notify` for messages and stickers, and by a catch-all
+  timeline handler for everything else the push rules fire on — undecryptable
+  events, redactions, polls, calls). An invite carries no event id in sync, so
+  its push is answered instead by the room showing up as invited in the warm
+  client. A loop that stays silent through the handoff is
+  restarted, exactly like a stalled one below — never raced. Standing
+  down outright lost the event in the commonest Android state of all — a
+  resident process the OS has frozen. The clock was stamped just before the
+  freeze and read as live; the push service stopped at once, and the process
+  was re-frozen before the loop it deferred to had run (#90). The wait is what
+  keeps it thawed: the service holds the foreground, which also exempts it from
+  Doze's network cut, for as long as the loop needs. Counts-only pushes still
+  stand down, since a warm app clears the room from the receipt itself.
+- **A stalled loop is restarted, never raced.** An event push that finds the
+  loop running but stalled (`WarmSync::Stalled`) does not sync beside it: the
+  wake would be handed the app's own `Client`, and two syncs on one client are
+  two concurrent E2EE outgoing-request flushes from one device (#52). Instead
+  `client::restart_sync` aborts the loop and spawns a fresh one — on Tauri's
+  runtime, since the wake's JNI runtime dies when it returns — and the wake
+  waits, within its budget, for the new loop's first completed sync, which
+  delivers the event through the warm handlers. A restart never revives a loop
+  that was stopped: the "is one running?" check, the abort and the spawn all
+  happen under the `SyncState` lock logout also takes. Restarting stamps the
+  liveness clock, so a burst restarts the loop once. A dismissal push needs no
+  sync and leaves a stalled loop alone.
+- **One syncer per client, structurally.** `JoinHandle::abort` only requests
+  cancellation, so "abort the old loop, spawn the new one" used to leave a
+  window with both polling. Every syncer — the warm loop for its lifetime, a
+  wake for its bounded sync — holds `client::SYNC_TURN`, so a replacement
+  begins only once its predecessor has actually been dropped.
 - **A burst coalesces.** `WakeGuard` admits one push sync at a time, released on
   `Drop` so a panicking sync reopens it instead of wedging push shut.
 - **One `Client` per store.** `background_client` reuses the app's client when
@@ -549,6 +614,13 @@ is owed:
   to `push.json.corrupt` rather than overwritten — it may be the only surviving
   record of a live pusher.
 
+A distributor re-announcing the endpoint it already gave us is free only when
+a pusher points at it (`push::is_registered_at`). The address is stored before
+registration is attempted, so a first attempt that failed leaves it stored
+and unregistered; treating that re-announcement as "nothing new" left push
+dead until the next app launch, which for a user who only meets the app
+through its notifications may never come.
+
 Reads never mint state: `get_push_status` uses `load_push_state`, so opening
 Settings on desktop doesn't create a `push.json` for a platform that can never
 use one.
@@ -559,7 +631,7 @@ use one.
 
 | Surface | Guarded element | Let through |
 | --- | --- | --- |
-| Main composer | `.input-bar-wrap` (`Input`) | `.input-bar__field` — it scrolls past six lines |
+| Main composer | `.input-bar-wrap` (`Input`) | `.input-bar__field` — it scrolls past six lines — and `.attach-tray__items`, the staged-attachments row, which scrolls sideways |
 | Autocomplete popover | `.shortcode-preview` (`ShortcodePreview` / `MentionPreview`, mounted on `.content-area`, so outside the wrap) | itself, but only while the list actually overflows |
 | Thread overlay compose row | `.thread-view__input-bar` (`ThreadView` builds its own row; it does not use `Input`) | nothing — the reply field is one line |
 
@@ -568,6 +640,8 @@ Adding chrome inside one of those containers needs no new `touch-action` rule. A
 **Overlays follow the pan.** The shell compensates for the pan with a transform on `#app` (`--viewport-pan`, published by `mobile.ts`). Overlays mount on `<body>` so nothing can clip them, which puts them outside that element — so they mount through `mountOverlay` (`src/ui/overlay.ts`), which tags them with `.quark-overlay` and earns them the same offset. Without it the two shear apart as the pan grows: toasts land off-screen and the emoji picker floats away from the compose bar it is anchored to. The offset uses the individual `translate` property, not `transform`, so it composes with the `translate(-50%, -50%)` that dialogs centre themselves with. The shell and the overlay layer therefore share a coordinate space that client rects do not: an overlay placed off an anchor's `getBoundingClientRect()` must subtract `viewportPan()`, or it lands a pan below its anchor.
 
 **Pinch-zoom is off, but the layout is still zoom-aware.** The viewport meta (`user-scalable=no`, `maximum-scale=1`) disables page zoom — on iOS the meta is the only mechanism, since WebKit does not let `touch-action` suppress its page-level pinch; a body-level `touch-action: pan-x pan-y` covers engines that do honor it. Zoom can still happen regardless: Android's "force enable zoom" accessibility setting overrides the meta, and a ≤768px desktop window can be trackpad-pinched. A pinch shrinks the visual viewport to roughly `layoutHeight / scale`, which from a height difference alone is indistinguishable from an open keyboard — so `viewportMetrics` takes `visualViewport.scale` and claims neither a keyboard inset nor a pan while zoomed, and the compose guards stand down there too. `ImageLightbox` implements its own pinch-to-zoom for images in JS; the meta does not affect it.
+
+**Long press opens the action sheet, and nothing else.** `attachLongPress` (`src/app/long_press.ts`) is the one gesture helper — the timeline, room list and space strip all attach it at their container. It fires only in mobile mode (a desktop-width touchscreen gets `contextmenu` and the floating menu, never the sheet) and swallows the click the engine synthesises after the press. The engine would otherwise start a native text selection on the same press, so in mobile mode the whole message row is `user-select: none`. Copying a fragment goes through the sheet's **Select text** row instead: it opts that one body back in (`.message__body--selectable`), selects its contents and hands it to the platform's own handles and callout (#100). It deliberately does not reuse the vim `o` text-select path, which sets `contenteditable` and would raise the soft keyboard. The opt-in is revoked on the next press elsewhere.
 
 ---
 
@@ -853,7 +927,7 @@ Arguments follow one grammar: `<required>` and `[optional]`. The command palette
 reads it to decide whether a row can run outright or must prefill the command
 bar for the user to finish — a palette row cannot supply `@user:server`.
 
-**The command palette** (`Ctrl+K`, the `⌕` button in the space strip, or a
+**The command palette** (`Ctrl+K`, the search (magnifier) button in the space strip, or a
 pull-down from the top of the open drawer on mobile) searches rooms and actions
 together. A leading `:` drops the rooms. A row that needs an argument prefills
 the command bar; a row whose action is irreversible goes through the same
@@ -962,7 +1036,15 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
 - [x] Spaces: hierarchy display, space-scoped room lists, restricted joins
 - [x] Threads (m.thread relation) — replies carry media and MSC2530 captions,
       converted by the same code path as the main timeline
-- [x] Rich replies (m.in_reply_to)
+- [x] Rich replies (m.in_reply_to) — every reply gets its banner, even when the
+      original is outside the loaded window: the preview is looked up in the
+      page, then the whole buffer, then a cache of fetched originals, and
+      otherwise drawn as "loading original message…" while `get_event` fetches
+      it (at most four at once; "original message unavailable" if it is gone).
+      An undecryptable reply keeps its banner, since `m.relates_to` is
+      cleartext; a thread's `is_falling_back` pointer is not a reply. Clicking
+      the banner jumps to the original — scrolling if loaded, else loading its
+      context, else opening its thread if it is a thread reply
 - [x] Reactions (m.annotation) — Unicode + custom emoji
 - [x] Message editing & redaction — an edit re-runs the outgoing formatter, so
       `m.new_content` keeps the HTML `formatted_body` and custom emoji survive
@@ -1058,6 +1140,13 @@ sanitised `formatted_body`, the same in a thread reply or after an edit — is
 styled and activated by one shared path (`src/app/links.ts`), so a markdown link
 whose label is not itself a URL looks and behaves like every other link.
 
+On the sending side, the compose box's inline markdown (`src/app/markdown.ts`)
+turns `[label](url)` into `<a href>` in the `formatted_body`, leaving the
+markdown source in `body` as the plain fallback. Only `http(s)`, `mailto` and
+`matrix` targets link; anything else stays literal text. Whenever a message has
+a `formatted_body`, its newlines go out as `<br>`, because other clients render
+that HTML normally and a bare newline would collapse to a space.
+
 Activation is a **single capture-phase guard on the document**, not a listener
 per anchor. Left click and middle click both open the URL in the system browser
 and cancel the in-window navigation; middle-click `mousedown` is cancelled too,
@@ -1071,29 +1160,45 @@ alongside `openExternalUrl` opened every link twice.
 ### Media Handling
 - Authenticated media download via `/_matrix/client/v1/media/download/`
 - Inline image previews in timeline (configurable max dimensions)
-- **Image attachments & captions (MSC2530):** pasting an image — or picking one
-  via the attach button — stages it in a preview above the compose bar rather
-  than sending immediately. Enter (or the ➤ / preview Send button) sends it;
-  any text typed first becomes the caption, sent as a single `m.image` with
-  `body` = caption and `filename` = original name (no caption ⇒ `body` =
-  filename, `filename` omitted). The read path surfaces `filename` alongside the
+- **Staged attachments & captions (MSC2530):** every attachment — picked via
+  the attach button, pasted or dropped; image, video or any other file — waits
+  in a tray above the compose bar rather than sending immediately
+  (`src/ui/AttachmentTray.ts`, owned by `Input`). Images show as thumbnails,
+  everything else as a one-line chip (a glyph, the filename and a human size),
+  each with its own `×`. Adding more files appends them, in order. The tray's
+  row scrolls sideways rather than wrapping, so a long batch never pushes the
+  compose bar off a phone screen, and mobile uses the same tray. Nothing is
+  sent until the composer is submitted (Enter, the ➤ button or the tray's
+  Send button). Then every staged attachment goes out in order, sequentially,
+  as `m.image`, `m.video` or `m.file` by type (`attachmentKind`). Any typed
+  text becomes the **first** attachment's caption, whatever its type — MSC2530
+  allows a caption on any media message, and `send_file` / `send_video` take
+  one just as `send_pasted_image` does. A captioned upload sends
+  `body` = caption and `filename` = original name; with no caption, `body` =
+  filename and `filename` is omitted. The read path extracts captions from
+  `m.image`, `m.video`, `m.file` and `m.audio` alike, and every timeline
+  surface draws one beneath the media. It surfaces `filename` alongside the
   caption rather than making `body` serve both: with a caption present `body`
   *is* the caption, so using it as alt text announced a captioned image twice
   (once as alt, once as the caption drawn beneath it) and labelled a captioned
   video with the caption instead of the file it plays. Alt text, the video
   label and the download name all take the filename, falling back to the
-  reply-fallback-stripped body for uploads that carry none. The first `Esc` discards the staged image
-  (modal-close semantics — mode, reply, and edit state untouched); staging a
-  second image replaces the first, keeping the typed caption. An armed reply
-  attaches to the image send and clears on success; a failed send restores the
-  staged image and caption to the composer. Committing an inline edit takes
-  precedence — the staged image stays pending. Staged images persist across
-  room switches like text drafts and send to the room current at send time.
-  Videos and non-image files still upload immediately. A caption goes through
-  the same emoji expansion as a typed message — Unicode shortcodes become
-  glyphs in `body`, custom (MSC2545) ones become `<img data-mx-emoticon>` in
-  `formatted_body` with the shortcode left in `body` as the fallback — and the
-  read path renders `formatted_body` where the event carries one.
+  reply-fallback-stripped body for uploads that carry none. The first `Esc`
+  (or the tray's Cancel) clears the whole tray (modal-close semantics — mode,
+  reply, and edit state untouched). The room, open thread and armed reply are
+  read once, at submit, so the whole batch goes where it was sent even if the
+  user moves on while it uploads. Every attachment follows the thread; an
+  armed reply rides on the first attachment only and clears once that one is
+  sent. A failed (or cancelled) attachment does not stop the rest. The failures go back to the
+  front of the tray in order, and if the captioned first attachment is among
+  them, so is the caption as typed. Committing an inline edit takes precedence
+  — the tray stays pending. Staged attachments persist across room switches
+  like text drafts and send to the room current at submit. A caption goes
+  through the same emoji expansion as a typed message — Unicode shortcodes
+  become glyphs in `body`, custom (MSC2545) ones become
+  `<img data-mx-emoticon>` in `formatted_body` with the shortcode left in
+  `body` as the fallback — and the read path renders `formatted_body` where
+  the event carries one.
 - **Attachments follow the open thread.** An image, file, video, sticker or GIF
   sent with a thread open carries that thread's relation, exactly as a text
   reply does. A reply armed *inside* a thread produces one threaded reply
@@ -1104,18 +1209,81 @@ alongside `openExternalUrl` opened every link twice.
   invisibly), and an attachment only folds in a reply to the thread's root or to
   one of its replies. Files sent into a thread render in the panel as the same
   click-to-open affordance the main timeline gives them. Attachments
-  sent into a thread have no optimistic row: they appear when the echo arrives,
-  which is what routes them into the panel with their media. An armed reply is
+  sent into a thread have no optimistic row: they appear once sent, from the
+  send's own echo (see *Attachment progress*), which the live render path
+  routes into the panel with its media just as it would the sync echo. Stickers
+  and GIFs sent into a thread still wait for the sync echo. An armed reply is
   consumed by the attachment and cleared, as it is for a text message.
-- **Pasting.** Anything on the clipboard that is a file pastes into the
-  composer, not just images: an image stages in the preview, a video sends as
-  `m.video`, everything else as `m.file` — the same routing the attach button
-  uses. Where the webview exposes a pasted image only through the async
-  Clipboard API (Linux/WebKitGTK), the default text paste has already run by the
-  time the image arrives; the text it inserted is taken back out only when it
-  reads as the image's stand-in (a lone URL, path or image filename). Prose that
-  merely shares the clipboard with an image stays, and becomes the caption.
-  Drag-and-drop is not implemented.
+- **One attachment route.** The attach button (which accepts several files),
+  a paste and a drop onto the window all hand their files to one routine,
+  `attachFiles` (`src/app/actions/media.ts`). It stages every file in the tray,
+  in order, and switches to Insert mode for the caption. A file the webview
+  could not type (`""` or `application/octet-stream`) is sniffed by its leading
+  bytes (PNG, JPEG, GIF, WebP, BMP, TIFF, ICO, AVIF, HEIC). An image in a format
+  WebKitGTK does not name therefore still stages and sends as an image instead
+  of uploading as a nameless file.
+- **Pasting.** Every file on the clipboard pastes into the composer, not just
+  images and not just the first. A clipboard file the engine hands back
+  untyped keeps its clipboard target's type. Where the webview exposes a pasted
+  image only through the async Clipboard API (Linux/WebKitGTK), the default text
+  paste has already run by the time the image arrives. The text it inserted is
+  taken back out only when it reads as the image's stand-in (a lone URL, path
+  or image filename). Prose that merely shares the clipboard with an image
+  stays, and becomes the first attachment's caption. The async Clipboard API is spec-limited to
+  `image/png`, so it cannot recover other formats.
+- **Pasting files copied in a file manager.** Copying files in Dolphin or
+  Nautilus puts a list of `file://` URIs on the clipboard (`text/uri-list`, and
+  `x-special/gnome-copied-files` on GNOME), not the files. WebKitGTK shows the
+  page only the list's text, and the page cannot open a path, so the backend
+  reads the list off the OS clipboard itself: `read_clipboard_files`
+  (`src-tauri/src/clipboard_files.rs`). The command takes no argument. It opens
+  only what the OS clipboard lists, so nothing the webview sends can point it
+  at a file. On Wayland it reads over the data-control protocol
+  (`wl-clipboard-rs`), which needs no keyboard focus. Where the compositor
+  lacks that protocol (Mutter), or on X11, it reads the X selection
+  (`x11-clipboard`), which XWayland mirrors from the Wayland clipboard. Both
+  crates are pure Rust, so the build needs no system library. The list is
+  parsed here, not by a clipboard crate: entries end in `\r\n` (RFC 2483, and
+  what Qt and GTK write), `#` lines are comments, URIs are percent-decoded, and
+  `file://localhost/` is local. A non-`file:` URI (a copy out of `smb://`), a
+  file on another host, a folder, an unreadable file, or a file past the 100 MB
+  per-paste cap is reported by name and skipped, and the rest still attach. The
+  composer asks for the list in three cases:
+  - The paste's text is nothing but `file:` URIs. The default paste is
+    suppressed, because nobody means to send that as a message. If the OS
+    clipboard turns out to hold no file list (a URI copied out of a terminal),
+    the text is inserted by hand instead.
+  - The text is absolute paths, one per line (Nautilus's plain-text flavour).
+    A path copied from a terminal looks the same, so the paste goes ahead and
+    is taken back out only if a file list is really there.
+  - The engine exposed nothing at all.
+
+  Any other text paste never reaches the backend. Linux only; the command
+  returns nothing elsewhere. A page can write a URI list to the clipboard
+  itself (a `copy` handler's `setData`), so "only what the clipboard lists"
+  would otherwise let script in the webview name the files it reads back. Two
+  checks close that, each enough on its own. The read is refused while Quark's
+  own process owns the selection (GDK's `selection_owner_get`, which answers on
+  both its X11 and Wayland backends). It is also refused when the selection
+  carries `org.webkitgtk.WebKit.custom-pasteboard-data`, the type WebKit adds to
+  everything a page writes and no file manager offers. The second check still
+  holds if a clipboard manager takes over a page's list after Quark lets go of
+  it. A refused read behaves like a clipboard with no file list: the text
+  pastes as text.
+- **Dropping.** Files dropped anywhere on the window attach to the open room.
+  The composer shows a dashed accent border while a drag is over the window.
+  Tauri keeps OS drops for itself (`dragDropEnabled`, left at its default), so
+  the webview never sees an HTML5 `drop` carrying a `File`. `src/app/file_drop.ts`
+  listens to the native event instead, which delivers paths, and reads each one
+  through `read_dropped_file`. That command reads only the exact paths the
+  backend recorded from the window's own `DragDropEvent::Drop`
+  (`DroppedFiles` in `src-tauri/src/local_files.rs`), so the set is exactly the
+  files the user handed over. The asset-protocol scope is not used for this:
+  it also allows `$TEMP/**` for serving media, which would let the page read
+  any temp file. A dropped folder, or a path
+  that can't be read, is reported and skipped, and the rest of the drop still
+  attaches. With no room open, a drop says so and reads nothing. Mobile builds
+  get no native drop events.
 - **Encrypted attachments.** In an encrypted room the bytes are encrypted
   before upload and the event references them as an `m.file` source carrying the
   key, never a plaintext `mxc://`. The room decides this, not the call site:
@@ -1134,6 +1302,16 @@ alongside `openExternalUrl` opened every link twice.
   spinner with the backend's message and stays until dismissed; cancel is
   offered only during the local read, the one phase that can still be abandoned
   without something having already been sent.
+
+  When the row ticks, the attachment is already on screen. `send_pasted_image`,
+  `send_file` and `send_video` return the sent event alongside its id
+  (`SentMessage.echo`), converted by the same function the sync handler uses,
+  and the frontend paints it through the same render path sync events take
+  (`actions/live.ts`), which deduplicates the sync echo by event id when it
+  follows. Attachments used to wait for that echo alone — the one send path
+  with no local echo — so on Android, where picking the file backgrounds the
+  app and the sync loop comes back from that mid long-poll or asleep in
+  backoff, a sent image could stay missing until the room was reopened (#112).
 
   Rows are scoped to the room the attachment is going to. The composer is
   shared by every room, so an unscoped row followed the user out — a failed

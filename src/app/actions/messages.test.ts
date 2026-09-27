@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   startReply,
+  promoteReplyTarget,
   cancelReply,
   startEdit,
   cancelEdit,
@@ -52,6 +53,20 @@ beforeEach(() => {
     replyToEventId: null,
     editingEventId: null,
     currentTimeline: [],
+  });
+});
+
+describe("promoteReplyTarget (#106)", () => {
+  it("follows a still-sending message to its real event ID", () => {
+    startReply("optimistic-1", "me", "just sent");
+    promoteReplyTarget("optimistic-1", "$real:x");
+    expect(AppState.get("replyToEventId")).toBe("$real:x");
+  });
+
+  it("leaves a reply to some other message alone", () => {
+    startReply("$other:x", "Alice", "hello");
+    promoteReplyTarget("optimistic-1", "$real:x");
+    expect(AppState.get("replyToEventId")).toBe("$other:x");
   });
 });
 

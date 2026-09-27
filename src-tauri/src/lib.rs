@@ -1,8 +1,10 @@
 pub mod apns;
+pub mod clipboard_files;
 pub mod commands;
 pub mod config;
 pub mod events;
 pub mod gif;
+pub mod local_files;
 pub mod matrix;
 pub mod media_cache;
 pub mod media_server;
@@ -150,6 +152,14 @@ pub fn run() {
         .manage(matrix::rooms::LastEventCache::default())
         .manage(notify::NotificationRegistry::default())
         .manage(updater::UpdaterState::default())
+        .manage(local_files::DroppedFiles::default())
+        // Recorded here, from the drop itself, so `read_dropped_file` reads
+        // only what the user actually dropped.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<local_files::DroppedFiles>().record(paths);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // Auth
             commands::login,
@@ -182,6 +192,7 @@ pub fn run() {
             // Timeline
             commands::get_timeline,
             commands::get_event_context,
+            commands::get_event,
             commands::paginate_forward,
             commands::open_room_timeline,
             commands::load_older_timeline,
@@ -214,6 +225,8 @@ pub fn run() {
             commands::send_pasted_image,
             commands::send_file,
             commands::send_video,
+            commands::read_dropped_file,
+            commands::read_clipboard_files,
             commands::get_cache_stats,
             commands::clear_media_cache,
             commands::set_cache_size_limit,

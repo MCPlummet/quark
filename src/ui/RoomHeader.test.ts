@@ -129,7 +129,8 @@ describe("RoomHeader", () => {
       const btn = searchBtn();
       expect(btn).not.toBeNull();
       expect(btn.tagName).toBe("BUTTON");
-      expect(btn.textContent).toBe("🔍 search");
+      expect(btn.textContent).toBe("search");
+      expect(btn.querySelector("svg.icon")).not.toBeNull();
     });
 
     it("fires the handler when clicked", () => {

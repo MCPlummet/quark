@@ -34,7 +34,7 @@ export interface ToggleSectionSpec<S extends ToggleState> {
   set: (enabled: boolean) => Promise<void>;
   /** The live status line under the toggle. */
   status: (state: S) => string;
-  /** Explanatory text under the section. */
+  /** What the user can do about the current state; "" hides the line. */
   hint: (state: S) => string;
   /**
    * Anything bespoke this section needs (Android's battery-exemption button).
@@ -262,6 +262,7 @@ export function makeControls(): SettingsControls {
       const paint = (s: S) => {
         status.textContent = spec.status(s);
         hint.textContent = spec.hint(s);
+        hint.hidden = hint.textContent === "";
       };
       paint(state);
 

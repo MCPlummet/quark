@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+// @ts-expect-error - no ambient declaration for Vite's ?raw suffix in this project
+import BASE_CSS from "../style/base.css?raw";
 import {
   selectMessageTextForTouch,
   clearTouchTextSelection,
@@ -80,6 +82,35 @@ describe("selectMessageTextForTouch", () => {
     expect(body.classList.contains("message__body--selectable")).toBe(false);
     expect(second.classList.contains("message__body--selectable")).toBe(true);
     second.remove();
+  });
+
+  // The press is live anywhere in the message row, so the whole row has to
+  // refuse selection — a press on the reply banner still started a highlight
+  // alongside the sheet when only the body did (#100).
+  it("mobile mode refuses selection across the message row, except an opted-in body", () => {
+    const style = document.createElement("style");
+    style.textContent = BASE_CSS as string;
+    document.head.appendChild(style);
+    document.body.classList.add("quark-mobile");
+    const row = document.createElement("div");
+    row.className = "message";
+    const banner = document.createElement("div");
+    banner.className = "reply-preview";
+    const rowBody = document.createElement("div");
+    rowBody.className = "message__body";
+    row.append(banner, rowBody);
+    document.body.appendChild(row);
+    try {
+      const userSelect = (el: Element) => getComputedStyle(el).getPropertyValue("user-select");
+      expect(userSelect(row)).toBe("none");
+      expect(userSelect(rowBody)).toBe("none");
+      selectMessageTextForTouch(rowBody);
+      expect(userSelect(rowBody)).toBe("text");
+    } finally {
+      row.remove();
+      style.remove();
+      document.body.classList.remove("quark-mobile");
+    }
   });
 
   it("is a no-op to clear when nothing is selected", () => {

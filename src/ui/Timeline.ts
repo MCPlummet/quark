@@ -198,6 +198,12 @@ export interface ReplyPreviewData {
   eventId: string;
   senderName: string;
   body: string;
+  /**
+   * Set while the original is outside the loaded window: `"loading"` until a
+   * fetch resolves it, `"unavailable"` if that fetch found nothing to show
+   * (redacted, not a message, or unreachable). Absent once resolved.
+   */
+  state?: "loading" | "unavailable";
 }
 
 export interface MessageData {
@@ -224,7 +230,7 @@ export interface MessageData {
   /** Natural pixel dimensions of the image — used to reserve layout space before src loads */
   mediaWidth?: number;
   mediaHeight?: number;
-  /** Media caption (MSC2530) shown beneath an image; absent when the body is just a filename. */
+  /** Media caption (MSC2530) shown beneath the media; absent when the body is just a filename. */
   caption?: string;
   /**
    * The caption's `formatted_body`, when it has one. Rendered in place of the
@@ -410,6 +416,76 @@ function buildVideoAffordance(
   return el;
 }
 
+/** Placeholder text for a reply preview whose original isn't loaded yet. */
+const REPLY_LOADING_TEXT = "loading original message…";
+/** Text for a reply preview whose original could not be fetched. */
+const REPLY_UNAVAILABLE_TEXT = "original message unavailable";
+
+/**
+ * Build the banner shown above a reply. Clicking it (or Enter/Space) bubbles
+ * `quark:jump-to-message` up to the Timeline.
+ *
+ * A preview is rendered even when the original is not in the loaded window
+ * (`state: "loading"` / `"unavailable"`) — the event ID alone is enough to jump
+ * to it. Omitting the banner in that case is what made a reply to an older
+ * message look like a plain message (#106).
+ */
+export function buildReplyPreview(replyTo: ReplyPreviewData): HTMLElement {
+  const reply = document.createElement("div");
+  reply.className = "reply-preview";
+  if (replyTo.state) reply.classList.add(`reply-preview--${replyTo.state}`);
+  reply.dataset.replyTo = replyTo.eventId;
+  reply.setAttribute("role", "button");
+  reply.setAttribute("tabindex", "0");
+  const bodyText =
+    replyTo.state === "loading" ? REPLY_LOADING_TEXT
+    : replyTo.state === "unavailable" ? REPLY_UNAVAILABLE_TEXT
+    : replyTo.body;
+  reply.setAttribute(
+    "aria-label",
+    replyTo.senderName ? `Reply to ${replyTo.senderName}: ${bodyText}` : `Reply: ${bodyText}`,
+  );
+  reply.title = "Jump to original message";
+
+  // Reply icon — clicking jumps to the original
+  const icon = document.createElement("span");
+  icon.className = "reply-preview__icon";
+  icon.textContent = "↩";
+  icon.setAttribute("aria-hidden", "true");
+  reply.appendChild(icon);
+
+  if (replyTo.senderName) {
+    const sender = document.createElement("span");
+    sender.className = "reply-preview__sender";
+    // Strip @user:server.org → just the local part for display
+    const localPart = replyTo.senderName.startsWith("@")
+      ? replyTo.senderName.slice(1).split(":")[0]
+      : replyTo.senderName;
+    sender.textContent = localPart;
+    reply.appendChild(sender);
+  }
+
+  const body = document.createElement("span");
+  body.className = "reply-preview__body";
+  body.textContent = bodyText;
+  reply.appendChild(body);
+
+  // Click / Enter → bubble a jump event up to the Timeline element
+  const jump = () => {
+    reply.dispatchEvent(
+      new CustomEvent("quark:jump-to-message", {
+        bubbles: true,
+        detail: { eventId: replyTo.eventId },
+      })
+    );
+  };
+  reply.addEventListener("click", jump);
+  reply.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jump(); }
+  });
+  return reply;
+}
+
 /**
  * Build the inner content of a single message (body, media, reactions) —
  * does NOT include the sender/timestamp header (that lives on the group).
@@ -426,53 +502,7 @@ function buildMessageElement(msg: MessageData): HTMLElement {
   }
 
   // ── Reply preview ──────────────────────────────────────────────────────
-  if (msg.replyTo) {
-    const replyTo = msg.replyTo;
-
-    const reply = document.createElement("div");
-    reply.className = "reply-preview";
-    reply.setAttribute("role", "button");
-    reply.setAttribute("tabindex", "0");
-    reply.setAttribute("aria-label", `Reply to ${replyTo.senderName}: ${replyTo.body}`);
-    reply.title = "Jump to original message";
-
-    // Reply icon — clicking jumps to the original
-    const icon = document.createElement("span");
-    icon.className = "reply-preview__icon";
-    icon.textContent = "↩";
-    icon.setAttribute("aria-hidden", "true");
-    reply.appendChild(icon);
-
-    const sender = document.createElement("span");
-    sender.className = "reply-preview__sender";
-    // Strip @user:server.org → just the local part for display
-    const localPart = replyTo.senderName.startsWith("@")
-      ? replyTo.senderName.slice(1).split(":")[0]
-      : replyTo.senderName;
-    sender.textContent = localPart;
-    reply.appendChild(sender);
-
-    const body = document.createElement("span");
-    body.className = "reply-preview__body";
-    body.textContent = replyTo.body;
-    reply.appendChild(body);
-
-    // Click / Enter → bubble a jump event up to the Timeline element
-    const jump = () => {
-      reply.dispatchEvent(
-        new CustomEvent("quark:jump-to-message", {
-          bubbles: true,
-          detail: { eventId: replyTo.eventId },
-        })
-      );
-    };
-    reply.addEventListener("click", jump);
-    reply.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jump(); }
-    });
-
-    row.appendChild(reply);
-  }
+  if (msg.replyTo) row.appendChild(buildReplyPreview(msg.replyTo));
 
   // ── Header (sender + timestamp) — only for ungrouped/system messages ──
   if (msg.type !== "system") {
@@ -527,6 +557,8 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     row.classList.add("message--video");
     const aff = buildVideoAffordance(msg.mediaUrl, msg.mediaAlt, msg.mediaMimeType, msg.mediaEncryptionInfo, msg.mediaThumbnailUrl, msg.mediaThumbnailEncryptionInfo);
     row.appendChild(aff);
+    // MSC2530 captions ride on any media type, not only images.
+    appendCaption(row, "message__body", msg.caption, msg.captionHtml);
   } else if (type === "sticker") {
     const img = document.createElement("img");
     img.className = "message__sticker";
@@ -546,6 +578,7 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     // where the body is the filename.
     const aff = buildFileAffordance(msg.mediaUrl, msg.mediaAlt ?? msg.body, msg.mediaMimeType, msg.mediaEncryptionInfo);
     row.appendChild(aff);
+    appendCaption(row, "message__body", msg.caption, msg.captionHtml);
   } else {
     // Text / system
     const body = document.createElement("div");
@@ -863,6 +896,8 @@ export class Timeline {
   private _onImageClickCallback: ((src: string, alt: string) => void) | null = null;
   /** Fired when a jump-to-message is requested but the message is not in the current view. */
   private _onJumpToMessageCallback: ((eventId: string) => void) | null = null;
+  /** Fired for each reply whose original must be fetched to show its preview. */
+  private _onUnresolvedReplyCallback: ((originalEventId: string) => void) | null = null;
   /** Fired when the "jump to latest" button is clicked. */
   private _onJumpToLatestCallback: (() => void) | null = null;
   /** The "jump to latest" button element. */
@@ -1078,6 +1113,12 @@ export class Timeline {
         return;
       }
 
+      // A reply preview's own click handler has already jumped to (and
+      // selected) the original. Selecting the reply here as well would scroll
+      // it straight back into view, undoing the jump whenever the two are more
+      // than a screen apart (#106).
+      if (target.closest(".reply-preview")) return;
+
       const msgEl = target.closest<HTMLElement>("[data-message-id]");
       if (msgEl) {
         const eventId = msgEl.dataset.messageId;
@@ -1232,6 +1273,45 @@ export class Timeline {
   /** Register a callback fired when a jump-to-message is requested but the message isn't loaded. */
   onJumpToMessage(cb: (eventId: string) => void): void {
     this._onJumpToMessageCallback = cb;
+  }
+
+  /**
+   * Register a callback fired once per message entering the buffer whose reply
+   * preview is still `"loading"` — its original is outside the loaded window
+   * and has to be fetched. The callback resolves it via
+   * {@link updateReplyPreview}.
+   */
+  onUnresolvedReply(cb: (originalEventId: string) => void): void {
+    this._onUnresolvedReplyCallback = cb;
+  }
+
+  /** Report the loading reply previews among messages entering the buffer.
+   *  Every entry point (set/append/prepend) funnels through here, so a reply
+   *  can't reach the screen without its original being asked for. */
+  private _announceUnresolvedReplies(msgs: readonly MessageData[]): void {
+    if (!this._onUnresolvedReplyCallback) return;
+    const seen = new Set<string>();
+    for (const m of msgs) {
+      const r = m.replyTo;
+      if (r?.state !== "loading" || seen.has(r.eventId)) continue;
+      seen.add(r.eventId);
+      this._onUnresolvedReplyCallback(r.eventId);
+    }
+  }
+
+  /**
+   * Replace the reply preview of every message that replies to
+   * `originalEventId`. Writes the buffer as well as the DOM, so a message
+   * culled from the render window and rebuilt later keeps the resolved preview.
+   */
+  updateReplyPreview(originalEventId: string, preview: ReplyPreviewData): void {
+    for (let i = 0; i < this._messages.length; i++) {
+      const m = this._messages[i];
+      if (m.replyTo?.eventId !== originalEventId) continue;
+      this._messages[i] = { ...m, replyTo: preview };
+      const old = this.getMessageElementById(m.id)?.querySelector<HTMLElement>(":scope > .reply-preview");
+      old?.replaceWith(buildReplyPreview(preview));
+    }
   }
 
   /** Register a callback fired when the "jump to latest" button is clicked. */
@@ -1442,6 +1522,7 @@ export class Timeline {
     if (msgs.length === 0) return;
 
     this._messages = [...msgs, ...this._messages];
+    this._announceUnresolvedReplies(msgs);
     // Shift selection and render-window indices forward so they still point at
     // the same content after prepending.
     if (this._selectedIndex >= 0) {
@@ -1491,6 +1572,7 @@ export class Timeline {
   appendMessages(msgs: MessageData[]): void {
     if (msgs.length === 0) return;
     this._messages = [...this._messages, ...msgs];
+    this._announceUnresolvedReplies(msgs);
     this._renderEnd = this._messages.length;
 
     const oldScrollHeight = this._el.scrollHeight;
@@ -1547,6 +1629,7 @@ export class Timeline {
     const savedScrollTop = this._el.scrollTop;
 
     this._messages = [...msgs];
+    this._announceUnresolvedReplies(msgs);
     // Render only the most recent window. Older messages remain in the buffer
     // and become visible when the user scrolls up.
     this._renderEnd = this._messages.length;
@@ -1600,6 +1683,7 @@ export class Timeline {
   appendMessage(msg: MessageData, opts?: { animate?: boolean }): void {
     const wasAtBufferEnd = this._renderEnd === this._messages.length;
     this._messages.push(msg);
+    this._announceUnresolvedReplies([msg]);
     if (!wasAtBufferEnd) {
       // The DOM window doesn't extend to the live tail — leave DOM untouched.
       // (User has scrolled away into older history; their viewport stays put.)
@@ -2065,6 +2149,7 @@ export class Timeline {
    */
   appendMessageHidden(msg: MessageData): void {
     this._messages.push(msg);
+    this._announceUnresolvedReplies([msg]);
     // Send-time append always extends the rendered window to include the new
     // message — the user is presumably looking at the compose box, which is
     // anchored to the live tail.

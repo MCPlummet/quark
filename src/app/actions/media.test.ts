@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { AppComponents } from "../../ui/App.js";
-import type { TimelineEvent } from "../../ipc/types.js";
+import type { SentMessage, TimelineEvent } from "../../ipc/types.js";
 
 // Mock the IPC surface so no real invoke happens; capture the send call.
 // Typed with the real signature so `.mock.calls[n]` destructures cleanly under
@@ -21,7 +21,7 @@ type Sent = {
   durationMs?: number;
 };
 
-const sendPastedImage = vi.fn<(send: Sent) => Promise<string>>(async () => "$sent");
+const sendPastedImage = vi.fn<(send: Sent) => Promise<SentMessage>>(async () => ({ event_id: "$sent", echo: null }));
 vi.mock("../../ipc/index.js", () => ({
   sendPastedImage: (...args: Parameters<typeof sendPastedImage>) => sendPastedImage(...args),
   // Referenced elsewhere in media.ts's module scope; stubbed to no-ops.
@@ -33,11 +33,16 @@ vi.mock("../../ipc/index.js", () => ({
   openMediaExternally: vi.fn(),
   sendFile: (...args: Parameters<typeof sendFile>) => sendFile(...args),
   sendVideo: (...args: Parameters<typeof sendVideo>) => sendVideo(...args),
+  readClipboardFiles: () => readClipboardFiles(),
 }));
 
-const sendFile = vi.fn<(send: Sent) => Promise<string>>(async () => "$file");
+const readClipboardFiles = vi.fn<() => Promise<{ files: File[]; errors: string[] }>>(
+  async () => ({ files: [], errors: [] }),
+);
 
-const sendVideo = vi.fn<(send: Sent) => Promise<string>>(async () => "$video");
+const sendFile = vi.fn<(send: Sent) => Promise<SentMessage>>(async () => ({ event_id: "$file", echo: null }));
+
+const sendVideo = vi.fn<(send: Sent) => Promise<SentMessage>>(async () => ({ event_id: "$video", echo: null }));
 
 // Upload-progress channel: capture the subscriber so tests can drive the row.
 let progressHandler: ((p: { upload_id: string; transferred: number; total: number }) => void) | null =
@@ -66,11 +71,21 @@ vi.mock("./messages.js", () => ({
   cancelReply: () => cancelReply(),
 }));
 
-import { sendPendingImage, handleFilePick } from "./media.js";
+// The local echo (#112): recorded rather than rendered — `live.test.ts` covers
+// what painting it does.
+const showSentEvent = vi.fn<(roomId: string, event: TimelineEvent) => void>();
+vi.mock("./live.js", () => ({
+  showSentEvent: (...args: Parameters<typeof showSentEvent>) => showSentEvent(...args),
+}));
+
+import { sendStagedAttachments, attachFiles, readCopiedFiles } from "./media.js";
+import { attachmentKind, type StagedAttachment } from "../../ui/AttachmentTray.js";
+import { showError } from "../../ui/NotificationToast.js";
 import { setComponents, _shortcodeToMxc } from "./context.js";
 import { AppState } from "../state.js";
 
-const showImagePreview = vi.fn();
+const stageAttachment = vi.fn<(file: Blob, filename?: string | null) => void>();
+const restoreStagedAttachments = vi.fn<(items: readonly StagedAttachment[]) => void>();
 const getValue = vi.fn(() => "");
 const setValue = vi.fn();
 
@@ -93,7 +108,7 @@ beforeEach(() => {
   getValue.mockReturnValue("");
   progressHandler = null;
   setComponents({
-    input: { showImagePreview, getValue, setValue, startAttachmentProgress },
+    input: { stageAttachment, restoreStagedAttachments, getValue, setValue, startAttachmentProgress },
   } as unknown as AppComponents);
   AppState.patch({
     currentRoomId: "!room:x",
@@ -115,7 +130,21 @@ const blob = () => {
   return b;
 };
 
-describe("sendPendingImage", () => {
+// What the composer's tray hands over on submit.
+let nextStagedId = 1;
+const staged = (file: Blob, filename: string | null): StagedAttachment => ({
+  id: nextStagedId++,
+  file,
+  filename,
+  kind: attachmentKind(file),
+});
+/** Submit a tray holding one image (the old single-image preview's path). */
+const sendPendingImage = (b: Blob, filename: string | null, caption?: string) =>
+  sendStagedAttachments([staged(b, filename)], caption);
+/** Submit a tray holding one picked file. */
+const handleFilePick = (f: File) => sendStagedAttachments([staged(f, f.name || null)]);
+
+describe("sending a staged image", () => {
   it("generates a pasted-image filename when none is given", async () => {
     await sendPendingImage(blob(), null);
 
@@ -162,7 +191,9 @@ describe("sendPendingImage", () => {
     await sendPendingImage(b, "cat.png", "a cat");
 
     expect(rowApi.fail).toHaveBeenCalledWith("boom");
-    expect(showImagePreview).toHaveBeenCalledWith(b, "cat.png");
+    expect(restoreStagedAttachments).toHaveBeenCalledWith([
+      expect.objectContaining({ file: b, filename: "cat.png" }),
+    ]);
     // Field was empty, so the caption is restored.
     expect(setValue).toHaveBeenCalledWith("a cat");
     // Reply state is not cleared on failure.
@@ -203,7 +234,7 @@ describe("attachment progress (#63)", () => {
     sendFile.mockImplementationOnce(async () => {
       progressHandler?.({ upload_id: "someone-else", transferred: 1, total: 100 });
       progressHandler?.({ upload_id: "upload-1", transferred: 40, total: 100 });
-      return "$file";
+      return { event_id: "$file", echo: null };
     });
 
     await handleFilePick(file());
@@ -215,7 +246,7 @@ describe("attachment progress (#63)", () => {
   it("moves to sending once the last byte is out", async () => {
     sendFile.mockImplementationOnce(async () => {
       progressHandler?.({ upload_id: "upload-1", transferred: 100, total: 100 });
-      return "$file";
+      return { event_id: "$file", echo: null };
     });
 
     await handleFilePick(file());
@@ -522,6 +553,81 @@ describe("image captions expand emoji like any other message (#84)", () => {
   });
 });
 
+// #112: an attachment used to appear only when the sync loop echoed it back,
+// which on Android could be never, until the room was reopened.
+describe("a sent attachment paints at once (#112)", () => {
+  const echo = (id: string): TimelineEvent =>
+    ({ event_id: id, sender: "@me:x", msg_type: "m.image" }) as TimelineEvent;
+
+  it("paints a sent image from the event the send returned", async () => {
+    const event = echo("$img");
+    sendPastedImage.mockResolvedValueOnce({ event_id: "$img", echo: event });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(showSentEvent).toHaveBeenCalledWith("!room:x", event);
+  });
+
+  it("paints a sent file and video the same way", async () => {
+    const f = echo("$f");
+    sendFile.mockResolvedValueOnce({ event_id: "$f", echo: f });
+    await handleFilePick(new File(["hello"], "notes.txt", { type: "text/plain" }));
+    expect(showSentEvent).toHaveBeenLastCalledWith("!room:x", f);
+
+    const v = echo("$v");
+    sendVideo.mockResolvedValueOnce({ event_id: "$v", echo: v });
+    const restore = stubVideoProbe();
+    try {
+      await handleFilePick(new File(["v"], "clip.mp4", { type: "video/mp4" }));
+    } finally {
+      restore();
+    }
+    expect(showSentEvent).toHaveBeenLastCalledWith("!room:x", v);
+  });
+
+  it("paints into the room it was sent to, even if the user has moved on", async () => {
+    // `showSentEvent` decides whether that room is on screen; the send must
+    // not re-read the current room after the await and misfile it.
+    const event = echo("$img");
+    sendPastedImage.mockImplementationOnce(async () => {
+      AppState.set("currentRoomId", "!elsewhere:x");
+      return { event_id: "$img", echo: event };
+    });
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(showSentEvent).toHaveBeenCalledWith("!room:x", event);
+  });
+
+  it("leaves it to sync when the backend had no echo to give", async () => {
+    await sendPendingImage(blob(), "cat.png");
+    expect(showSentEvent).not.toHaveBeenCalled();
+    expect(rowApi.succeed).toHaveBeenCalled();
+  });
+
+  it("does not report a sent attachment as failed when painting it throws", async () => {
+    // A restore here would put the image back in the composer to be sent twice.
+    sendPastedImage.mockResolvedValueOnce({ event_id: "$img", echo: echo("$img") });
+    showSentEvent.mockImplementationOnce(() => {
+      throw new Error("render blew up");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await sendPendingImage(blob(), "cat.png");
+
+    expect(rowApi.succeed).toHaveBeenCalled();
+    expect(rowApi.fail).not.toHaveBeenCalled();
+    expect(restoreStagedAttachments).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("paints nothing when the send fails", async () => {
+    sendPastedImage.mockRejectedValueOnce(new Error("boom"));
+    await sendPendingImage(blob(), "cat.png");
+    expect(showSentEvent).not.toHaveBeenCalled();
+  });
+});
+
 // #83: a blob the webview could not type carries an empty MIME string, which
 // reaches `mime_type.parse()` in media.rs as "" and fails the whole upload.
 describe("untyped attachments still upload (#83)", () => {
@@ -538,5 +644,206 @@ describe("untyped attachments still upload (#83)", () => {
     await sendPendingImage(b, null);
 
     expect(sendPastedImage.mock.calls[0][0].filename).toMatch(/^pasted-image-\d+\.svg$/);
+  });
+});
+
+// #83: the picker, a paste and a drop all end here, so the routing rule is
+// asserted once rather than per entry point.
+describe("attachFiles", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d]);
+
+  // Every file waits in the tray now, not just the first image: a PDF next to
+  // a screenshot used to upload the moment it was attached.
+  it("stages every file, in order, and sends nothing", async () => {
+    const onStaged = vi.fn();
+    const img = new File(["x"], "cat.png", { type: "image/png" });
+    const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
+    const img2 = new File(["y"], "dog.jpg", { type: "image/jpeg" });
+
+    await attachFiles([pdf, img, img2], { onStaged });
+
+    expect(stageAttachment.mock.calls.map(([f, n]) => [(f as File).name, n])).toEqual([
+      ["notes.pdf", "notes.pdf"],
+      ["cat.png", "cat.png"],
+      ["dog.jpg", "dog.jpg"],
+    ]);
+    expect(onStaged).toHaveBeenCalledTimes(1);
+    expect(sendFile).not.toHaveBeenCalled();
+    expect(sendPastedImage).not.toHaveBeenCalled();
+    expect(sendVideo).not.toHaveBeenCalled();
+  });
+
+  it("recognises an untyped image by its bytes before staging it", async () => {
+    const untyped = new File([PNG], "shot", { type: "" });
+
+    await attachFiles([untyped]);
+
+    const [file] = stageAttachment.mock.calls[0];
+    expect(file.type).toBe("image/png");
+  });
+
+  it("stages a nameless file with no name, for the send to name", async () => {
+    await attachFiles([new File(["hi"], "", { type: "text/plain" })]);
+    expect(stageAttachment.mock.calls[0][1]).toBeNull();
+  });
+
+  it("does nothing for an empty list", async () => {
+    const onStaged = vi.fn();
+    await attachFiles([], { onStaged });
+    expect(stageAttachment).not.toHaveBeenCalled();
+    expect(onStaged).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendStagedAttachments", () => {
+  const txt = (name = "notes.txt") => new File(["hi"], name, { type: "text/plain" });
+
+  it("sends each attachment in order as the event its type calls for", async () => {
+    const restore = stubVideoProbe();
+    const order: string[] = [];
+    sendPastedImage.mockImplementationOnce(async (s) => (order.push(s.filename), { event_id: "$i", echo: null }));
+    sendFile.mockImplementationOnce(async (s) => (order.push(s.filename), { event_id: "$f", echo: null }));
+    sendVideo.mockImplementationOnce(async (s) => (order.push(s.filename), { event_id: "$v", echo: null }));
+    try {
+      await sendStagedAttachments([
+        staged(txt("a.txt"), "a.txt"),
+        staged(new File(["v"], "b.mp4", { type: "video/mp4" }), "b.mp4"),
+        staged(blob(), "c.png"),
+      ]);
+    } finally {
+      restore();
+    }
+    expect(order).toEqual(["a.txt", "b.mp4", "c.png"]);
+  });
+
+  // MSC2530 captions are allowed on any media type, so the typed text goes on
+  // whatever was staged first — here a file, not an image.
+  it("captions the first attachment only, whatever its type", async () => {
+    await sendStagedAttachments([staged(txt(), "notes.txt"), staged(blob(), "cat.png")], "  the notes :smile: ");
+
+    expect(sendFile.mock.calls[0][0].caption).toBe("the notes 😄");
+    expect(sendPastedImage.mock.calls[0][0].caption).toBeUndefined();
+  });
+
+  it("carries a formatted caption on a video", async () => {
+    _shortcodeToMxc.set("party", "mxc://e/party");
+    const restore = stubVideoProbe();
+    try {
+      await sendStagedAttachments([staged(new File(["v"], "clip.mp4", { type: "video/mp4" }), "clip.mp4")], ":party:");
+    } finally {
+      restore();
+    }
+    expect(sendVideo.mock.calls[0][0].caption).toBe(":party:");
+    expect(sendVideo.mock.calls[0][0].formattedCaption).toContain("data-mx-emoticon");
+  });
+
+  it("replies with the first attachment only, and disarms the reply once", async () => {
+    AppState.set("replyToEventId", "$parent");
+
+    await sendStagedAttachments([staged(blob(), "a.png"), staged(txt(), "b.txt")]);
+
+    expect(sendPastedImage.mock.calls[0][0].replyToEventId).toBe("$parent");
+    expect(sendFile.mock.calls[0][0].replyToEventId).toBeUndefined();
+    expect(cancelReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends every attachment into the open thread", async () => {
+    AppState.set("threadRootEventId", "$root");
+
+    await sendStagedAttachments([staged(blob(), "a.png"), staged(txt(), "b.txt")]);
+
+    expect(sendPastedImage.mock.calls[0][0].threadRootEventId).toBe("$root");
+    expect(sendFile.mock.calls[0][0].threadRootEventId).toBe("$root");
+  });
+
+  it("sends the whole batch to the room it was submitted in", async () => {
+    sendPastedImage.mockImplementationOnce(async () => {
+      AppState.set("currentRoomId", "!elsewhere:x");
+      return { event_id: "$i", echo: null };
+    });
+
+    await sendStagedAttachments([staged(blob(), "a.png"), staged(txt(), "b.txt")]);
+
+    expect(sendFile.mock.calls[0][0].roomId).toBe("!room:x");
+  });
+
+  it("keeps going past a failure and puts only the failures back", async () => {
+    const a = staged(blob(), "a.png");
+    const b = staged(txt("b.txt"), "b.txt");
+    const c = staged(txt("c.txt"), "c.txt");
+    sendFile.mockRejectedValueOnce(new Error("boom"));
+
+    await sendStagedAttachments([a, b, c], "caption");
+
+    expect(sendFile).toHaveBeenCalledTimes(2);
+    expect(restoreStagedAttachments).toHaveBeenCalledWith([b]);
+    // The captioned one went out, so the caption is not restored.
+    expect(setValue).not.toHaveBeenCalled();
+  });
+
+  it("restores the caption with the first attachment when that one fails", async () => {
+    sendPastedImage.mockRejectedValueOnce(new Error("boom"));
+    const a = staged(blob(), "a.png");
+
+    await sendStagedAttachments([a, staged(txt(), "b.txt")], "look");
+
+    expect(restoreStagedAttachments).toHaveBeenCalledWith([a]);
+    expect(setValue).toHaveBeenCalledWith("look");
+  });
+
+  it("puts everything back when there is no room to send to", async () => {
+    AppState.set("currentRoomId", null);
+    const items = [staged(blob(), "a.png"), staged(txt(), "b.txt")];
+
+    await sendStagedAttachments(items, "hi");
+
+    expect(sendPastedImage).not.toHaveBeenCalled();
+    expect(restoreStagedAttachments).toHaveBeenCalledWith(items);
+    expect(setValue).toHaveBeenCalledWith("hi");
+  });
+
+  it("names a nameless non-image file rather than uploading it as ''", async () => {
+    await sendStagedAttachments([staged(new File(["hi"], "", { type: "text/plain" }), null)]);
+
+    expect(sendFile.mock.calls[0][0].filename).toMatch(/^attachment-\d+$/);
+  });
+});
+
+// #78 and #84 were fixed on the same path; this pins them together, since a
+// regression in how the send is assembled could keep either half and lose the
+// other.
+describe("a captioned image sent into a thread (#78 + #84)", () => {
+  it("carries the thread root and the expanded caption in one send", async () => {
+    AppState.set("threadRootEventId", "$root");
+    _shortcodeToMxc.set("party", "mxc://e/party");
+
+    await sendPendingImage(blob(), "cat.png", ":party: see [docs](https://e.com) :smile:");
+
+    const [send] = sendPastedImage.mock.calls[0];
+    expect(send.threadRootEventId).toBe("$root");
+    expect(send.caption).toBe(":party: see [docs](https://e.com) 😄");
+    expect(send.formattedCaption).toContain('<img data-mx-emoticon src="mxc://e/party"');
+    expect(send.formattedCaption).toContain('<a href="https://e.com">docs</a>');
+  });
+});
+
+describe("readCopiedFiles", () => {
+  it("returns the read files and reports each entry that could not be read", async () => {
+    const f = new File(["x"], "a.txt", { type: "text/plain" });
+    readClipboardFiles.mockResolvedValueOnce({ files: [f], errors: ["Can't attach dir: folders can't be attached"] });
+    const got = await readCopiedFiles();
+    expect(got).toEqual({ files: [f], listed: true });
+    expect(showError).toHaveBeenCalledWith("Can't attach dir: folders can't be attached");
+  });
+
+  it("says a list was there even when nothing in it could attach", async () => {
+    readClipboardFiles.mockResolvedValueOnce({ files: [], errors: ["x.pdf is not a local file"] });
+    expect(await readCopiedFiles()).toEqual({ files: [], listed: true });
+  });
+
+  it("reads an ordinary clipboard, or a failed read, as no list", async () => {
+    expect(await readCopiedFiles()).toEqual({ files: [], listed: false });
+    readClipboardFiles.mockRejectedValueOnce(new Error("boom"));
+    expect(await readCopiedFiles()).toEqual({ files: [], listed: false });
   });
 });

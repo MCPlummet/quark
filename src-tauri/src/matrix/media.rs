@@ -19,7 +19,7 @@ pub struct MediaDownload {
 }
 
 /// Encode bytes to base64 without an external crate.
-fn to_base64(data: &[u8]) -> String {
+pub(crate) fn to_base64(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {

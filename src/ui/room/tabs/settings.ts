@@ -114,7 +114,7 @@ export const settingsTab: RoomTab = {
 
     const note = document.createElement("div");
     note.className = "settings-dialog__hint";
-    note.textContent = "Note: current state not shown — values reflect defaults until fetched.";
+    note.textContent = "These show defaults, not the room's current settings.";
     content.appendChild(note);
 
     const accessActions = document.createElement("div");

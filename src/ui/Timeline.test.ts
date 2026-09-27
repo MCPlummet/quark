@@ -137,6 +137,20 @@ describe("Timeline", () => {
       expect(body).toBeNull();
     });
 
+    // MSC2530 captions ride on any media type; a staged file or video sent
+    // with typed text carries one.
+    it("renders the caption beneath a file and a video", () => {
+      timeline.setMessages([
+        makeMsg({ id: "$f", type: "file", mediaUrl: "mxc://x/f", mediaAlt: "notes.pdf", caption: "the notes" }),
+        makeMsg({ id: "$v", type: "video", mediaUrl: "mxc://x/v", mediaAlt: "clip.mp4", caption: "watch this" }),
+      ]);
+
+      const captions = [...timeline.getElement().querySelectorAll(".message__image-caption")].map(
+        (el) => el.textContent,
+      );
+      expect(captions).toEqual(["the notes", "watch this"]);
+    });
+
     it("renders the caption beneath an image when present", () => {
       timeline.setMessages([
         makeMsg({ type: "image", mediaUrl: "https://x.com/img.png", caption: "a wild sunset" }),
@@ -252,6 +266,84 @@ describe("Timeline", () => {
 
       const replyBody = reply?.querySelector(".reply-preview__body");
       expect(replyBody?.textContent).toBe("Original message");
+    });
+
+    // #106: the click that jumped to the original used to bubble on to the
+    // timeline's own click handler, which re-selected the *reply* and scrolled
+    // it back into view — undoing the jump whenever the two were far apart.
+    it("clicking the preview leaves the original selected, not the reply", () => {
+      Element.prototype.scrollIntoView ??= () => {};
+      timeline.setMessages([
+        makeMsg({ id: "$orig", body: "Original message" }),
+        makeMsg({
+          id: "$reply",
+          senderName: "Bob",
+          body: "Answer",
+          replyTo: { eventId: "$orig", senderName: "Alice", body: "Original message" },
+        }),
+      ]);
+      const reply = timeline.getElement().querySelector<HTMLElement>(".reply-preview")!;
+      reply.click();
+      expect(timeline.selectedMessageId).toBe("$orig");
+    });
+
+    it("clicking the preview of an unloaded original asks for a fetch", () => {
+      const onJump = vi.fn();
+      timeline.onJumpToMessage(onJump);
+      timeline.setMessages([
+        makeMsg({
+          id: "$reply",
+          replyTo: { eventId: "$gone", senderName: "Alice", body: "Old" },
+        }),
+      ]);
+      timeline.getElement().querySelector<HTMLElement>(".reply-preview")!.click();
+      expect(onJump).toHaveBeenCalledWith("$gone");
+    });
+
+    it("renders a loading preview and asks for its original once", () => {
+      const onUnresolved = vi.fn();
+      timeline.onUnresolvedReply(onUnresolved);
+      const pending = { eventId: "$old", senderName: "", body: "", state: "loading" as const };
+      timeline.setMessages([
+        makeMsg({ id: "$r1", replyTo: pending }),
+        makeMsg({ id: "$r2", senderName: "Bob", replyTo: pending }),
+      ]);
+      const previews = timeline.getElement().querySelectorAll(".reply-preview--loading");
+      expect(previews).toHaveLength(2);
+      expect(onUnresolved).toHaveBeenCalledTimes(1);
+      expect(onUnresolved).toHaveBeenCalledWith("$old");
+    });
+
+    it("asks for unresolved originals on every entry point", () => {
+      const onUnresolved = vi.fn();
+      timeline.onUnresolvedReply(onUnresolved);
+      const pending = (id: string) => ({ eventId: id, senderName: "", body: "", state: "loading" as const });
+      timeline.setMessages([makeMsg({ id: "$a" })]);
+      timeline.appendMessage(makeMsg({ id: "$b", replyTo: pending("$x1") }));
+      timeline.prependMessages([makeMsg({ id: "$c", replyTo: pending("$x2") })]);
+      timeline.appendMessages([makeMsg({ id: "$d", replyTo: pending("$x3") })]);
+      expect(onUnresolved.mock.calls.map((c) => c[0])).toEqual(["$x1", "$x2", "$x3"]);
+    });
+
+    it("does not ask for resolved previews", () => {
+      const onUnresolved = vi.fn();
+      timeline.onUnresolvedReply(onUnresolved);
+      timeline.setMessages([
+        makeMsg({ replyTo: { eventId: "$o", senderName: "A", body: "hi" } }),
+      ]);
+      expect(onUnresolved).not.toHaveBeenCalled();
+    });
+
+    it("updateReplyPreview swaps the banner in the DOM and the buffer", () => {
+      timeline.setMessages([
+        makeMsg({ id: "$r", replyTo: { eventId: "$old", senderName: "", body: "", state: "loading" } }),
+      ]);
+      timeline.updateReplyPreview("$old", { eventId: "$old", senderName: "Carol", body: "found it" });
+      const reply = timeline.getElement().querySelector(".reply-preview")!;
+      expect(reply.classList.contains("reply-preview--loading")).toBe(false);
+      expect(reply.querySelector(".reply-preview__body")?.textContent).toBe("found it");
+      expect(reply.querySelector(".reply-preview__sender")?.textContent).toBe("Carol");
+      expect(timeline.getElement().querySelectorAll(".reply-preview")).toHaveLength(1);
     });
 
     it("does not render reply preview when replyTo is absent", () => {
@@ -546,5 +638,25 @@ describe("inline thread file attachments", () => {
 
     expect(panel.querySelector(".message__file-affordance-label")?.textContent).toBe("notes.pdf");
     expect(panel.querySelector(".message__image-caption")?.textContent).toBe("the good bits");
+  });
+
+  // Where #78 and #84 meet: an image sent into a thread with a custom emoji in
+  // its caption. The panel has its own render branch, so the main timeline's
+  // caption tests say nothing about it.
+  it("renders an image reply's formatted caption as HTML, emoji stashed for download", () => {
+    const panel = openWithFile({
+      body: ":party: done",
+      type: "image",
+      mediaUrl: "mxc://x/img",
+      mediaMimeType: "image/png",
+      caption: ":party: done",
+      captionHtml: '<img data-mx-emoticon src="mxc://e/1" alt=":party:"> done',
+    });
+
+    const emoji = panel.querySelector<HTMLImageElement>(
+      ".message__image-caption img[data-mx-emoticon]",
+    );
+    expect(emoji?.dataset.mxc).toBe("mxc://e/1");
+    expect(timeline.getPendingInlineEmojiUrls()).toContain("mxc://e/1");
   });
 });

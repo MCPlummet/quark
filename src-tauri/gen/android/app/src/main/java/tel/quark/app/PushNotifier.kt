@@ -41,15 +41,63 @@ object PushNotifier {
    */
   private const val PLACEHOLDER_REQUEST_CODE = 0x9174B
 
+  /**
+   * The warm path's way in: post specs Rust rendered, handed over as the same
+   * JSON array the cold path returns (push_jni.rs `post_notifications`).
+   *
+   * Called straight over JNI from whatever thread the sync handler ran on, not
+   * through Tauri's plugin bridge — that bridge dispatches onto the Activity,
+   * and with no Activity alive it panics the calling thread (wry's
+   * `dispatch` expects one), which is the sync loop. Nor does a notification
+   * need one: the application context is enough. Posting through here also
+   * makes warm and cold notifications one implementation instead of two that
+   * disagreed on PendingIntent flags (#87).
+   *
+   * Never throws: an exception crossing back into Rust would surface as a JNI
+   * error on a thread that has nothing useful to do with it.
+   */
+  @JvmStatic
+  fun postJson(context: Context, json: String) {
+    try {
+      post(context, PushNative.parseSpecs(org.json.JSONArray(json)))
+    } catch (e: Throwable) {
+      Log.e(TAG, "Failed to post notifications handed over from the app", e)
+    }
+  }
+
+  /** [cancelRoom] for the JNI caller: static, and never throws. */
+  @JvmStatic
+  fun cancelRoomJni(context: Context, roomId: String) {
+    try {
+      cancelRoom(context, roomId)
+    } catch (e: Throwable) {
+      Log.w(TAG, "Failed to clear notifications for $roomId", e)
+    }
+  }
+
   /** Post every spec, adding a per-room summary once a room has more than one. */
   fun post(context: Context, specs: List<PushSpec>) {
     if (specs.isEmpty()) return
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     ensureChannels(manager)
 
+    // Said out loud because "the shade refused it" and "nothing was posted"
+    // look identical from outside, and these are the two states that make a
+    // posted notification invisible without any error at all.
+    if (!manager.areNotificationsEnabled()) {
+      Log.w(TAG, "Notifications are disabled for Quark in system settings; posting anyway")
+    }
+
     for (spec in specs) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val importance = manager.getNotificationChannel(spec.channel)?.importance
+        if (importance == NotificationManager.IMPORTANCE_NONE) {
+          Log.w(TAG, "Channel '${spec.channel}' is switched off in system settings")
+        }
+      }
       try {
         manager.notify(spec.id, buildMessage(context, spec))
+        Log.i(TAG, "Posted notification ${spec.id} for ${spec.roomId} on '${spec.channel}'")
       } catch (e: Throwable) {
         Log.e(TAG, "Failed to post notification for ${spec.roomId}", e)
         continue
@@ -170,6 +218,11 @@ object PushNotifier {
       .setContentText("$count new messages")
       .setGroup(spec.group)
       .setGroupSummary(true)
+      // The summary is re-posted under one id for every new message in the
+      // room. Left to alert, each re-post would sound on top of the message's
+      // own alert; the children carry the alert and the summary stays quiet.
+      .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+      .setOnlyAlertOnce(true)
       .setAutoCancel(true)
       // Keyed on the summary, not on `spec.id`: the summary stands for the room,
       // so carrying the last message's id made it claim to be that message —

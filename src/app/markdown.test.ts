@@ -53,4 +53,64 @@ describe("markdownToHtml", () => {
   it("returns undefined when an emoji shortcode is unknown and there is no formatting", () => {
     expect(markdownToHtml("hi :unknown:", { resolveEmoji: () => undefined })).toBeUndefined();
   });
+
+  describe("links (#115)", () => {
+    it("renders [text](url) as an anchor", () => {
+      expect(markdownToHtml("[link](https://www.google.com)")).toBe(
+        '<a href="https://www.google.com">link</a>',
+      );
+    });
+
+    it("renders a link mid-sentence and parses formatting in the label", () => {
+      expect(markdownToHtml("see [**docs**](https://e.com/a) now")).toBe(
+        'see <a href="https://e.com/a"><strong>docs</strong></a> now',
+      );
+    });
+
+    it("keeps the URL literal: markers and underscores in it are not formatting", () => {
+      expect(markdownToHtml("[x](https://e.com/a__b__c*d*)")).toBe(
+        '<a href="https://e.com/a__b__c*d*">x</a>',
+      );
+    });
+
+    it("escapes the URL for an attribute", () => {
+      expect(markdownToHtml('[q](https://e.com/?a=1&b="2")')).toBe(
+        '<a href="https://e.com/?a=1&amp;b=&quot;2&quot;">q</a>',
+      );
+    });
+
+    it("allows one level of balanced parentheses in the URL", () => {
+      expect(markdownToHtml("[w](https://en.wikipedia.org/wiki/Foo_(bar))")).toBe(
+        '<a href="https://en.wikipedia.org/wiki/Foo_(bar)">w</a>',
+      );
+    });
+
+    it("accepts mailto: and matrix: links", () => {
+      expect(markdownToHtml("[me](mailto:a@b.c)")).toBe('<a href="mailto:a@b.c">me</a>');
+      expect(markdownToHtml("[room](matrix:r/quark:e.org)")).toBe(
+        '<a href="matrix:r/quark:e.org">room</a>',
+      );
+    });
+
+    it("leaves unsafe or relative targets as literal text", () => {
+      expect(markdownToHtml("[x](javascript:alert(1))")).toBeUndefined();
+      expect(markdownToHtml("[x](/relative)")).toBeUndefined();
+      expect(markdownToHtml("[x](https://has space.com)")).toBeUndefined();
+    });
+
+    it("does not splice a custom emoji into an href", () => {
+      const resolveEmoji = (sc: string) => (sc === "party" ? "mxc://e/party" : undefined);
+      const html = markdownToHtml("[x](https://e.com/:party:)", { resolveEmoji });
+      expect(html).not.toContain("<a");
+      expect(html).toContain("data-mx-emoticon");
+    });
+  });
+
+  it("turns newlines into <br> in a formatted body", () => {
+    expect(markdownToHtml("**a**\nb\r\nc")).toBe("<strong>a</strong><br>b<br>c");
+  });
+
+  it("leaves a multi-line message with no formatting as plain text", () => {
+    expect(markdownToHtml("a\nb")).toBeUndefined();
+  });
 });

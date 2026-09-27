@@ -19,6 +19,7 @@ import {
   _memberAvatarMxc,
   _avatarDataUrl,
   prepareOutgoingBody,
+  replyPreviewFor,
   _downloadInlineEmoji,
 } from "./context.js";
 import { sendThreadReply } from "./threads.js";
@@ -49,14 +50,14 @@ export async function sendMessage(body: string): Promise<void> {
   const composeBoxEl = input.getComposeBoxElement();
   const composeRect = composeBoxEl.getBoundingClientRect();
 
-  let replyTo: ReplyPreviewData | undefined;
-  if (replyToEventId) {
-    const events = AppState.get("currentTimeline");
-    const parent = events.find((e) => e.event_id === replyToEventId);
-    if (parent) {
-      replyTo = { eventId: parent.event_id, senderName: parent.sender, body: parent.body.slice(0, 80) };
-    }
-  }
+  // Same builder as the mapper, so the optimistic bubble shows the banner the
+  // landed message will: display name rather than MXID, edits applied, the
+  // parent's own reply quote stripped — and a banner at all when the original
+  // is outside the loaded window (#106). The sync echo of our own send is
+  // deduplicated against this bubble, so whatever it shows here is final.
+  const replyTo: ReplyPreviewData | undefined = replyToEventId
+    ? replyPreviewFor(replyToEventId, AppState.get("currentTimeline"))
+    : undefined;
 
   const ownUserId = AppState.get("ownUserId");
   const ownDisplayName = AppState.get("ownDisplayName");
@@ -292,6 +293,7 @@ export async function sendMessage(body: string): Promise<void> {
     // register it so the sync echo is ignored (preventing a duplicate).
     const { timeline } = getComponents();
     timeline.confirmMessage(optimisticMsg.id, eventId);
+    promoteReplyTarget(optimisticMsg.id, eventId);
     _ownSentEventIds.add(eventId);
   } catch (err) {
     showError(`Failed to send: ${err instanceof Error ? err.message : String(err)}`);
@@ -305,6 +307,21 @@ export function startReply(eventId: string, senderName: string, snippet: string)
   const { replyPreview } = getComponents();
   AppState.set("replyToEventId", eventId);
   replyPreview.show({ eventId, senderName, snippet });
+}
+
+/**
+ * Follow an optimistic message to its real event ID in the reply target.
+ *
+ * Replying to one of your own messages while it is still sending records its
+ * `optimistic-…` placeholder ID. `confirmMessage` renames the timeline node,
+ * but nothing renamed the reply target, so the reply was later sent with an
+ * ID the server can't resolve and failed (#106). Call after every
+ * `confirmMessage`.
+ */
+export function promoteReplyTarget(optimisticId: string, realEventId: string): void {
+  if (AppState.get("replyToEventId") === optimisticId) {
+    AppState.set("replyToEventId", realEventId);
+  }
 }
 
 /**

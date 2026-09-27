@@ -710,6 +710,17 @@ pub async fn get_event_context(
     crate::matrix::timeline::get_event_context(&client, &room_id, &event_id, context_size.unwrap_or(25)).await
 }
 
+/// A single message by ID, for resolving an out-of-window reply target.
+#[tauri::command]
+pub async fn get_event(
+    state: State<'_, MatrixState>,
+    room_id: String,
+    event_id: String,
+) -> Result<Option<crate::matrix::timeline::TimelineEvent>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::timeline::get_event(&client, &room_id, &event_id).await
+}
+
 #[tauri::command]
 pub async fn paginate_forward(
     state: State<'_, MatrixState>,
@@ -1361,7 +1372,7 @@ pub async fn send_pasted_image(
     reply_to_event_id: Option<String>,
     thread_root_event_id: Option<String>,
     upload_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<crate::matrix::timeline::SentMessage, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
@@ -1386,8 +1397,66 @@ pub async fn send_pasted_image(
     .await
 }
 
-/// Upload file data (base64-encoded) and send it as an m.file event.
-/// Used for the file picker attach flow.
+/// Read a file the user dropped onto the window, so the frontend can attach it
+/// the way it attaches a picked or pasted one (#83). Only paths a native drop
+/// recorded in `DroppedFiles` can be read — see `local_files`.
+#[tauri::command]
+pub async fn read_dropped_file(
+    app: AppHandle,
+    path: String,
+) -> Result<crate::matrix::media::MediaDownload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dropped = app.state::<crate::local_files::DroppedFiles>();
+        crate::local_files::read_dropped_file(&path, |p| dropped.contains(p))
+    })
+    .await
+    .map_err(|e| format!("Failed to read dropped file: {e}"))?
+}
+
+/// Read the files a file manager copied to the OS clipboard, so a paste can
+/// attach them (WebKitGTK shows the page only their `file://` text). Takes no
+/// path from the frontend: it reads only what the OS clipboard lists — see
+/// `clipboard_files`. Empty when the clipboard holds no file list.
+#[tauri::command]
+pub async fn read_clipboard_files(
+    app: AppHandle,
+) -> Result<crate::clipboard_files::ClipboardFiles, String> {
+    // A list Quark itself is serving was written by the webview — a page's
+    // `copy` handler can put any URI list there — so reading it would let the
+    // page name the files it gets back. Only another app's copy is the user's.
+    if quark_owns_clipboard(&app).await? {
+        tracing::debug!("Quark owns the clipboard; not reading it as copied files");
+        return Ok(Default::default());
+    }
+    // A clipboard owner that never answers would otherwise hold the paste open
+    // for good; the blocking read is abandoned (not cancelled) past this.
+    let read = tauri::async_runtime::spawn_blocking(crate::clipboard_files::read_clipboard_files);
+    match tokio::time::timeout(std::time::Duration::from_secs(5), read).await {
+        Ok(joined) => joined.map_err(|e| format!("Failed to read the clipboard: {e}"))?,
+        Err(_) => Err("The clipboard didn't answer".into()),
+    }
+}
+
+/// Whether this process owns the clipboard selection. GDK tracks that on both
+/// its X11 and Wayland backends; it must be asked on the main thread.
+#[cfg(target_os = "linux")]
+async fn quark_owns_clipboard(app: &AppHandle) -> Result<bool, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(gtk::gdk::selection_owner_get(&gtk::gdk::SELECTION_CLIPBOARD).is_some());
+    })
+    .map_err(|e| format!("Failed to check the clipboard: {e}"))?;
+    // Fail closed: an unanswered check is not permission to read.
+    rx.await.map_err(|_| "Failed to check the clipboard".to_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn quark_owns_clipboard(_app: &AppHandle) -> Result<bool, String> {
+    Ok(false)
+}
+
+/// Upload file data (base64-encoded) and send it as an m.file event, with an
+/// optional MSC2530 caption. Used for the file picker attach flow.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn send_file(
@@ -1398,10 +1467,12 @@ pub async fn send_file(
     mime_type: String,
     filename: String,
     file_size: Option<u64>,
+    caption: Option<String>,
+    formatted_caption: Option<String>,
     reply_to_event_id: Option<String>,
     thread_root_event_id: Option<String>,
     upload_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<crate::matrix::timeline::SentMessage, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
@@ -1413,6 +1484,7 @@ pub async fn send_file(
         &client,
         &room_id,
         &filename,
+        Caption { body: caption.as_deref(), formatted: formatted_caption.as_deref() },
         source,
         &mime_type,
         file_size,
@@ -1440,10 +1512,12 @@ pub async fn send_video(
     height: Option<u64>,
     duration_ms: Option<u64>,
     file_size: Option<u64>,
+    caption: Option<String>,
+    formatted_caption: Option<String>,
     reply_to_event_id: Option<String>,
     thread_root_event_id: Option<String>,
     upload_id: Option<String>,
-) -> Result<String, String> {
+) -> Result<crate::matrix::timeline::SentMessage, String> {
     let client = get_client(&state)?;
 
     let data = crate::matrix::media::decode_base64(&data_base64)?;
@@ -1455,6 +1529,7 @@ pub async fn send_video(
         &client,
         &room_id,
         &filename,
+        Caption { body: caption.as_deref(), formatted: formatted_caption.as_deref() },
         source,
         &mime_type,
         width,
@@ -2201,6 +2276,9 @@ pub async fn send_gif(
         },
     )
     .await
+    // A GIF paints optimistically before the send (gif.ts), so it only needs
+    // the id to confirm that bubble.
+    .map(|sent| sent.event_id)
 }
 
 #[cfg(test)]

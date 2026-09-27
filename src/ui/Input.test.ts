@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { Input } from "./Input.js";
+import { Input, isFileUriList, looksLikeFileListText } from "./Input.js";
 import { Mode } from "../vim/mode.js";
 
 describe("Input", () => {
@@ -119,13 +119,20 @@ describe("Input", () => {
     });
   });
 
-  describe("pending image", () => {
-    // jsdom doesn't implement object URLs — stub so showImagePreview can run.
+  describe("staged attachments", () => {
+    // jsdom doesn't implement object URLs — stub so image thumbnails can render.
     beforeEach(() => {
       vi.stubGlobal("URL", {
         ...URL,
         createObjectURL: vi.fn(() => "blob:mock"),
         revokeObjectURL: vi.fn(),
+      });
+      attached = [];
+      // Stand-in for the app's `attachFiles`: record what the composer handed
+      // over, and stage every file the way the app does.
+      input.onAttachFiles((files) => {
+        attached.push(files);
+        for (const f of files) input.stageAttachment(f, f.name || null);
       });
     });
 
@@ -133,27 +140,53 @@ describe("Input", () => {
       vi.unstubAllGlobals();
     });
 
+    let attached: File[][] = [];
     const blob = () => new Blob(["x"], { type: "image/png" });
-    const preview = () => input.getElement().querySelector<HTMLElement>(".paste-preview");
     const field = () => input.getElement().querySelector<HTMLTextAreaElement>(".input-bar__field");
 
-    it("shows the preview and reports a pending image", () => {
-      expect(input.hasPendingImage()).toBe(false);
-      input.showImagePreview(blob());
+    const tray = () => input.getElement().querySelector<HTMLElement>(".attach-tray");
+    const items = () => [...input.getElement().querySelectorAll<HTMLElement>(".attach-tray__item")];
+    const pdf = () => new File(["%PDF-1.4"], "notes.pdf", { type: "application/pdf" });
+    const mp4 = () => new File(["v"], "clip.mp4", { type: "video/mp4" });
 
-      expect(input.hasPendingImage()).toBe(true);
-      expect(preview()?.style.display).toBe("flex");
+    it("shows the tray and reports what is staged", () => {
+      expect(input.hasStagedAttachments()).toBe(false);
+      expect(tray()?.style.display).toBe("none");
+      input.stageAttachment(blob());
+
+      expect(input.hasStagedAttachments()).toBe(true);
+      expect(tray()?.style.display).not.toBe("none");
     });
 
-    it("labels the preview with the filename when given one", () => {
-      input.showImagePreview(blob(), "cat.png");
-      const label = input.getElement().querySelector(".paste-preview__label");
-      expect(label?.textContent).toContain("cat.png");
+    it("stages every kind of file, in the order added", () => {
+      input.stageAttachment(blob(), "cat.png");
+      input.stageAttachment(pdf(), "notes.pdf");
+      input.stageAttachment(mp4(), "clip.mp4");
+
+      expect(input.stagedAttachments().map((a) => [a.filename, a.kind])).toEqual([
+        ["cat.png", "image"],
+        ["notes.pdf", "file"],
+        ["clip.mp4", "video"],
+      ]);
+      const [img, file, video] = items();
+      expect(img.querySelector("img.attach-tray__thumb")).not.toBeNull();
+      // Non-images are a chip: glyph, name, human size.
+      expect(file.querySelector(".attach-tray__name")?.textContent).toBe("notes.pdf");
+      expect(file.querySelector(".attach-tray__size")?.textContent).toBe("8 B");
+      expect(video.classList.contains("attach-tray__item--video")).toBe(true);
     });
 
-    it("switches the placeholder to a caption hint while pending", () => {
+    it("labels one attachment by name and a batch by count", () => {
+      const label = () => input.getElement().querySelector(".attach-tray__label")?.textContent;
+      input.stageAttachment(blob(), "cat.png");
+      expect(label()).toContain("cat.png");
+      input.stageAttachment(pdf(), "notes.pdf");
+      expect(label()).toContain("2 attachments");
+    });
+
+    it("switches the placeholder to a caption hint while anything is staged", () => {
       input.setMode(Mode.Insert);
-      input.showImagePreview(blob());
+      input.stageAttachment(pdf(), "notes.pdf");
       expect(field()?.placeholder).toBe("Add a caption…");
 
       // Re-entering Insert must keep the hint.
@@ -161,34 +194,75 @@ describe("Input", () => {
       expect(field()?.placeholder).toBe("Add a caption…");
     });
 
-    it("takePendingImage returns the blob+filename and clears state", () => {
+    it("takeStagedAttachments hands back everything in order and empties the tray", () => {
       const b = blob();
-      input.showImagePreview(b, "cat.png");
+      const f = pdf();
+      input.stageAttachment(b, "cat.png");
+      input.stageAttachment(f, "notes.pdf");
 
-      const taken = input.takePendingImage();
-      expect(taken).toEqual({ blob: b, filename: "cat.png" });
-      expect(input.hasPendingImage()).toBe(false);
-      expect(preview()?.style.display).toBe("none");
+      const taken = input.takeStagedAttachments();
+      expect(taken.map((a) => a.file)).toEqual([b, f]);
+      expect(input.hasStagedAttachments()).toBe(false);
+      expect(tray()?.style.display).toBe("none");
+      expect(items()).toHaveLength(0);
       expect(field()?.placeholder).toBe("…");
-      // Second take is empty.
-      expect(input.takePendingImage()).toBeNull();
+      expect(input.takeStagedAttachments()).toEqual([]);
     });
 
-    it("takePendingImage yields filename null for a paste (no name)", () => {
-      input.showImagePreview(blob());
-      expect(input.takePendingImage()?.filename).toBeNull();
+    it("keeps filename null for a pasted image with no name", () => {
+      input.stageAttachment(blob());
+      expect(input.takeStagedAttachments()[0].filename).toBeNull();
     });
 
-    it("discardPendingImage hides the preview and reports whether it did anything", () => {
-      expect(input.discardPendingImage()).toBe(false);
+    it("the × on an item removes only that item", () => {
+      input.stageAttachment(blob(), "cat.png");
+      input.stageAttachment(pdf(), "notes.pdf");
+      input.stageAttachment(mp4(), "clip.mp4");
 
-      input.showImagePreview(blob());
-      expect(input.discardPendingImage()).toBe(true);
-      expect(input.hasPendingImage()).toBe(false);
-      expect(preview()?.style.display).toBe("none");
+      items()[1].querySelector<HTMLButtonElement>(".attach-tray__remove")!.click();
+
+      expect(input.stagedAttachments().map((a) => a.filename)).toEqual(["cat.png", "clip.mp4"]);
+      expect(items()).toHaveLength(2);
     });
 
-    it("a paste event with an image in clipboard items stages the preview", () => {
+    it("removing the last item hides the tray", () => {
+      const a = input.stageAttachment(pdf(), "notes.pdf");
+      expect(input.removeStagedAttachment(a.id)).toBe(true);
+      expect(input.removeStagedAttachment(a.id)).toBe(false);
+      expect(tray()?.style.display).toBe("none");
+    });
+
+    it("discardStagedAttachments clears the whole tray and reports whether it did anything", () => {
+      expect(input.discardStagedAttachments()).toBe(false);
+
+      input.stageAttachment(blob());
+      input.stageAttachment(pdf());
+      expect(input.discardStagedAttachments()).toBe(true);
+      expect(input.hasStagedAttachments()).toBe(false);
+      expect(tray()?.style.display).toBe("none");
+    });
+
+    it("puts restored attachments back ahead of anything staged since", () => {
+      const first = input.stageAttachment(pdf(), "first.pdf");
+      const taken = input.takeStagedAttachments();
+      expect(taken).toEqual([first]);
+      input.stageAttachment(mp4(), "later.mp4");
+
+      input.restoreStagedAttachments(taken);
+      expect(input.stagedAttachments().map((a) => a.filename)).toEqual(["first.pdf", "later.mp4"]);
+      expect(items().map((el) => el.querySelector(".attach-tray__name")?.textContent)).toEqual([
+        "first.pdf",
+        "later.mp4",
+      ]);
+    });
+
+    it("revokes an image thumbnail's object URL when the item goes", () => {
+      const a = input.stageAttachment(blob(), "cat.png");
+      input.removeStagedAttachment(a.id);
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock");
+    });
+
+    it("a paste event with an image in clipboard items stages it", () => {
       // jsdom lacks a usable DataTransfer/ClipboardEvent, so stub clipboardData.
       const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
       Object.defineProperty(evt, "clipboardData", {
@@ -199,26 +273,68 @@ describe("Input", () => {
       });
       field()?.dispatchEvent(evt);
 
-      expect(input.hasPendingImage()).toBe(true);
+      expect(input.hasStagedAttachments()).toBe(true);
     });
 
     // #83: every branch filtered on `image/`, so a PDF fell through to the
     // browser's default text paste and vanished — even though the attach button
     // beside it has sent those as m.file all along.
-    it("routes a pasted non-image file to the file-pick handler", () => {
-      const picked: File[] = [];
-      input.onFilePick((f) => picked.push(f));
+    it("hands a pasted non-image file to the attach handler", () => {
       const pdf = new File(["%PDF"], "notes.pdf", { type: "application/pdf" });
 
-      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      const evt = new Event("paste", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
       Object.defineProperty(evt, "clipboardData", {
         value: { items: [{ type: "application/pdf", getAsFile: () => pdf }], files: [] },
       });
       field()?.dispatchEvent(evt);
 
-      expect(picked).toHaveLength(1);
-      expect(picked[0].name).toBe("notes.pdf");
-      expect(input.hasPendingImage()).toBe(false);
+      expect(attached).toHaveLength(1);
+      expect(attached[0].map((f) => f.name)).toEqual(["notes.pdf"]);
+      expect(evt.defaultPrevented).toBe(true);
+    });
+
+    // Copying several files in a file manager puts all of them on the
+    // clipboard; the handler used to return after the first.
+    it("hands over every file on the clipboard, not just the first", () => {
+      const a = new File(["a"], "a.txt", { type: "text/plain" });
+      const b = new File(["b"], "b.zip", { type: "application/zip" });
+      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      Object.defineProperty(evt, "clipboardData", {
+        value: {
+          items: [
+            { type: "text/plain", getAsFile: () => a },
+            { type: "text/plain", getAsFile: () => null }, // a string flavour
+            { type: "application/zip", getAsFile: () => b },
+          ],
+          files: [],
+        },
+      });
+      field()?.dispatchEvent(evt);
+
+      expect(attached[0].map((f) => f.name)).toEqual(["a.txt", "b.zip"]);
+    });
+
+    it("falls back to clipboardData.files when items carry none", () => {
+      const a = new File(["a"], "a.txt", { type: "text/plain" });
+      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      Object.defineProperty(evt, "clipboardData", { value: { items: [], files: [a] } });
+      field()?.dispatchEvent(evt);
+
+      expect(attached[0]).toEqual([a]);
+    });
+
+    // An engine that hands back an untyped File for an image clipboard target
+    // would otherwise send the picture as a nameless `m.file`.
+    it("keeps the clipboard item's image type when the file has none", () => {
+      const untyped = new File(["x"], "", { type: "" });
+      const evt = new Event("paste", { bubbles: true }) as unknown as ClipboardEvent;
+      Object.defineProperty(evt, "clipboardData", {
+        value: { items: [{ type: "image/bmp", getAsFile: () => untyped }], files: [] },
+      });
+      field()?.dispatchEvent(evt);
+
+      expect(attached[0][0].type).toBe("image/bmp");
+      expect(input.hasStagedAttachments()).toBe(true);
     });
 
     it("keeps a pasted image file's own name instead of inventing one", () => {
@@ -229,7 +345,7 @@ describe("Input", () => {
       });
       field()?.dispatchEvent(evt);
 
-      expect(input.takePendingImage()?.filename).toBe("screenshot.png");
+      expect(input.takeStagedAttachments()[0]?.filename).toBe("screenshot.png");
     });
 
     // The async clipboard fallback (Linux/WebKitGTK) cannot call
@@ -279,7 +395,7 @@ describe("Input", () => {
         await deliverImage();
 
         expect(f.value).toBe("hello");
-        expect(input.hasPendingImage()).toBe(true);
+        expect(input.hasStagedAttachments()).toBe(true);
       });
 
       // `clipboard.read()` can sit behind a permission prompt, so the window is
@@ -297,7 +413,7 @@ describe("Input", () => {
 
         expect(f.value).toBe("hello https://example.org/img.png and more");
         // The image still stages — only the undo stands down.
-        expect(input.hasPendingImage()).toBe(true);
+        expect(input.hasStagedAttachments()).toBe(true);
       });
 
       // An image on the clipboard does not make the text beside it a stand-in
@@ -315,7 +431,7 @@ describe("Input", () => {
 
         expect(f.value).toBe("Q1 revenue was up 12%");
         // The image still stages — only the undo stands down.
-        expect(input.hasPendingImage()).toBe(true);
+        expect(input.hasStagedAttachments()).toBe(true);
       });
 
       it("keeps a pasted single word", async () => {
@@ -340,7 +456,7 @@ describe("Input", () => {
         await deliverImage();
 
         expect(f.value).toBe("");
-        expect(input.hasPendingImage()).toBe(true);
+        expect(input.hasStagedAttachments()).toBe(true);
       });
 
       it("disturbs nothing when the paste inserted no text", async () => {
@@ -352,29 +468,176 @@ describe("Input", () => {
         await deliverImage();
 
         expect(f.value).toBe("hello");
-        expect(input.hasPendingImage()).toBe(true);
+        expect(input.hasStagedAttachments()).toBe(true);
       });
     });
 
-    it("the preview Send button routes through the send-click handler", () => {
+    // A file-manager copy (Dolphin, Nautilus) reaches WebKitGTK only as text —
+    // the files' URIs or paths — which the page cannot open. The backend reads
+    // the list off the OS clipboard instead.
+    describe("files copied in a file manager", () => {
+      const copiedPng = () => new File(["x"], "shot.png", { type: "image/png" });
+      const copiedPdf = () => new File(["%PDF"], "doc.pdf", { type: "application/pdf" });
+      const flush = async () => {
+        for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+      };
+
+      function paste(data: Record<string, string>) {
+        const evt = new Event("paste", { bubbles: true, cancelable: true }) as unknown as ClipboardEvent;
+        Object.defineProperty(evt, "clipboardData", {
+          value: { items: [], files: [], getData: (t: string) => data[t] ?? "" },
+        });
+        field()!.dispatchEvent(evt);
+        return evt;
+      }
+
+      beforeEach(() => {
+        // No async image path in these: the file list is the whole story.
+        Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+      });
+
+      it("intercepts a file:// URI list and attaches what the backend read", async () => {
+        const reader = vi.fn(async () => ({ files: [copiedPng(), copiedPdf()], listed: true }));
+        input.setClipboardFileReader(reader);
+
+        const evt = paste({
+          "text/plain": "file:///home/u/shot.png\nfile:///home/u/doc.pdf",
+          "text/uri-list": "file:///home/u/shot.png\r\nfile:///home/u/doc.pdf\r\n",
+        });
+        expect(evt.defaultPrevented).toBe(true);
+        await flush();
+
+        expect(reader).toHaveBeenCalledTimes(1);
+        expect(attached[0].map((f) => f.name)).toEqual(["shot.png", "doc.pdf"]);
+        expect(field()!.value).toBe("");
+      });
+
+      it("intercepts on the text flavour alone when there is no uri-list", async () => {
+        input.setClipboardFileReader(async () => ({ files: [copiedPdf()], listed: true }));
+        const evt = paste({ "text/plain": "file:///home/u/doc.pdf" });
+        expect(evt.defaultPrevented).toBe(true);
+        await flush();
+        expect(attached[0].map((f) => f.name)).toEqual(["doc.pdf"]);
+      });
+
+      it("pastes the URI text after all when the OS clipboard holds no file list", async () => {
+        input.setClipboardFileReader(async () => ({ files: [], listed: false }));
+        const f = field()!;
+        f.value = "see ";
+        f.selectionStart = f.selectionEnd = 4;
+
+        paste({ "text/plain": "file:///tmp/x.log" });
+        await flush();
+
+        expect(attached).toHaveLength(0);
+        expect(f.value).toBe("see file:///tmp/x.log");
+      });
+
+      it("pastes nothing when the list held only things that can't attach", async () => {
+        // The reader has already reported the folder; the URI is not a message.
+        input.setClipboardFileReader(async () => ({ files: [], listed: true }));
+        paste({ "text/plain": "file:///home/u/Pictures" });
+        await flush();
+
+        expect(attached).toHaveLength(0);
+        expect(field()!.value).toBe("");
+      });
+
+      it("leaves an ordinary text paste alone and never asks the backend", async () => {
+        const reader = vi.fn(async () => ({ files: [], listed: false }));
+        input.setClipboardFileReader(reader);
+        const evt = paste({ "text/plain": "hello there", "text/uri-list": "" });
+        await flush();
+
+        expect(evt.defaultPrevented).toBe(false);
+        expect(reader).not.toHaveBeenCalled();
+      });
+
+      it("does not treat a copied web link as a file list", async () => {
+        const reader = vi.fn(async () => ({ files: [], listed: false }));
+        input.setClipboardFileReader(reader);
+        const evt = paste({ "text/plain": "https://e.com/a.png", "text/uri-list": "https://e.com/a.png" });
+        await flush();
+
+        expect(evt.defaultPrevented).toBe(false);
+        expect(reader).not.toHaveBeenCalled();
+      });
+
+      // Nautilus offers the list's plain text as bare paths. Those are also
+      // what a user copies out of a terminal, so the paste goes ahead and is
+      // only taken back out if the clipboard really held files.
+      it("takes pasted paths back out when they were a file-manager copy", async () => {
+        input.setClipboardFileReader(async () => ({ files: [copiedPng()], listed: true }));
+        const f = field()!;
+        f.value = "";
+
+        const evt = paste({ "text/plain": "/home/u/My Pictures/shot.png" });
+        expect(evt.defaultPrevented).toBe(false);
+        f.value = "/home/u/My Pictures/shot.png"; // the default paste
+        await flush();
+
+        expect(attached[0].map((x) => x.name)).toEqual(["shot.png"]);
+        expect(f.value).toBe("");
+      });
+
+      it("keeps pasted paths that were only text", async () => {
+        input.setClipboardFileReader(async () => ({ files: [], listed: false }));
+        const f = field()!;
+        paste({ "text/plain": "/etc/hosts" });
+        f.value = "/etc/hosts";
+        await flush();
+
+        expect(attached).toHaveLength(0);
+        expect(f.value).toBe("/etc/hosts");
+      });
+
+      it("asks the backend when the engine exposed nothing at all", async () => {
+        const reader = vi.fn(async () => ({ files: [copiedPdf()], listed: true }));
+        input.setClipboardFileReader(reader);
+        paste({});
+        await flush();
+
+        expect(reader).toHaveBeenCalledTimes(1);
+        expect(attached[0].map((x) => x.name)).toEqual(["doc.pdf"]);
+      });
+
+      it("pastes the text when the backend read fails", async () => {
+        input.setClipboardFileReader(async () => { throw new Error("no clipboard"); });
+        paste({ "text/plain": "file:///tmp/a.txt" });
+        await flush();
+        expect(field()!.value).toBe("file:///tmp/a.txt");
+      });
+    });
+
+    it("isFileUriList / looksLikeFileListText", () => {
+      expect(isFileUriList("file:///a\r\nfile:///b\r\n")).toBe(true);
+      expect(isFileUriList("# comment\nfile:///a")).toBe(true);
+      expect(isFileUriList("file:///a\nhttps://e.com")).toBe(false);
+      expect(isFileUriList("")).toBe(false);
+      expect(looksLikeFileListText("/home/u/a b.png\n/home/u/c.png")).toBe(true);
+      expect(looksLikeFileListText("hello /home")).toBe(false);
+    });
+
+    it("the tray's Send button routes through the send-click handler", () => {
       const onSend = vi.fn();
       input.onSendClick(onSend);
-      input.showImagePreview(blob());
+      input.stageAttachment(blob());
 
-      const sendBtn = input.getElement().querySelector<HTMLButtonElement>(".paste-preview__btn--send");
+      const sendBtn = input.getElement().querySelector<HTMLButtonElement>(".attach-tray__btn--send");
       sendBtn?.click();
       expect(onSend).toHaveBeenCalledTimes(1);
     });
 
-    it("the preview Cancel button discards without sending", () => {
+    it("the tray's Cancel button clears everything without sending", () => {
       const onSend = vi.fn();
       input.onSendClick(onSend);
-      input.showImagePreview(blob());
+      input.stageAttachment(blob());
+      input.stageAttachment(pdf());
 
-      const cancelBtn = input.getElement().querySelector<HTMLButtonElement>(".paste-preview__btn--cancel");
+      const cancelBtn = input.getElement().querySelector<HTMLButtonElement>(".attach-tray__btn--cancel");
       cancelBtn?.click();
       expect(onSend).not.toHaveBeenCalled();
-      expect(input.hasPendingImage()).toBe(false);
+      expect(input.hasStagedAttachments()).toBe(false);
     });
   });
 
@@ -460,11 +723,11 @@ describe("Input", () => {
       expect(region()).not.toBeNull();
       expect(region().style.display).toBe("none");
       expect(rowCount()).toBe(0);
-      // Ahead of the paste preview and the bar itself, so the composer reads
+      // Ahead of the attachment tray and the bar itself, so the composer reads
       // top-down in the order things happened.
       const children = [...input.getElement().children];
       expect(children.indexOf(region())).toBeLessThan(
-        children.indexOf(input.getElement().querySelector(".paste-preview")!),
+        children.indexOf(input.getElement().querySelector(".attach-tray")!),
       );
     });
 

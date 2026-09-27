@@ -108,7 +108,7 @@ export class CommandBar {
    * left. With vim on that meant Enter on any `:` command also dispatched
    * `select`, opening the focused room or message; with vim off it submitted the
    * compose box, sending a message (or committing an in-progress edit, or
-   * uploading a staged image) behind the command the user actually asked for.
+   * uploading staged attachments) behind the command the user actually asked for.
    */
   private _claim(e: KeyboardEvent): void {
     e.preventDefault();

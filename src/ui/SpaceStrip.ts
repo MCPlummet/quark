@@ -3,6 +3,7 @@
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { PSEUDO_SPACES, isPseudoSpace } from "../app/pseudo_spaces.js";
 import { attachLongPress } from "../app/long_press.js";
+import { searchIcon } from "./icons.js";
 
 export interface SpaceItem {
   id: string;
@@ -241,7 +242,7 @@ export class SpaceStrip {
     searchBtn.setAttribute("tabindex", "0");
     searchBtn.setAttribute("aria-label", "Search rooms and commands");
     searchBtn.title = "Search rooms and commands (Ctrl+K)";
-    searchBtn.textContent = "⌕";
+    searchBtn.appendChild(searchIcon());
     searchBtn.addEventListener("click", () => this._onSearch?.());
     searchBtn.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {

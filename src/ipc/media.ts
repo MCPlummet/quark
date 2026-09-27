@@ -1,9 +1,9 @@
 // Media IPC calls
 
 import { invoke } from "./invoke.js";
-import type { MediaDownload, MessageTarget, UrlPreview } from "./types.js";
+import type { ClipboardFiles, MediaDownload, MessageTarget, SentMessage, UrlPreview } from "./types.js";
 
-export type { MediaDownload, MessageTarget, UrlPreview };
+export type { MediaDownload, MessageTarget, SentMessage, UrlPreview };
 
 /**
  * The common half of every attachment send.
@@ -20,6 +20,10 @@ export interface AttachmentSend extends MessageTarget {
   filename: string;
   /** Correlates upload-progress events with the composer row showing them. */
   uploadId?: string;
+  /** MSC2530 caption — any media type may carry one. */
+  caption?: string;
+  /** The caption as HTML, where it needs one (custom emoji, #84). */
+  formattedCaption?: string;
 }
 
 /** The shared invoke arguments for an attachment send. */
@@ -32,6 +36,8 @@ function attachmentArgs(send: AttachmentSend): Record<string, unknown> {
     replyToEventId: send.replyToEventId ?? null,
     threadRootEventId: send.threadRootEventId ?? null,
     uploadId: send.uploadId ?? null,
+    caption: send.caption ?? null,
+    formattedCaption: send.formattedCaption ?? null,
   };
 }
 
@@ -141,16 +147,48 @@ export async function uploadMedia(filePath: string): Promise<string> {
 }
 
 /**
- * Upload base64-encoded file bytes and send as an m.file event.
- * Used for the file picker attach flow.
+ * Upload base64-encoded file bytes and send as an m.file event, with an
+ * optional MSC2530 caption.
  */
 export async function sendFile(
   send: AttachmentSend & { fileSize?: number },
-): Promise<string> {
-  return invoke<string>("send_file", {
+): Promise<SentMessage> {
+  return invoke<SentMessage>("send_file", {
     ...attachmentArgs(send),
     fileSize: send.fileSize ?? null,
   });
+}
+
+/**
+ * Read a file dropped onto the window into a `File`, so it can be attached like
+ * a picked or pasted one (#83). A native drop delivers only paths; the backend
+ * reads a path only if that drop put it in scope.
+ */
+export async function readDroppedFile(path: string): Promise<File> {
+  const got = await invoke<MediaDownload>("read_dropped_file", { path });
+  return mediaToFile(got, path.split(/[\\/]/).pop() || "dropped-file");
+}
+
+/**
+ * Read the files a file manager copied to the OS clipboard (Linux). WebKitGTK
+ * shows a paste only the list's `file://` text, so the backend reads the list
+ * off the clipboard itself; nothing here names a path. `files` is empty when
+ * the clipboard holds no file list; `errors` names each listed entry that could
+ * not be read (a folder, a network location, past the size cap).
+ */
+export async function readClipboardFiles(): Promise<{ files: File[]; errors: string[] }> {
+  const got = await invoke<ClipboardFiles>("read_clipboard_files");
+  return {
+    files: got.files.map((f) => mediaToFile(f, "pasted-file")),
+    errors: got.errors,
+  };
+}
+
+function mediaToFile(got: MediaDownload, fallbackName: string): File {
+  const binary = atob(got.data_base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], got.filename || fallbackName, { type: got.mime_type });
 }
 
 /**
@@ -165,8 +203,8 @@ export async function sendVideo(
     durationMs?: number;
     fileSize?: number;
   },
-): Promise<string> {
-  return invoke<string>("send_video", {
+): Promise<SentMessage> {
+  return invoke<SentMessage>("send_video", {
     ...attachmentArgs(send),
     width: send.width ?? null,
     height: send.height ?? null,
@@ -269,14 +307,8 @@ export async function openMediaExternally(
  * custom emoji actually lives, so sending one without the other sends a literal
  * `:shortcode:` (#84).
  */
-export async function sendPastedImage(
-  send: AttachmentSend & { caption?: string; formattedCaption?: string },
-): Promise<string> {
-  return invoke<string>("send_pasted_image", {
-    ...attachmentArgs(send),
-    caption: send.caption ?? null,
-    formattedCaption: send.formattedCaption ?? null,
-  });
+export async function sendPastedImage(send: AttachmentSend): Promise<SentMessage> {
+  return invoke<SentMessage>("send_pasted_image", attachmentArgs(send));
 }
 
 // ─── Attachment upload progress ──────────────────────────────────────────────

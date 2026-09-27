@@ -53,6 +53,13 @@ describe("SpaceStrip", () => {
     });
   });
 
+  it("draws the search button as an SVG icon, not a font glyph", () => {
+    strip.setSpaces([]);
+    const btn = strip.getElement().querySelector(".space-strip__search-btn")!;
+    expect(btn.querySelector("svg.icon")).not.toBeNull();
+    expect(btn.textContent).toBe("");
+  });
+
   it("shows the letter fallback until an avatar resolves", () => {
     strip.setSpaces([{ id: SPACE_ID, name: "Space" }]);
     expect(itemEl()?.textContent).toBe("S");
