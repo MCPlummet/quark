@@ -1255,11 +1255,17 @@ alongside `openExternalUrl` opened every link twice.
   - The engine exposed nothing at all.
 
   Any other text paste never reaches the backend. Linux only; the command
-  returns nothing elsewhere. A limit to the "only what the clipboard lists"
-  guarantee: WebKit lets a page write a URI list to the clipboard from a `copy`
-  handler, inside a user gesture. Script already running in the webview could
-  therefore stage a path and then paste it. This is weaker than the drop path,
-  whose scope only a real OS drop can widen.
+  returns nothing elsewhere. A page can write a URI list to the clipboard
+  itself (a `copy` handler's `setData`), so "only what the clipboard lists"
+  would otherwise let script in the webview name the files it reads back. Two
+  checks close that, each enough on its own. The read is refused while Quark's
+  own process owns the selection (GDK's `selection_owner_get`, which answers on
+  both its X11 and Wayland backends). It is also refused when the selection
+  carries `org.webkitgtk.WebKit.custom-pasteboard-data`, the type WebKit adds to
+  everything a page writes and no file manager offers. The second check still
+  holds if a clipboard manager takes over a page's list after Quark lets go of
+  it. A refused read behaves like a clipboard with no file list: the text
+  pastes as text.
 - **Dropping.** Files dropped anywhere on the window attach to the open room.
   The composer shows a dashed accent border while a drag is over the window.
   Tauri keeps OS drops for itself (`dragDropEnabled`, left at its default), so

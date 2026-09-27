@@ -11,8 +11,12 @@
 //! here — the command takes no arguments, and the only paths it opens are the
 //! ones the OS clipboard lists — so it cannot be steered at an arbitrary file
 //! by anything the webview sends. The one way a page could influence it is by
-//! writing a URI list to the clipboard itself (a `copy` event's `setData`),
-//! which WebKit allows only inside a user gesture; see DESIGN.md.
+//! writing a URI list to the clipboard itself (a `copy` event's `setData`), and
+//! that is refused twice over: a list Quark's own process is serving is ignored
+//! (`commands::read_clipboard_files` asks GDK who owns the selection), and so is
+//! any selection carrying [`WEBKIT_PAGE_DATA`], the type WebKit adds to
+//! everything a page writes — which also covers a clipboard manager re-serving
+//! a page's list after Quark lets go of it.
 //!
 //! The list is parsed here rather than through a clipboard crate's file-list
 //! getter: entries are `\r\n`-terminated (RFC 2483, and what Qt and GTK both
@@ -34,6 +38,11 @@ pub const MAX_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 /// a source offering more is not a file manager.
 #[cfg(target_os = "linux")]
 const MAX_LIST_BYTES: u64 = 1024 * 1024;
+
+/// The type WebKitGTK adds beside every flavour a web page writes to the
+/// clipboard. No file manager offers it, so a list that carries it came out of
+/// a webview — possibly Quark's own — and is not the user's copy.
+pub const WEBKIT_PAGE_DATA: &str = "org.webkitgtk.WebKit.custom-pasteboard-data";
 
 /// What a paste of copied files produced: the files that could be read, and a
 /// readable reason for each listed entry that could not.
@@ -207,7 +216,7 @@ mod linux {
     use std::io::Read;
     use std::time::Duration;
 
-    use super::{CopiedList, MAX_LIST_BYTES};
+    use super::{CopiedList, MAX_LIST_BYTES, WEBKIT_PAGE_DATA};
 
     const URI_LIST: &str = "text/uri-list";
     const GNOME_COPIED_FILES: &str = "x-special/gnome-copied-files";
@@ -230,6 +239,11 @@ mod linux {
             }
             Err(e) => return Err(WaylandError::Failed(format!("Can't read the clipboard: {e}"))),
         };
+
+        if types.contains(WEBKIT_PAGE_DATA) {
+            tracing::debug!("Clipboard was written by a web page; not reading it as copied files");
+            return Ok(None);
+        }
 
         let (mime, wrap): (&str, fn(Vec<u8>) -> CopiedList) = if types.contains(URI_LIST) {
             (URI_LIST, CopiedList::UriList)
@@ -277,6 +291,10 @@ mod linux {
         // A selection owner that lacks the target answers with no property,
         // which `load` returns as an empty value — so an ordinary text copy
         // costs two quick round trips, not a timeout.
+        if !load(WEBKIT_PAGE_DATA)?.is_empty() {
+            tracing::debug!("Clipboard was written by a web page; not reading it as copied files");
+            return Ok(None);
+        }
         let list = load(URI_LIST)?;
         if !list.is_empty() {
             return Ok(Some(CopiedList::UriList(list)));

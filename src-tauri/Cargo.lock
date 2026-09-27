@@ -4526,6 +4526,7 @@ dependencies = [
  "chrono",
  "directories",
  "futures-util",
+ "gtk",
  "jni",
  "keyring",
  "matrix-sdk",

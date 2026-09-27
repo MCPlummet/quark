@@ -1418,7 +1418,16 @@ pub async fn read_dropped_file(
 /// path from the frontend: it reads only what the OS clipboard lists — see
 /// `clipboard_files`. Empty when the clipboard holds no file list.
 #[tauri::command]
-pub async fn read_clipboard_files() -> Result<crate::clipboard_files::ClipboardFiles, String> {
+pub async fn read_clipboard_files(
+    app: AppHandle,
+) -> Result<crate::clipboard_files::ClipboardFiles, String> {
+    // A list Quark itself is serving was written by the webview — a page's
+    // `copy` handler can put any URI list there — so reading it would let the
+    // page name the files it gets back. Only another app's copy is the user's.
+    if quark_owns_clipboard(&app).await? {
+        tracing::debug!("Quark owns the clipboard; not reading it as copied files");
+        return Ok(Default::default());
+    }
     // A clipboard owner that never answers would otherwise hold the paste open
     // for good; the blocking read is abandoned (not cancelled) past this.
     let read = tauri::async_runtime::spawn_blocking(crate::clipboard_files::read_clipboard_files);
@@ -1426,6 +1435,24 @@ pub async fn read_clipboard_files() -> Result<crate::clipboard_files::ClipboardF
         Ok(joined) => joined.map_err(|e| format!("Failed to read the clipboard: {e}"))?,
         Err(_) => Err("The clipboard didn't answer".into()),
     }
+}
+
+/// Whether this process owns the clipboard selection. GDK tracks that on both
+/// its X11 and Wayland backends; it must be asked on the main thread.
+#[cfg(target_os = "linux")]
+async fn quark_owns_clipboard(app: &AppHandle) -> Result<bool, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(gtk::gdk::selection_owner_get(&gtk::gdk::SELECTION_CLIPBOARD).is_some());
+    })
+    .map_err(|e| format!("Failed to check the clipboard: {e}"))?;
+    // Fail closed: an unanswered check is not permission to read.
+    rx.await.map_err(|_| "Failed to check the clipboard".to_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn quark_owns_clipboard(_app: &AppHandle) -> Result<bool, String> {
+    Ok(false)
 }
 
 /// Upload file data (base64-encoded) and send it as an m.file event, with an
