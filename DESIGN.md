@@ -340,7 +340,11 @@ overwhelmed its own homeserver with:
   does not stand down flat: it **hands off** (`WakePlan::HandOff`), waiting up
   to `WARM_HANDOFF` (10 s) for the warm handler to report that it has processed
   that very event id (`note_warm_event`, stamped at the end of
-  `events::maybe_notify`). A loop that stays silent through the handoff is
+  `events::maybe_notify` for messages and stickers, and by a catch-all
+  timeline handler for everything else the push rules fire on — undecryptable
+  events, redactions, polls, calls). An invite carries no event id in sync, so
+  its push is answered instead by the room showing up as invited in the warm
+  client. A loop that stays silent through the handoff is
   restarted, exactly like a stalled one below — never raced. Standing
   down outright lost the event in the commonest Android state of all — a
   resident process the OS has frozen. The clock was stamped just before the

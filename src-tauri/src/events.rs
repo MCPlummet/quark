@@ -18,9 +18,10 @@ use matrix_sdk::{
         },
         sticker::StickerEventContent,
         typing::SyncTypingEvent,
-        OriginalSyncMessageLikeEvent, SyncEphemeralRoomEvent, SyncMessageLikeEvent,
-        ToDeviceEvent,
+        AnySyncMessageLikeEvent, AnySyncTimelineEvent, OriginalSyncMessageLikeEvent,
+        SyncEphemeralRoomEvent, SyncMessageLikeEvent, ToDeviceEvent,
     },
+    ruma::serde::Raw,
     Client, Room,
 };
 use serde::{Deserialize, Serialize};
@@ -308,6 +309,19 @@ async fn maybe_notify(
     crate::push_wake::note_warm_event(&timeline_event.event_id);
 }
 
+/// Whether `maybe_notify` reports this event to the push handoff itself: the
+/// original (unredacted) messages and stickers the handlers above route
+/// through it.
+fn notify_pipeline_owns(ev: &AnySyncTimelineEvent) -> bool {
+    matches!(
+        ev,
+        AnySyncTimelineEvent::MessageLike(
+            AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Original(_))
+                | AnySyncMessageLikeEvent::Sticker(SyncMessageLikeEvent::Original(_))
+        )
+    )
+}
+
 /// Register matrix-sdk event handlers that push sync events to the frontend.
 ///
 /// This must be called after the client has logged in and before sync starts,
@@ -326,6 +340,7 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
             if let SyncRoomMessageEvent::Original(original_ev) = ev {
                 let room_id = room.room_id().to_string();
                 let sender_id = original_ev.sender.clone();
+                let event_id = original_ev.event_id.clone();
                 if let Some(timeline_event) = convert_room_message_event(original_ev) {
                     let now_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -400,6 +415,11 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
                     if let Err(e) = app.emit(EVENT_UNREAD_COUNT, &unread_payload) {
                         error!("Failed to emit {}: {}", EVENT_UNREAD_COUNT, e);
                     }
+                } else {
+                    // Never reaches `maybe_notify`, and the catch-all below
+                    // leaves original messages to it — so release a push
+                    // waiting on this one here.
+                    crate::push_wake::note_warm_event(event_id.as_str());
                 }
             }
         },
@@ -444,6 +464,28 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
             }
         },
     );
+
+    // ── Push handoff for events outside the notify pipeline ─────────────────
+    // A push waiting on the warm loop (`WakePlan::HandOff`) is released when
+    // the loop reports the event it names. `maybe_notify` reports messages and
+    // stickers — after their notification is up, which is why this handler
+    // leaves those to it rather than racing it (handlers run concurrently).
+    // Everything else the push rules can fire for — undecryptable messages,
+    // redactions, polls, calls — is reported here; without it a push for one of
+    // those found a healthy loop silent and restarted it.
+    client.add_event_handler(|raw: Raw<AnySyncTimelineEvent>| async move {
+        match raw.deserialize() {
+            Ok(ev) if notify_pipeline_owns(&ev) => {}
+            Ok(ev) => crate::push_wake::note_warm_event(ev.event_id().as_str()),
+            // No typed handler could read it either, so nothing else will
+            // report it.
+            Err(_) => {
+                if let Ok(Some(id)) = raw.get_field::<String>("event_id") {
+                    crate::push_wake::note_warm_event(&id);
+                }
+            }
+        }
+    });
 
     // ── Still-encrypted events (decryption failed at sync time) ──────────────
     // The SDK dispatches successfully decrypted events as their decrypted type
@@ -695,6 +737,56 @@ pub async fn emit_room_update(client: &Client, app_handle: &tauri::AppHandle) {
 mod tests {
     use super::*;
     use serde_json;
+
+    // ── Push handoff ownership ────────────────────────────────────────────────
+
+    fn timeline(json: serde_json::Value) -> AnySyncTimelineEvent {
+        serde_json::from_value(json).expect("valid timeline event")
+    }
+
+    fn event(kind: &str, content: serde_json::Value, unsigned: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "type": kind, "event_id": "$e:x", "sender": "@a:x",
+            "origin_server_ts": 1, "content": content, "unsigned": unsigned,
+        })
+    }
+
+    #[test]
+    fn the_notify_pipeline_reports_only_original_messages_and_stickers() {
+        let none = serde_json::json!({});
+        let owned = [
+            event("m.room.message", serde_json::json!({"msgtype": "m.text", "body": "hi"}), none.clone()),
+            event("m.sticker", serde_json::json!({"body": "s", "url": "mxc://x/y", "info": {}}), none.clone()),
+        ];
+        for ev in owned {
+            assert!(notify_pipeline_owns(&timeline(ev)));
+        }
+
+        let redacted = serde_json::json!({"redacted_because": {
+            "type": "m.room.redaction", "event_id": "$r:x", "sender": "@a:x",
+            "origin_server_ts": 2, "redacts": "$e:x", "content": {},
+        }});
+        // Every one of these can be pushed by the default rules, and none
+        // passes through `maybe_notify` — so the catch-all must report them.
+        let unowned = [
+            event("m.room.message", serde_json::json!({}), redacted),
+            event(
+                "m.room.encrypted",
+                serde_json::json!({"algorithm": "m.megolm.v1.aes-sha2", "ciphertext": "c",
+                    "session_id": "s", "sender_key": "k", "device_id": "D"}),
+                none.clone(),
+            ),
+            event(
+                "m.call.invite",
+                serde_json::json!({"call_id": "c", "lifetime": 1, "version": 0,
+                    "offer": {"type": "offer", "sdp": ""}}),
+                none,
+            ),
+        ];
+        for ev in unowned {
+            assert!(!notify_pipeline_owns(&timeline(ev)));
+        }
+    }
 
     // ── SyncNewMessage ────────────────────────────────────────────────────────
 
