@@ -152,6 +152,14 @@ pub fn run() {
         .manage(matrix::rooms::LastEventCache::default())
         .manage(notify::NotificationRegistry::default())
         .manage(updater::UpdaterState::default())
+        .manage(local_files::DroppedFiles::default())
+        // Recorded here, from the drop itself, so `read_dropped_file` reads
+        // only what the user actually dropped.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<local_files::DroppedFiles>().record(paths);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // Auth
             commands::login,

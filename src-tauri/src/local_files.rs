@@ -6,24 +6,44 @@
 //! here, and a command that reads a path the frontend names is an arbitrary
 //! file read unless something else decides which paths are fair game.
 //!
-//! That something is the asset-protocol scope. On every native drop Tauri adds
-//! the dropped paths to it itself (`manager/window.rs`, `DragDropEvent::Drop`),
-//! before the event reaches the frontend — so the scope already *is* the list
-//! of files the user handed the app, maintained by the one component that saw
-//! the drop happen. This module only reads what that scope allows; it adds
-//! nothing to it.
+//! That something is [`DroppedFiles`]: the paths of every native drop, recorded
+//! from the window's own `DragDropEvent::Drop` — the one component that saw the
+//! drop happen. The asset-protocol scope looks like it would do (Tauri adds
+//! dropped paths to it too), but it also allows `$TEMP/**` for serving media,
+//! so checking against it let the page read any file under the temp dir.
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::matrix::media::MediaDownload;
 use tauri::utils::mime_type::MimeType;
 
+/// Paths the user has dropped onto the window this session.
+#[derive(Default)]
+pub struct DroppedFiles(Mutex<HashSet<PathBuf>>);
+
+impl DroppedFiles {
+    /// Record the paths of one native drop.
+    pub fn record(&self, paths: &[PathBuf]) {
+        let mut set = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        set.extend(paths.iter().cloned());
+    }
+
+    /// Whether `path` is exactly one the user dropped. Exact, not by prefix: a
+    /// dropped folder can't be attached anyway, so nothing beneath it needs to
+    /// be readable.
+    pub fn contains(&self, path: &Path) -> bool {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).contains(path)
+    }
+}
+
 /// Read one dropped file for attaching.
 ///
-/// `allowed` is the scope check, passed in rather than reached for so the
-/// policy can be tested without a running app. Refuses anything relative, not
-/// in scope, or not a regular file — a dropped folder is in scope (Tauri allows
-/// dropped directories recursively) but is not something that can be attached.
+/// `allowed` is the [`DroppedFiles`] check, passed in rather than reached for so
+/// the policy can be tested without a running app. Refuses anything relative,
+/// not dropped, or not a regular file — a dropped folder is recorded but is not
+/// something that can be attached.
 pub fn read_dropped_file(
     path: &str,
     allowed: impl Fn(&Path) -> bool,
@@ -117,5 +137,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = read_dropped_file(dir.path().to_str().unwrap(), |_| true).unwrap_err();
         assert!(err.contains("Folders"), "{err}");
+    }
+
+    #[test]
+    fn only_the_exact_dropped_paths_are_allowed() {
+        let dropped = DroppedFiles::default();
+        assert!(!dropped.contains(Path::new("/tmp/a.png")), "nothing dropped yet");
+        dropped.record(&[PathBuf::from("/tmp/a.png"), PathBuf::from("/home/u/dir")]);
+        assert!(dropped.contains(Path::new("/tmp/a.png")));
+        // A neighbour in the same (temp) directory is not the user's to hand over.
+        assert!(!dropped.contains(Path::new("/tmp/b.png")));
+        // Nor is anything inside a dropped folder.
+        assert!(!dropped.contains(Path::new("/home/u/dir/secret")));
     }
 }

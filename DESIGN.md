@@ -1275,10 +1275,12 @@ alongside `openExternalUrl` opened every link twice.
   Tauri keeps OS drops for itself (`dragDropEnabled`, left at its default), so
   the webview never sees an HTML5 `drop` carrying a `File`. `src/app/file_drop.ts`
   listens to the native event instead, which delivers paths, and reads each one
-  through `read_dropped_file`. That command reads only paths inside the
-  asset-protocol scope. Tauri adds dropped paths to that scope itself, before
-  the frontend hears of the drop, so the scope is exactly the set of files the
-  user handed over (`src-tauri/src/local_files.rs`). A dropped folder, or a path
+  through `read_dropped_file`. That command reads only the exact paths the
+  backend recorded from the window's own `DragDropEvent::Drop`
+  (`DroppedFiles` in `src-tauri/src/local_files.rs`), so the set is exactly the
+  files the user handed over. The asset-protocol scope is not used for this:
+  it also allows `$TEMP/**` for serving media, which would let the page read
+  any temp file. A dropped folder, or a path
   that can't be read, is reported and skipped, and the rest of the drop still
   attaches. With no room open, a drop says so and reads nothing. Mobile builds
   get no native drop events.

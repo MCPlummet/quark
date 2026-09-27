@@ -1398,16 +1398,16 @@ pub async fn send_pasted_image(
 }
 
 /// Read a file the user dropped onto the window, so the frontend can attach it
-/// the way it attaches a picked or pasted one (#83). Only files the native drop
-/// itself put in the asset-protocol scope can be read — see `local_files`.
+/// the way it attaches a picked or pasted one (#83). Only paths a native drop
+/// recorded in `DroppedFiles` can be read — see `local_files`.
 #[tauri::command]
 pub async fn read_dropped_file(
     app: AppHandle,
     path: String,
 ) -> Result<crate::matrix::media::MediaDownload, String> {
-    let scope = app.asset_protocol_scope();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::local_files::read_dropped_file(&path, |p| scope.is_allowed(p))
+        let dropped = app.state::<crate::local_files::DroppedFiles>();
+        crate::local_files::read_dropped_file(&path, |p| dropped.contains(p))
     })
     .await
     .map_err(|e| format!("Failed to read dropped file: {e}"))?
