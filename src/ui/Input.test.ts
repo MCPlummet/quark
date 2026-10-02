@@ -607,6 +607,43 @@ describe("Input", () => {
         await flush();
         expect(field()!.value).toBe("file:///tmp/a.txt");
       });
+
+      describe("with an image only the async Clipboard API can see", () => {
+        const clipboardImage = [
+          { types: ["image/png"], getType: async () => new Blob(["x"], { type: "image/png" }) },
+        ];
+
+        // WebKit allows `clipboard.read()` only while the paste event is being
+        // dispatched. Waiting for the backend first got every read refused, so
+        // a pasted screenshot attached nothing.
+        it("reads the clipboard inside the paste event, before the backend answers", async () => {
+          let answer!: (v: { files: File[]; listed: boolean }) => void;
+          input.setClipboardFileReader(() => new Promise((res) => { answer = res; }));
+          const read = vi.fn(async () => clipboardImage);
+          Object.defineProperty(navigator, "clipboard", { value: { read }, configurable: true });
+
+          paste({});
+          expect(read).toHaveBeenCalledTimes(1);
+
+          answer({ files: [], listed: false });
+          await flush();
+          expect(attached).toHaveLength(1);
+          expect(attached[0][0].type).toBe("image/png");
+        });
+
+        it("still prefers the files a file manager copied", async () => {
+          input.setClipboardFileReader(async () => ({ files: [copiedPdf()], listed: true }));
+          Object.defineProperty(navigator, "clipboard", {
+            value: { read: async () => clipboardImage },
+            configurable: true,
+          });
+
+          paste({});
+          await flush();
+          expect(attached).toHaveLength(1);
+          expect(attached[0].map((x) => x.name)).toEqual(["doc.pdf"]);
+        });
+      });
     });
 
     it("isFileUriList / looksLikeFileListText", () => {
