@@ -82,6 +82,28 @@ export type ClipboardFileReader = () => Promise<{ files: File[]; listed: boolean
 
 const NO_COPIED_FILES = { files: [] as File[], listed: false };
 
+/**
+ * The images on the OS clipboard, through the async Clipboard API — the
+ * fallback for engines (WebKitGTK) that leave them out of a paste's
+ * `clipboardData`. One image per clipboard item: an item offering the same
+ * picture as PNG *and* JPEG is one picture, not two. Empty when the API is
+ * unavailable or the read is refused.
+ */
+async function readClipboardImages(): Promise<File[]> {
+  try {
+    const images: File[] = [];
+    for (const ci of await navigator.clipboard.read()) {
+      const type = ci.types.find((t) => t.startsWith("image/"));
+      if (!type) continue;
+      const blob = await ci.getType(type);
+      images.push(new File([blob], "", { type: blob.type || type }));
+    }
+    return images;
+  } catch {
+    return [];
+  }
+}
+
 /** One flavour of a paste's clipboard data as text; "" when absent or unreadable. */
 function readClipboardText(data: DataTransfer | null | undefined, type: string): string {
   try {
@@ -405,6 +427,11 @@ export class Input {
     const readImages = typeof navigator !== "undefined" && !!navigator.clipboard?.read;
     if (!askBackend && !readImages) return;
     const before = this._snapshotForUndo();
+    // The image read starts here, inside the paste event, although the
+    // backend's answer outranks it. WebKit lets a page read the clipboard only
+    // while the paste is being dispatched: issued after the `await` below, the
+    // read is refused and the image silently never arrives.
+    const images = readImages ? readClipboardImages() : Promise.resolve([]);
     void (async () => {
       if (askBackend) {
         const { files: copied } = await this._readClipboardFiles!().catch(() => NO_COPIED_FILES);
@@ -417,7 +444,10 @@ export class Input {
           return;
         }
       }
-      if (readImages) await this._pasteClipboardImages(before);
+      const found = await images;
+      if (found.length === 0) return;
+      this._undoDefaultPaste(before);
+      this._onAttachFiles?.(found);
     })();
   }
 
@@ -436,30 +466,6 @@ export class Input {
     // reported by the reader. Only a clipboard that held no list at all gets
     // its text pasted back.
     if (!copied.listed) this._insertText(text);
-  }
-
-  /**
-   * Async fallback: Clipboard API (Linux/Wayland may not populate
-   * clipboardData for images pasted into a text input). One image per
-   * clipboard item: an item offering the same picture as PNG *and* JPEG is one
-   * picture, not two.
-   */
-  private async _pasteClipboardImages(before: PasteUndo): Promise<void> {
-    try {
-      const clipItems = await navigator.clipboard.read();
-      const images: File[] = [];
-      for (const ci of clipItems) {
-        const type = ci.types.find((t) => t.startsWith("image/"));
-        if (!type) continue;
-        const blob = await ci.getType(type);
-        images.push(new File([blob], "", { type: blob.type || type }));
-      }
-      if (images.length === 0) return;
-      this._undoDefaultPaste(before);
-      this._onAttachFiles?.(images);
-    } catch {
-      /* Clipboard API unavailable or permission denied */
-    }
   }
 
   /** Insert text at the caret as a paste would, keeping the field's undo history. */

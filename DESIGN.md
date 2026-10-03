@@ -1230,7 +1230,11 @@ alongside `openExternalUrl` opened every link twice.
   taken back out only when it reads as the image's stand-in (a lone URL, path
   or image filename). Prose that merely shares the clipboard with an image
   stays, and becomes the first attachment's caption. The async Clipboard API is spec-limited to
-  `image/png`, so it cannot recover other formats.
+  `image/png`, so it cannot recover other formats. Its `clipboard.read()` must
+  be called synchronously from the `paste` listener: WebKit grants the read
+  only while the paste is being dispatched, and refuses one issued after an
+  `await`. It therefore starts before the copied-files check below, which
+  still wins when both find something.
 - **Pasting files copied in a file manager.** Copying files in Dolphin or
   Nautilus puts a list of `file://` URIs on the clipboard (`text/uri-list`, and
   `x-special/gnome-copied-files` on GNOME), not the files. WebKitGTK shows the
