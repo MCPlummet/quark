@@ -1560,6 +1560,19 @@ body.quark-mobile .room-list__header-btn {
   padding-left: 2em;
 }
 
+/* Block quotes (compose `> text`, #118): the reset strips default margins, so
+   give them a quote bar and indent in every container that renders message HTML.
+   mx-reply's quote is stripped before render, so this only hits real quotes. */
+.message__body blockquote,
+.thread-view__root-body blockquote,
+.thread-view__message-body blockquote,
+.thread-inline__message-body blockquote {
+  margin: 2px 0;
+  padding-left: 0.8em;
+  border-left: 2px solid var(--fg-dim, currentColor);
+  opacity: 0.85;
+}
+
 /* Text-select mode: caret is placed inside this message body via `o`. */
 .message__body--text-select {
   outline: 1px dashed color-mix(in srgb, var(--cursor) 60%, transparent);

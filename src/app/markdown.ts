@@ -11,7 +11,12 @@
 //   [text](url)   → <a href="url"> (http/https/mailto/matrix only; the label is
 //                   parsed, the URL is literal)
 //
-// Newlines become <br>: other clients render formatted_body as ordinary HTML,
+// Block quotes: consecutive lines starting with `>` (optionally `> `) become one
+// <blockquote> with inline markdown parsed inside (#118). Lines inside a ```
+// fence never start a quote. The newline touching a quote block (and one blank
+// line after/before it) is dropped, so no stray <br> sits around the block.
+//
+// Newlines elsewhere become <br>: other clients render formatted_body as ordinary HTML,
 // where a bare newline collapses to a space.
 //
 // We use `*` (not `_`) for italic and require double underscores for underline,
@@ -85,20 +90,62 @@ export function markdownToHtml(text: string, opts: MarkdownOptions = {}): string
     return `${PH}${idx}${PH}`;
   });
 
-  // 2. Render inline markdown, tracking whether anything actually matched.
+  // 2. Split into quote blocks and ordinary text, rendering inline markdown in
+  //    each and tracking whether anything actually matched.
   let formatted = false;
-  const html = renderInline(staged, () => {
+  const onMatch = (): void => {
     formatted = true;
-  });
+  };
+  const NL = /\r?\n/g;
+  const parts: string[] = [];
+  for (const seg of splitBlocks(staged)) {
+    if (seg.quote) {
+      formatted = true;
+      parts.push(`<blockquote>${renderInline(seg.lines.join("\n"), onMatch).replace(NL, "<br>")}</blockquote>`);
+    } else if (seg.lines.length > 0) {
+      parts.push(renderInline(seg.lines.join("\n"), onMatch).replace(NL, "<br>"));
+    }
+  }
+  const html = parts.join("");
 
   if (emojiHtml.length === 0 && !formatted) return undefined;
 
-  // 3. Restore emoji placeholders as raw HTML, and turn newlines into <br> —
-  //    the plain body keeps its line breaks, and the formatted one has to say
-  //    the same thing to a client that doesn't render it pre-wrapped.
-  return html
-    .replace(new RegExp(`${PH}(\\d+)${PH}`, "g"), (_full, i: string) => emojiHtml[Number(i)] ?? "")
-    .replace(/\r?\n/g, "<br>");
+  // 3. Restore emoji placeholders as raw HTML. Newlines were already turned
+  //    into <br> above — the plain body keeps its line breaks, and the formatted
+  //    one has to say the same thing to a client that doesn't render it
+  //    pre-wrapped.
+  return html.replace(
+    new RegExp(`${PH}(\\d+)${PH}`, "g"),
+    (_full, i: string) => emojiHtml[Number(i)] ?? "",
+  );
+}
+
+interface Block {
+  quote: boolean;
+  lines: string[];
+}
+
+/** Group lines into `>` quote blocks and ordinary text (fenced lines are text). */
+function splitBlocks(text: string): Block[] {
+  const blocks: Block[] = [];
+  let inFence = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*```/.test(line)) inFence = !inFence;
+    const q = !inFence && !/^\s*```/.test(line) ? /^ {0,3}>[ ]?(.*)$/.exec(line) : null;
+    const last = blocks[blocks.length - 1];
+    if (q) {
+      if (last?.quote) last.lines.push(q[1]);
+      else blocks.push({ quote: true, lines: [q[1]] });
+    } else if (last && !last.quote) last.lines.push(line);
+    else blocks.push({ quote: false, lines: [line] });
+  }
+  // Drop the one blank line separating a text run from an adjacent quote.
+  blocks.forEach((b, i) => {
+    if (b.quote) return;
+    if (blocks[i - 1]?.quote && b.lines[0] === "") b.lines.shift();
+    if (blocks[i + 1]?.quote && b.lines[b.lines.length - 1] === "") b.lines.pop();
+  });
+  return blocks;
 }
 
 function renderInline(text: string, onMatch: () => void): string {
