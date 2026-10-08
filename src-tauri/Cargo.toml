@@ -12,11 +12,17 @@ homepage = "https://quark.tel"
 # `devtools` is intentionally NOT enabled: Tauri turns the Web Inspector on
 # automatically in debug builds, and the `devtools` feature is only what would
 # additionally enable it in *release* builds — which we don't want shipping.
-# 2.11 is a hard floor, not incidental: it is the first release whose runtime
-# handles WKWebView's `webViewWebContentProcessDidTerminate:` and reloads the
-# webview. Without it, iOS killing the web content process of a backgrounded app
-# leaves a blank screen on resume that only a force-quit clears (#39).
-tauri = { version = "2.11", features = ["protocol-asset"] }
+# 2.12 is a hard floor, not incidental, for two iOS reasons:
+# - 2.11 is the first release whose runtime handles WKWebView's
+#   `webViewWebContentProcessDidTerminate:` and reloads the webview. Without it,
+#   iOS killing the web content process of a backgrounded app leaves a blank
+#   screen on resume that only a force-quit clears (#39).
+# - 2.12 is the first on tao 0.37, whose app delegate always answers
+#   `application:configurationForConnectingSceneSession:options:`. An app built
+#   against the iOS 27 SDK that hasn't adopted the UIScene lifecycle is killed by
+#   UIKit at launch, before any of our code runs; on tao 0.35 the delegate only
+#   did this when the Info.plist enabled multiple scenes, which ours does not.
+tauri = { version = "2.12", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 chrono = { version = "0.4", features = ["clock"] }
