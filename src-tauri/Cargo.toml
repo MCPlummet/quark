@@ -158,3 +158,13 @@ debug-assertions = false
 debug-assertions = false
 [profile.dev.package.block2]
 debug-assertions = false
+
+# swift-rs 1.0.8, vendored so Xcode 27 iOS builds can link. On Xcode 27 its
+# build script re-globalizes each Swift package's own @_cdecl exports but never
+# the swift-rs runtime shim's (retain_object, release_object,
+# string_from_bytes), so `ld` fails with "Undefined symbols" for them. The
+# vendored copy carries Brendonovich/swift-rs#80 (opt-in through
+# SWIFT_RS_RUNTIME_ARCHIVE, set in .cargo/config.toml). Delete this patch and
+# the vendor/ directory once a swift-rs release fixes #81.
+[patch.crates-io]
+swift-rs = { path = "vendor/swift-rs" }

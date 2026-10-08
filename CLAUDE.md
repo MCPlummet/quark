@@ -58,6 +58,31 @@ The default shell carries `adb` alone, which is enough to drive an already
 installed build (`adb logcat -s quark`). Don't enter both shells at once — two
 `adb` clients on PATH keep restarting each other's server.
 
+**iOS** builds against the system Xcode. To put a release build on a cabled
+device:
+
+```bash
+rustup component add llvm-tools                  # once; required on Xcode 27
+pnpm tauri ios build --export-method debugging   # dev-signed release IPA
+xcrun devicectl device install app --device <UDID> src-tauri/gen/apple/build/arm64/Quark.ipa
+```
+
+`--export-method debugging` overrides `gen/apple/ExportOptions.plist`, which is
+`app-store-connect` for TestFlight — an IPA exported that way won't install on a
+device. `llvm-tools` is for swift-rs (≥ 1.0.8, required by Tauri 2.12): Xcode
+27's SwiftPM makes the `@_cdecl` exports of Tauri's Swift packages local, and
+swift-rs re-globalizes them with the `llvm-objcopy` in `rustc`'s sysroot. If it
+is missing, swift-rs only prints a `cargo:warning` and the build fails later at
+link time with `Undefined symbols … _register_plugin`, `_init_plugin_shell`, ….
+Undefined `_retain_object` / `_release_object` / `_string_from_bytes` alone is
+the other half of the same problem (swift-rs#81). Released swift-rs never makes
+its own runtime's exports global, so `src-tauri/vendor/swift-rs` carries
+swift-rs#80, enabled by `SWIFT_RS_RUNTIME_ARCHIVE` in `.cargo/config.toml`.
+Drop the `[patch.crates-io]` entry and the vendored crate once a swift-rs
+release fixes #81.
+The build also re-serializes `quark.xcodeproj/project.pbxproj` (and sometimes
+`quark_iOS/Info.plist`) with no semantic change; discard that diff.
+
 **CI** (GitHub Actions): `.github/workflows/ci.yml` gates PRs and `main` with `pnpm test` + `cargo test` (hard) and `clippy` (advisory); `release.yml` builds platform installers on `v*` tags. The `cargo test` step runs under `RUSTFLAGS=-Dwarnings`, so **a new rustc warning fails the build** — keep the backend warning-free rather than leaving warnings to accumulate (one was masking a real bug until #71). Clippy stays advisory; its set is broader and style-heavy.
 
 ## Architecture
