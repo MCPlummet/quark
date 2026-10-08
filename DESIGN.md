@@ -1143,7 +1143,9 @@ whose label is not itself a URL looks and behaves like every other link.
 On the sending side, the compose box's inline markdown (`src/app/markdown.ts`)
 turns `[label](url)` into `<a href>` in the `formatted_body`, leaving the
 markdown source in `body` as the plain fallback. Only `http(s)`, `mailto` and
-`matrix` targets link; anything else stays literal text. Whenever a message has
+`matrix` targets link; anything else stays literal text. Consecutive lines
+starting with `>` become a `<blockquote>` (inline markdown parsed inside, no
+`<br>` around the block, `>` lines inside a ``` fence left literal). Whenever a message has
 a `formatted_body`, its newlines go out as `<br>`, because other clients render
 that HTML normally and a bare newline would collapse to a space.
 

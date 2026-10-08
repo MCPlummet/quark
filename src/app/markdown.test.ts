@@ -113,4 +113,41 @@ describe("markdownToHtml", () => {
   it("leaves a multi-line message with no formatting as plain text", () => {
     expect(markdownToHtml("a\nb")).toBeUndefined();
   });
+
+  describe("block quotes (#118)", () => {
+    it("renders a quote followed by text without stray <br>", () => {
+      expect(markdownToHtml("> quoted text\n\nnormal text")).toBe(
+        "<blockquote>quoted text</blockquote>normal text",
+      );
+    });
+
+    it("groups consecutive quote lines, accepting a bare >", () => {
+      expect(markdownToHtml("> a\n>b\n> c")).toBe("<blockquote>a<br>b<br>c</blockquote>");
+    });
+
+    it("parses inline markdown inside the quote", () => {
+      expect(markdownToHtml("> **bold** `x`")).toBe(
+        "<blockquote><strong>bold</strong> <code>x</code></blockquote>",
+      );
+    });
+
+    it("keeps text before a quote and single-newline adjacency", () => {
+      expect(markdownToHtml("intro\n> q\nafter")).toBe(
+        "intro<blockquote>q</blockquote>after",
+      );
+    });
+
+    it("escapes HTML inside the quote", () => {
+      expect(markdownToHtml("> <b>")).toBe("<blockquote>&lt;b&gt;</blockquote>");
+    });
+
+    it("does not treat > mid-line as a quote", () => {
+      expect(markdownToHtml("a > b")).toBeUndefined();
+    });
+
+    it("leaves > lines inside a fenced block literal", () => {
+      const out = markdownToHtml("```\n> not a quote\n```");
+      expect(out === undefined || !out.includes("<blockquote>")).toBe(true);
+    });
+  });
 });
