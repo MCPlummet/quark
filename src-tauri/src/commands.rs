@@ -1171,7 +1171,47 @@ pub async fn save_media_with_dialog(
     .await?;
 
     let bytes = crate::matrix::media::decode_base64(&dl.data_base64)?;
-    save_bytes_via_dialog(&app_handle, bytes, suggested_filename.as_deref()).await
+    save_bytes_via_dialog(&app_handle, bytes, suggested_filename.as_deref(), &dl.mime_type).await
+}
+
+/// Download media from the homeserver and add it to the device's photo library
+/// (Android `MediaStore` under Pictures/Quark, iOS Photos). Mobile only — the
+/// frontend offers it nowhere else, and desktop answers with an error.
+///
+/// Returns where it went, for the confirmation toast; the user can't cancel
+/// this one, but iOS can refuse it (Photos access denied), which is an error.
+#[tauri::command]
+pub async fn save_media_to_photos(
+    app_handle: AppHandle,
+    state: State<'_, MatrixState>,
+    cache_state: State<'_, CacheState>,
+    mxc_url: String,
+    encryption_info: Option<String>,
+    suggested_filename: Option<String>,
+) -> Result<Option<String>, String> {
+    let client = get_client(&state)?;
+
+    let dl = crate::matrix::media::download_media_with_cache(
+        &client,
+        &mxc_url,
+        false,
+        None,
+        None,
+        Some(&cache_state.0),
+        encryption_info.as_deref(),
+    )
+    .await?;
+
+    let bytes = crate::matrix::media::decode_base64(&dl.data_base64)?;
+    let name = crate::media_save::export_filename(suggested_filename.as_deref(), &dl.mime_type);
+    let staged = crate::media_save::stage(&bytes, &name)?;
+    crate::media_save::save_staged(
+        &app_handle,
+        &staged,
+        &dl.mime_type,
+        crate::media_save::SaveTarget::Photos,
+    )
+    .await
 }
 
 /// macOS builds the save panel on the main (AppKit) thread. A Tauri `async`
@@ -1186,6 +1226,7 @@ async fn save_bytes_via_dialog(
     app_handle: &AppHandle,
     bytes: Vec<u8>,
     suggested_filename: Option<&str>,
+    _mime: &str,
 ) -> Result<Option<String>, String> {
     let suggested = suggested_filename.map(str::to_owned);
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1218,6 +1259,7 @@ async fn save_bytes_via_dialog(
     _app_handle: &AppHandle,
     bytes: Vec<u8>,
     suggested_filename: Option<&str>,
+    _mime: &str,
 ) -> Result<Option<String>, String> {
     let mut dialog = rfd::AsyncFileDialog::new();
     if let Some(name) = suggested_filename {
@@ -1233,15 +1275,22 @@ async fn save_bytes_via_dialog(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
-/// Mobile (iOS/Android) has no desktop file picker, and saving arbitrary files
-/// isn't wired up there yet.
+/// Mobile (iOS/Android) has no `rfd`; the platform's own save dialog takes a
+/// file rather than a path to write to, so the bytes are staged under the name
+/// the user will see and handed over (`media_save.rs`). The result is a name to
+/// show, not a filesystem path — on both platforms the destination is a
+/// document URI the app never sees as a path.
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 async fn save_bytes_via_dialog(
-    _app_handle: &AppHandle,
-    _bytes: Vec<u8>,
-    _suggested_filename: Option<&str>,
+    app_handle: &AppHandle,
+    bytes: Vec<u8>,
+    suggested_filename: Option<&str>,
+    mime: &str,
 ) -> Result<Option<String>, String> {
-    Err("Saving files isn't supported on this platform yet".to_string())
+    let name = crate::media_save::export_filename(suggested_filename, mime);
+    let staged = crate::media_save::stage(&bytes, &name)?;
+    crate::media_save::save_staged(app_handle, &staged, mime, crate::media_save::SaveTarget::Files)
+        .await
 }
 
 /// Return the compile-time target OS ("linux", "macos", "windows", "ios",

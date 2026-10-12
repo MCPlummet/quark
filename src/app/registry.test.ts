@@ -160,6 +160,8 @@ describe("menuEntries", () => {
       "copy-message",
       "select-message-text",
       "view-raw-event",
+      "save-image-photos",
+      "save-image-file",
       "edit",
       "redact",
     ]);

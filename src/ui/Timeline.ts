@@ -893,7 +893,7 @@ export class Timeline {
   /** Fired when the user clicks inside the timeline area (used to update activePanel). */
   private _onFocusCallback: (() => void) | null = null;
   /** Fired when an image message is clicked — passes (src, alt). */
-  private _onImageClickCallback: ((src: string, alt: string) => void) | null = null;
+  private _onImageClickCallback: ((src: string, alt: string, eventId: string | undefined) => void) | null = null;
   /** Fired when a jump-to-message is requested but the message is not in the current view. */
   private _onJumpToMessageCallback: ((eventId: string) => void) | null = null;
   /** Fired for each reply whose original must be fetched to show its preview. */
@@ -1096,7 +1096,8 @@ export class Timeline {
       if (target instanceof HTMLImageElement && target.classList.contains("message__image")) {
         e.preventDefault();
         e.stopPropagation();
-        this._onImageClickCallback?.(target.src, target.alt);
+        const eventId = target.closest<HTMLElement>("[data-message-id]")?.dataset.messageId;
+        this._onImageClickCallback?.(target.src, target.alt, eventId);
         return;
       }
 
@@ -1266,7 +1267,7 @@ export class Timeline {
   }
 
   /** Register a callback fired when the user clicks an image message. */
-  onImageClick(cb: (src: string, alt: string) => void): void {
+  onImageClick(cb: (src: string, alt: string, eventId: string | undefined) => void): void {
     this._onImageClickCallback = cb;
   }
 

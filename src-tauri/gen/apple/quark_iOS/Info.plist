@@ -26,6 +26,8 @@
 	<string>Quark needs camera access so you can take a photo or video to send in a chat.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Quark needs microphone access so videos you record to send include sound.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Quark needs permission to add photos so you can save images from a chat to your library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Quark needs photo library access so you can attach existing photos and videos to a chat.</string>
 	<key>NSUserActivityTypes</key>

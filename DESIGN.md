@@ -1352,6 +1352,25 @@ alongside `openExternalUrl` opened every link twice.
 - Image uploads with thumbnail generation
 - Blurhash placeholders during loading
 - Media cache on disk with configurable size limit
+- **Saving media (#124, #125).** The image viewer's toolbar and the message
+  menu (right-click / long-press on an image) save the *original* — fetched
+  again by its `mxc://` from the raw event (`savableMediaForEvent`), since the
+  rendered image is a blob URL — never the displayed copy. Two destinations:
+  **Files** is the system save dialog everywhere (`rfd` on desktop, the Storage
+  Access Framework create-document picker on Android, the Files export sheet —
+  `UIDocumentPickerViewController` with `asCopy` — on iOS); **Photos** exists
+  only on iOS and Android (`MediaStore` under `Pictures/Quark`, needing no
+  permission but Android 10+; `PHPhotoLibrary` with add-only access on iOS,
+  keeping the file byte-for-byte so a GIF stays animated). Desktop shows one
+  "save" button, mobile shows "photos" and "files"; `s` in the viewer saves
+  through the dialog. File attachments' save affordance uses the same path, so
+  it now works on mobile too. A "Saving…" toast covers the download and is
+  replaced by the outcome; a cancelled dialog is silent. The backend stages the
+  file under its sanitised name (`media_save::export_filename` — the name is the
+  sender's, so no directories, `..` or leading dots) in a private temp
+  directory that is removed once the native side answers. On iOS the UIKit and
+  Photos work lives in `main.mm`, reached through a function pointer and
+  answered through `quark_media_save_finished`, like the other Rust↔ObjC calls.
 
 ### Not in Scope (v1)
 - VoIP / MatrixRTC (group calls) — fundamentally incompatible with CLI aesthetic

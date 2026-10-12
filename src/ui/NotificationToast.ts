@@ -125,20 +125,22 @@ function _replaceCurrent(): void {
  * @param message  Text to display.
  * @param type     Visual style: "info" (default), "error", or "success".
  * @param duration Milliseconds before auto-dismiss. Default: 3000.
+ * @returns Dismisses this toast, and only this one — a no-op once another has
+ *          replaced it.
  */
 export function showToast(
   message: string,
   type: ToastType = "info",
   duration: number = 3000,
   options: ToastOptions = {}
-): void {
+): () => void {
   const { group } = options;
   let count = 1;
   if (_current) {
     if (group !== undefined && _current.group === group) {
       count = _current.count + 1;
     } else if (group !== undefined && _current.group === undefined) {
-      return; // ambient toasts never displace a status toast
+      return () => {}; // ambient toasts never displace a status toast
     }
     _replaceCurrent();
   }
@@ -187,6 +189,8 @@ export function showToast(
 
   // Allow click anywhere on the toast to dismiss it early
   el.addEventListener("click", () => _dismiss(entry));
+
+  return () => _dismiss(entry);
 }
 
 /** Convenience wrappers */

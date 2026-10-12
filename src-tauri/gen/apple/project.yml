@@ -98,6 +98,7 @@ targets:
         NSCameraUsageDescription: Quark needs camera access so you can take a photo or video to send in a chat.
         NSMicrophoneUsageDescription: Quark needs microphone access so videos you record to send include sound.
         NSPhotoLibraryUsageDescription: Quark needs photo library access so you can attach existing photos and videos to a chat.
+        NSPhotoLibraryAddUsageDescription: Quark needs permission to add photos so you can save images from a chat to your library.
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
@@ -171,6 +172,8 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: Metal.framework
       - sdk: MetalKit.framework
+      # main.mm adds saved images to the photo library (media_save.rs).
+      - sdk: Photos.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
       - sdk: UIKit.framework

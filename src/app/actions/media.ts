@@ -8,7 +8,6 @@ import {
   saveMediaToTemp,
   getPlatform,
   getAppConfig,
-  saveMediaWithDialog,
   openMediaExternally,
   sendPastedImage,
   sendFile,
@@ -28,7 +27,7 @@ import {
 import type { AttachmentProgressHandle } from "../../ui/AttachmentProgress.js";
 import { attachmentKind, type StagedAttachment } from "../../ui/AttachmentTray.js";
 
-import { showError, showSuccess } from "../../ui/NotificationToast.js";
+import { showError } from "../../ui/NotificationToast.js";
 
 import type { MessageTarget, SentMessage } from "../../ipc/types.js";
 
@@ -39,6 +38,7 @@ import { openQuickReactPicker } from "./reactions.js";
 import { startReply, cancelReply } from "./messages.js";
 import { openThread } from "./threads.js";
 import { openProfileForUser } from "./profile.js";
+import { saveMedia } from "../media_save.js";
 
 // Inline-video transport is platform-dependent (see the `get_platform` command):
 // on Linux/WebKitGTK the asset protocol can't feed a `<video>`, so we stream from
@@ -530,10 +530,7 @@ export function setupMessageActionHandlers(): void {
     const { mxcUrl, filename, encryptionInfo } =
       (e as CustomEvent<{ mxcUrl?: string; filename?: string; encryptionInfo?: string }>).detail;
     if (!mxcUrl) return;
-    void saveFileWithDialog(mxcUrl, filename, encryptionInfo).catch((err) => {
-      console.error("[file] save failed:", err);
-      showError(`Failed to save file: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    void saveMedia({ mxcUrl, filename, encryptionInfo }, "files");
   });
 
   document.addEventListener("quark:open-video" as keyof DocumentEventMap, (e: Event) => {
@@ -632,18 +629,3 @@ async function _openVideoExternally(mxcUrl: string, encryptionInfo?: string, fil
   }
 }
 
-/**
- * Download the file from the homeserver and save it via the OS native save
- * dialog. The backend opens the dialog (XDG portal on Linux, native picker
- * elsewhere) and writes to the path the user picks — the frontend never handles
- * a filesystem path, so this can't become an arbitrary-write vector.
- */
-async function saveFileWithDialog(
-  mxcUrl: string,
-  filename?: string,
-  encryptionInfo?: string,
-): Promise<void> {
-  const writtenPath = await saveMediaWithDialog(mxcUrl, filename, encryptionInfo);
-  if (writtenPath === null) return; // user cancelled
-  showSuccess(`Saved to ${writtenPath}`);
-}

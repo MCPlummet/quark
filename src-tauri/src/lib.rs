@@ -7,6 +7,7 @@ pub mod gif;
 pub mod local_files;
 pub mod matrix;
 pub mod media_cache;
+pub mod media_save;
 pub mod media_server;
 pub mod net_guard;
 pub mod notifications;
@@ -122,10 +123,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init());
 
-    // Android: register the app-local Kotlin plugin driving UnifiedPush
-    // distributor selection (unifiedpush.rs).
+    // Android: register the app-local Kotlin plugins driving UnifiedPush
+    // distributor selection (unifiedpush.rs) and saving media to the gallery or
+    // through the system file picker (media_save.rs).
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(unifiedpush::init());
+    let builder = builder.plugin(unifiedpush::init()).plugin(media_save::init());
 
     // Desktop auto-updater (AppImage / macOS .app / Windows NSIS). Endpoints are
     // set per-channel at runtime in updater.rs; the config endpoint is a fallback.
@@ -217,6 +219,7 @@ pub fn run() {
             commands::save_media_to_temp,
             commands::serve_media,
             commands::save_media_with_dialog,
+            commands::save_media_to_photos,
             commands::get_platform,
             commands::open_media_externally,
             commands::upload_media,

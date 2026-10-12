@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 // Symbols implemented in Rust and called from main.mm.
 //
 // Everything crosses in this direction, including things Rust needs *from*
@@ -30,5 +32,15 @@ namespace ffi {
         /// The call that asks APNs for a device token. Rust makes it when push
         /// is enabled, rather than the app registering unconditionally at launch.
         void quark_register_token_requester(void (*request)());
+
+        /// The call that saves a staged file to Photos (target 0) or through
+        /// the Files export dialog (target 1). It must answer exactly once per
+        /// request, through quark_media_save_finished.
+        void quark_register_media_saver(
+            void (*save)(const char *path, const char *mime, uint8_t target, uint64_t request));
+
+        /// A save has finished: status 0 saved (detail = where), 1 cancelled,
+        /// 2 failed (detail = why). detail may be NULL.
+        void quark_media_save_finished(uint64_t request, int32_t status, const char *detail);
     }
 }

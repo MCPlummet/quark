@@ -330,6 +330,27 @@ const ACTION_LITERALS = [
       "`:debug $eventId` is the keyboard form, and `:debug` covers the room's state; this row is the pointer shortcut to the same viewer.",
   },
   {
+    // Image messages only, and Photos only on a platform with a photo library
+    // (#124) — both expressed by the caller withholding the handler, since
+    // neither is something `requires` can say.
+    id: "save-image-photos",
+    description: "Save the selected image to Photos",
+    requires: ["message"],
+    menus: [{ surface: "message", label: "Save to Photos", group: 2, order: 4 }],
+    palette: false,
+    parityExempt:
+      "Only exists on iOS and Android, which have no keyboard path to a message at all; the image viewer's photos button is the other way there.",
+  },
+  {
+    id: "save-image-file",
+    description: "Save the selected image as a file",
+    requires: ["message"],
+    menus: [{ surface: "message", label: "Save as file", group: 2, order: 5 }],
+    palette: false,
+    parityExempt:
+      "Keyboard users open the image with Enter or `o` and press `s` in the viewer, which saves through the same dialog.",
+  },
+  {
     id: "edit",
     description: "Edit the selected message",
     requires: ["own-message"],
