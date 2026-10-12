@@ -8,7 +8,6 @@ vi.mock("../ipc/notifications.js", () => ({
   muteRoomIpc: vi.fn(),
   unmuteRoomIpc: vi.fn(),
   initNotificationChannels: vi.fn(async () => undefined),
-  setBackgroundSync: vi.fn(async () => undefined),
   setPushEnabled: vi.fn(async () => undefined),
 }));
 vi.mock("../ipc/index.js", () => ({
@@ -35,7 +34,6 @@ const config = (over: Record<string, unknown> = {}) => ({
   show_body: true,
   show_sender: true,
   mute_rooms: [],
-  background_sync: false,
   push_enabled: false,
   push_gateway_override: null,
   ...over,
@@ -56,9 +54,8 @@ describe("derivedPushEnabled", () => {
     expect(derivedPushEnabled("ios", false, true)).toBe(false);
   });
 
-  // Android has a real alternative in background sync, and picking a
-  // distributor is a choice about who carries the traffic — so push stays the
-  // user's own switch there.
+  // Picking a distributor is a choice about who carries the traffic — so
+  // push stays the user's own switch on Android.
   it("derives nothing on Android", () => {
     expect(derivedPushEnabled("android", true, true)).toBeNull();
   });

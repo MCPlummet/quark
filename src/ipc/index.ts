@@ -89,9 +89,6 @@ export {
   initNotificationChannels,
   clearRoomNotificationsIpc,
   takePendingNotificationAction,
-  setBackgroundSync,
-  getBackgroundSyncState,
-  requestBatteryExemption,
   getPushStatus,
   setPushEnabled,
   selectPushDistributor,
@@ -102,7 +99,6 @@ export type {
   NotificationConfig,
   PushStatus,
   PlatformTransport,
-  BackgroundSyncState,
   PendingNotificationAction,
 } from "./notifications.js";
 

@@ -26,7 +26,9 @@ pub const CHANNEL_MESSAGES: &str = "messages";
 /// Android channel for highlights (mentions, keywords) — separate so users can
 /// give mentions their own sound/importance in OS settings.
 pub const CHANNEL_MENTIONS: &str = "mentions";
-/// Android channel for the foreground sync service's persistent notification.
+/// Android channel for the push service's short-lived foreground notification.
+/// The id predates push (it belonged to the retired background-sync service)
+/// and is kept so upgraded installs reuse the channel rather than orphan it.
 pub const CHANNEL_BACKGROUND: &str = "background_sync";
 /// Action type carrying the Reply / Mark-as-read quick actions. Registered
 /// from the frontend (the plugin's Rust `ActionType` has no public
@@ -469,8 +471,8 @@ pub fn setup_channels(app: &tauri::AppHandle) {
                 .vibration(true)
                 .lights(true)
                 .build(),
-            Channel::builder(CHANNEL_BACKGROUND, "Background sync")
-                .description("Keeps the connection to your homeserver alive")
+            Channel::builder(CHANNEL_BACKGROUND, "Background activity")
+                .description("Shown briefly while Quark fetches a pushed message")
                 .importance(Importance::Min)
                 .build(),
         ];

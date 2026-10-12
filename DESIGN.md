@@ -77,9 +77,13 @@ Recovery is a full page reload, so it costs the user their scroll position and a
 ### Push notifications
 
 Desktop holds a live sync connection, so it never needs push. Mobile does: iOS
-suspends a backgrounded app outright, and on Android the alternative is
-`SyncForegroundService` holding the connection open — which costs battery, shows
-a permanent shade entry, and loses to Doze and OEM task-killers. Push inverts
+suspends a backgrounded app outright, and on Android the alternative — a
+foreground service holding the connection open — costs battery, shows a
+permanent shade entry, and loses to Doze and OEM task-killers. Quark shipped
+that service as an opt-in "Background sync" until push covered Android, then
+removed it (#122): push is the only way a closed app hears about a message on
+either mobile platform. A `background_sync` key left in an older
+`notifications.toml` is ignored on load. Push inverts
 that: the homeserver POSTs to a **push gateway**, the gateway wakes the device
 through the platform transport, and the device runs a bounded sync.
 
@@ -144,7 +148,7 @@ room's user-defined rules outright so the account default applies.
 
 Because these each have an effect outside the config file, **`set_notification_config`
 only accepts the fields Settings owns** (`NotificationConfig::with_preferences`):
-enabled, preview, sender. Mutes, background sync and push have
+enabled, preview, sender. Mutes and push have
 dedicated commands, and the Settings dialog builds its draft from a config it
 cached when it opened — so treating that draft as authoritative would let [save]
 silently undo a mute or a push opt-out taken while the dialog was open.
@@ -186,11 +190,11 @@ the handing over.
 `enabled` and the OS permission together, on login and on every settings save,
 and the Settings toggle there reports rather than sets — a flip would be undone
 by the next save. iOS has no other way to hear about a message while the app is
-closed: no background-sync service, no connection left open. A separate opt-in
+closed: no connection survives backgrounding. A separate opt-in
 could therefore only produce the state where notifications are on and nothing
-ever arrives. Android keeps its own switch, because background sync is a real
-alternative there and choosing a distributor is choosing who carries this
-device's traffic. The permission is part of the condition for the same reason
+ever arrives. Android keeps its own switch, because push there needs a
+third-party UnifiedPush distributor and choosing one is choosing who carries
+this device's traffic. The permission is part of the condition for the same reason
 registration is gated at all: a pusher for a device that cannot display
 anything hands the gateway an address for nothing.
 
@@ -201,8 +205,8 @@ five (`off`, `muted_account`, `no_transport`, `waiting`, `ready`) and Settings
 reports them separately, because collapsing any two produces the failure push
 can least afford: telling someone it works while nothing delivers it.
 `no_transport` earns its own state on Android as both the likeliest cause and
-the only one the user can fix — the foreground service remains the fallback
-there.
+the only one the user can fix — without a distributor a closed Android app
+hears about nothing.
 
 The push section shows a one-line status for the current state and, beneath
 it, a hint only when there is something for the user to do (install a
@@ -306,7 +310,7 @@ application context and the `PushNotifier` class once (`nativeInstall`) —
 the class resolved on a Java thread, since `FindClass` from a native thread
 sees only the system class loader. The plugin could not stay, for two
 reasons. Every plugin call dispatches onto the Activity, and wry `expect`s
-one: a process that outlived its Activity (kept by a foreground service, or
+one: a process that outlived its Activity (kept by the push service, or
 just not yet reclaimed) panicked on its first notification, inside the sync
 loop that raised it. And its tap intents use `FLAG_CANCEL_CURRENT`, which
 kills the old PendingIntent before the replacement row is posted — the room
@@ -994,7 +998,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 | **Media** | Image auto-load, max dimensions, cache-size limit |
 | **GIF** | Provider (Klipy / Giphy), API key, content rating |
 | **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
-| **Notifications** | Enable / preview / sender toggles, push and background-sync controls, test notification |
+| **Notifications** | Enable / preview / sender toggles, push controls, test notification |
 | **Themes** | Theme picker and hot-reload path |
 | **About** | App version, Quark on GitHub link, Updates section (desktop only — see below) |
 

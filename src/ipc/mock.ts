@@ -520,9 +520,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         status_msg: "mock status — working on quark",
       };
     case "get_notification_config":
-      return { enabled: true, show_body: true, show_sender: true, mute_rooms: [], background_sync: false, push_enabled: false, push_gateway_override: null };
-    case "get_background_sync_state":
-      return { supported: false, enabled: false, running: false, battery_exempt: false };
+      return { enabled: true, show_body: true, show_sender: true, mute_rooms: [], push_enabled: false, push_gateway_override: null };
     // Browser dev mode has no push transport, same as desktop.
     case "get_push_status":
       // Browser dev mode has no transport at all, so the section stays hidden —
@@ -571,8 +569,6 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         dm(5, "Frank", "thanks again for the help with the keyboard config!", 1440),
       ].slice(0, (args?.limit as number) ?? 12);
     }
-    case "set_background_sync":
-    case "request_battery_exemption":
     case "set_push_enabled":
       return null;
 

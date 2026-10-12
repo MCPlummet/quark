@@ -2806,9 +2806,9 @@ pub async fn get_notification_config(
 /// Apply a Settings edit to the notification configuration and persist it.
 ///
 /// Only the fields Settings owns are taken from `config` — see
-/// [`NotificationConfig::with_preferences`]. Mutes, background sync and push
-/// each have their own command because each has a homeserver- or OS-side effect
-/// to keep in step, and a stale Settings draft must not be able to undo one.
+/// [`NotificationConfig::with_preferences`]. Mutes and push each have their
+/// own command because each has a homeserver- or OS-side effect to keep in
+/// step, and a stale Settings draft must not be able to undo one.
 #[tauri::command]
 pub async fn set_notification_config(
     config_state: State<'_, Mutex<NotificationConfig>>,
@@ -2980,40 +2980,6 @@ pub async fn clear_room_notifications(
 ) -> Result<(), String> {
     crate::notify::cancel_room(&app_handle, &room_id);
     Ok(())
-}
-
-/// Enable or disable background sync: persists the choice in the notification
-/// config and starts/stops the Android foreground service to match. On
-/// platforms without the service this only persists the flag.
-#[tauri::command]
-pub async fn set_background_sync(
-    app_handle: AppHandle,
-    config_state: State<'_, Mutex<NotificationConfig>>,
-    paths: State<'_, crate::Paths>,
-    enabled: bool,
-) -> Result<(), String> {
-    {
-        let mut guard = config_state
-            .lock()
-            .map_err(|_| "Notification config lock poisoned")?;
-        guard.background_sync = enabled;
-        let snapshot = guard.clone();
-        crate::notifications::save_notification_config_to(&paths.config_dir, &snapshot)?;
-    }
-    crate::mobile_sync::apply(&app_handle, enabled)
-}
-
-/// Current background-sync state for the Settings UI.
-#[tauri::command]
-pub async fn get_background_sync_state(
-    app_handle: AppHandle,
-    config_state: State<'_, Mutex<NotificationConfig>>,
-) -> Result<crate::mobile_sync::BackgroundSyncState, String> {
-    let enabled = config_state
-        .lock()
-        .map_err(|_| "Notification config lock poisoned")?
-        .background_sync;
-    Ok(crate::mobile_sync::state(&app_handle, enabled))
 }
 
 /// Current push state for the Settings UI.
@@ -3210,12 +3176,6 @@ pub async fn select_push_distributor(
         Ok(false) => Err(format!("{distributor} would not accept the registration")),
         Err(e) => Err(e),
     }
-}
-
-/// Surface the Android battery-optimization exemption prompt (no-op elsewhere).
-#[tauri::command]
-pub async fn request_battery_exemption(app_handle: AppHandle) -> Result<(), String> {
-    crate::mobile_sync::request_battery_exemption(&app_handle)
 }
 
 /// Read-and-delete the cold-start notification action the platform captured —

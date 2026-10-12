@@ -10,7 +10,6 @@ import {
   muteRoomIpc,
   unmuteRoomIpc,
   initNotificationChannels,
-  setBackgroundSync,
   setPushEnabled,
 } from "../ipc/notifications.js";
 import { getPlatform } from "../ipc/index.js";
@@ -45,7 +44,6 @@ async function _loadConfig(): Promise<NotificationConfig> {
       show_body: true,
       show_sender: true,
       mute_rooms: [],
-      background_sync: false,
       push_enabled: false,
       push_gateway_override: null,
     };
@@ -137,22 +135,12 @@ export async function initNotifications(): Promise<void> {
   await _loadConfig();
   await _syncPushWithNotifications(await _ensureNotificationPermission());
   // Create the Android notification channels (Messages / Mentions /
-  // Background sync) — the backend's rich notifications post to them, and a
+  // Background activity) — the backend's rich notifications post to them, and a
   // notification on a missing channel never fires. No-op off Android.
   try {
     await initNotificationChannels();
   } catch (err) {
     console.warn("Notification channel init failed:", err);
-  }
-  // Re-arm the background-sync foreground service when the user has it
-  // enabled — the service usually outlives the activity, but a cold process
-  // start needs the start call again. No-op off Android.
-  if (_config?.background_sync) {
-    try {
-      await setBackgroundSync(true);
-    } catch (err) {
-      console.warn("Background sync start failed:", err);
-    }
   }
 }
 
@@ -240,14 +228,14 @@ async function _ensureNotificationPermission(): Promise<boolean | null> {
  * What `push_enabled` has to be, or `null` where push is the user's own switch.
  *
  * iOS has no second way to hear about a message while the app is closed — no
- * background sync service, no long-lived connection — so a separate push opt-in
+ * long-lived connection survives backgrounding — so a separate push opt-in
  * there only produces the state where notifications are on and nothing ever
  * arrives. It follows the master switch instead, and the permission with it: a
  * pusher for a device that cannot display anything hands the gateway an address
  * for nothing.
  *
- * Android keeps its own switch. Background sync is a real alternative there,
- * and choosing a distributor is choosing who carries this device's push
+ * Android keeps its own switch: push there needs a third-party UnifiedPush
+ * distributor, and choosing one is choosing who carries this device's push
  * traffic — not a decision to make on the user's behalf.
  */
 export function derivedPushEnabled(

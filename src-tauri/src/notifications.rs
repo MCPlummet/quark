@@ -18,12 +18,6 @@ pub struct NotificationConfig {
     pub show_sender: bool,
     /// Room IDs whose notifications are suppressed.
     pub mute_rooms: Vec<String>,
-    /// Keep the sync loop alive while backgrounded via the Android foreground
-    /// service (no effect on other platforms). Opt-in: costs battery and shows
-    /// a persistent status notification. `serde(default)` so pre-0.14 configs
-    /// load unchanged.
-    #[serde(default)]
-    pub background_sync: bool,
     /// Register a pusher so the homeserver wakes this device instead of a live
     /// sync connection holding it open (mobile only). Opt-in: it hands a
     /// third-party push gateway this device's address, so it must never turn
@@ -44,7 +38,6 @@ impl Default for NotificationConfig {
             show_body: true,
             show_sender: true,
             mute_rooms: Vec::new(),
-            background_sync: false,
             push_enabled: false,
             push_gateway_override: None,
         }
@@ -56,7 +49,7 @@ impl NotificationConfig {
     ///
     /// Settings sends the whole struct back, but it only ever edits the four
     /// preference fields below — everything else is owned by a dedicated
-    /// command (`set_push_enabled`, `set_background_sync`, `mute_room`) that
+    /// command (`set_push_enabled`, `mute_room`) that
     /// has homeserver-side effects to match. The frontend builds its draft from
     /// a config it cached when the dialog opened, so treating the incoming blob
     /// as authoritative lets a stale draft silently undo any of those: a mute
@@ -69,7 +62,6 @@ impl NotificationConfig {
             show_body: incoming.show_body,
             show_sender: incoming.show_sender,
             mute_rooms: self.mute_rooms.clone(),
-            background_sync: self.background_sync,
             push_enabled: self.push_enabled,
             push_gateway_override: self.push_gateway_override.clone(),
         }
@@ -473,6 +465,26 @@ mod tests {
         }
     }
 
+    /// Background sync was retired once push landed on Android. A config
+    /// written while it existed still carries the key, and a parse failure
+    /// resets *every* preference to default — so the stale key has to be
+    /// ignored, not rejected.
+    #[test]
+    fn a_config_from_before_background_sync_was_removed_still_loads() {
+        let old = r#"
+            enabled = true
+            show_body = false
+            show_sender = true
+            mute_rooms = ["!quiet:example.com"]
+            background_sync = true
+            push_enabled = true
+        "#;
+        let cfg: NotificationConfig = toml::from_str(old).expect("stale key must not fail the parse");
+        assert!(!cfg.show_body);
+        assert!(cfg.push_enabled);
+        assert_eq!(cfg.mute_rooms, vec!["!quiet:example.com".to_string()]);
+    }
+
     #[test]
     fn settings_edits_are_applied() {
         let merged = default_config().with_preferences(edited());
@@ -521,16 +533,6 @@ mod tests {
             live.with_preferences(stale_draft).mute_rooms,
             vec!["!muted-since:example.com".to_string()]
         );
-    }
-
-    /// Background sync starts and stops an Android foreground service, so the
-    /// service state and the flag have to agree.
-    #[test]
-    fn a_stale_draft_cannot_flip_background_sync() {
-        let live = NotificationConfig { background_sync: true, ..default_config() };
-        let stale_draft = NotificationConfig { background_sync: false, ..edited() };
-
-        assert!(live.with_preferences(stale_draft).background_sync);
     }
 
     #[test]
