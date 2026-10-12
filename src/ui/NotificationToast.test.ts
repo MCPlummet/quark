@@ -75,3 +75,79 @@ describe("NotificationToast visibility (#80)", () => {
     expect(getComputedStyle(toast!).pointerEvents).toBe("auto");
   });
 });
+
+describe("NotificationToast: one at a time (#126)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    clearToasts();
+    vi.runAllTimers();
+    vi.useRealTimers();
+    document.querySelectorAll(".input-bar-wrap").forEach((el) => el.remove());
+  });
+
+  const live = (): HTMLElement[] =>
+    [...document.querySelectorAll<HTMLElement>(".toast:not(.toast--leaving)")];
+
+  it("replaces the visible toast rather than stacking a second", () => {
+    showSuccess("saved");
+    showError("could not send");
+    expect(live()).toHaveLength(1);
+    expect(live()[0].textContent).toContain("could not send");
+    // Replaced outright, not left animating out beside the new one.
+    expect(document.querySelectorAll(".toast")).toHaveLength(1);
+  });
+
+  it("collapses a burst of message toasts into one with a running count", () => {
+    showToast("alice: hi", "info", 4000, { group: "message" });
+    showToast("bob: hey", "info", 4000, { group: "message" });
+    showToast("carol: yo", "info", 4000, { group: "message" });
+    expect(live()).toHaveLength(1);
+    expect(live()[0].querySelector(".toast__message")?.textContent).toBe("carol: yo (+2 more)");
+  });
+
+  it("does not let a message toast displace an error the user still needs to read", () => {
+    showError("could not send");
+    showToast("alice: hi", "info", 4000, { group: "message" });
+    expect(live()).toHaveLength(1);
+    expect(live()[0].textContent).toContain("could not send");
+  });
+
+  it("lets a status toast displace a message toast, and restarts the count after", () => {
+    showToast("alice: hi", "info", 4000, { group: "message" });
+    showError("could not send");
+    expect(live()[0].textContent).toContain("could not send");
+    clearToasts();
+    showToast("bob: hey", "info", 4000, { group: "message" });
+    expect(live()[0].querySelector(".toast__message")?.textContent).toBe("bob: hey");
+  });
+
+  it("restarts the count once the grouped toast has gone", () => {
+    showToast("alice: hi", "info", 4000, { group: "message" });
+    vi.advanceTimersByTime(4000);
+    showToast("bob: hey", "info", 4000, { group: "message" });
+    expect(live()[0].querySelector(".toast__message")?.textContent).toBe("bob: hey");
+  });
+
+  it("parks the toast above the compose bar instead of over it", () => {
+    const wrap = document.createElement("div");
+    wrap.className = "input-bar-wrap";
+    document.body.appendChild(wrap);
+    wrap.getBoundingClientRect = () =>
+      ({ top: 700, bottom: 768, left: 0, right: 400, width: 400, height: 68, x: 0, y: 700, toJSON: () => ({}) }) as DOMRect;
+    const height = document.documentElement.clientHeight || window.innerHeight;
+
+    showToast("hello");
+
+    const container = document.querySelector<HTMLElement>(".toast-container")!;
+    expect(container.style.getPropertyValue("--toast-bottom")).toBe(`${height - 700 + 8}px`);
+  });
+
+  it("falls back to the stylesheet inset when no compose bar is showing", () => {
+    showToast("hello");
+    const container = document.querySelector<HTMLElement>(".toast-container")!;
+    expect(container.style.getPropertyValue("--toast-bottom")).toBe("");
+  });
+});

@@ -7767,14 +7767,17 @@ body.quark-mobile .attach-progress {
  * painted a full viewport below the fold, unreachable and unscrollable.
  *
  * Anchored bottom-right rather than top: the top edge is where the mobile top
- * bar and the room header live, and a toast over the compose bar is the thing
- * the user is most likely to be looking at when a send fails. */
+ * bar and the room header live. Not *over* the compose bar, though (#126):
+ * NotificationToast sets --toast-bottom to park the toast just above it, so it
+ * covers a strip of timeline instead of the field the user is typing in. Only
+ * one toast shows at a time, so it never grows into a stack that buries the
+ * window. */
 .toast-container {
   position: fixed;
   right: 16px;
-  /* Clear the home indicator / gesture bar; collapses to the plain inset on
-     desktop where the env() resolves to 0. */
-  bottom: calc(16px + env(safe-area-inset-bottom));
+  /* Without a compose bar on screen: clear the home indicator / gesture bar;
+     collapses to the plain inset on desktop where the env() resolves to 0. */
+  bottom: var(--toast-bottom, calc(16px + env(safe-area-inset-bottom)));
   z-index: 10500; /* above dialogs and context menus (10000), below #startup-overlay */
   display: flex;
   flex-direction: column;
@@ -7845,6 +7848,11 @@ body.quark-mobile .attach-progress {
   min-width: 0;
   /* Backend error strings are long and arrive unbroken (URLs, event IDs). */
   overflow-wrap: anywhere;
+}
+
+.toast__more {
+  color: color-mix(in srgb, var(--fg) 55%, transparent);
+  white-space: nowrap;
 }
 
 .toast__close {

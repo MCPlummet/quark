@@ -310,7 +310,9 @@ export function handleIncomingMessage(msg: {
   const title = _config?.show_sender ? `${msg.senderName} in ${msg.roomName}` : "New message";
   const displayBody = _config?.show_body ? msg.body : "You have a new message";
 
-  showToast(`${title}: ${displayBody}`, "info", 4000);
+  // Grouped so a burst of messages collapses into one toast with a running
+  // count instead of stacking over the window (#126).
+  showToast(`${title}: ${displayBody}`, "info", 4000, { group: "message" });
 }
 
 /**
