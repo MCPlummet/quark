@@ -115,6 +115,21 @@ describe("NotificationToast: one at a time (#126)", () => {
     expect(live()[0].textContent).toContain("could not send");
   });
 
+  it("does not let a passing notice wipe an error the user has not read", () => {
+    showError("push is broken");
+    showToast("Checking for updates…");
+    expect(live()[0].textContent).toContain("push is broken");
+    showSuccess("saved");
+    expect(live()[0].textContent).toContain("saved");
+  });
+
+  it("returns a dismiss that removes only its own toast", () => {
+    const dismissFirst = showToast("first");
+    showError("second");
+    dismissFirst();
+    expect(live()[0].textContent).toContain("second");
+  });
+
   it("lets a status toast displace a message toast, and restarts the count after", () => {
     showToast("alice: hi", "info", 4000, { group: "message" });
     showError("could not send");
@@ -143,6 +158,26 @@ describe("NotificationToast: one at a time (#126)", () => {
 
     const container = document.querySelector<HTMLElement>(".toast-container")!;
     expect(container.style.getPropertyValue("--toast-bottom")).toBe(`${height - 700 + 8}px`);
+  });
+
+  it("ignores a compose bar the mobile drawer is drawn over", () => {
+    const wrap = document.createElement("div");
+    wrap.className = "input-bar-wrap";
+    document.body.appendChild(wrap);
+    wrap.getBoundingClientRect = () =>
+      ({ top: 700, bottom: 768, left: 0, right: 400, width: 400, height: 68, x: 0, y: 700, toJSON: () => ({}) }) as DOMRect;
+    const drawer = document.createElement("div");
+    document.body.appendChild(drawer);
+    const original = document.elementFromPoint;
+    document.elementFromPoint = () => drawer;
+    try {
+      showToast("hello");
+      const container = document.querySelector<HTMLElement>(".toast-container")!;
+      expect(container.style.getPropertyValue("--toast-bottom")).toBe("");
+    } finally {
+      document.elementFromPoint = original;
+      drawer.remove();
+    }
   });
 
   it("falls back to the stylesheet inset when no compose bar is showing", () => {

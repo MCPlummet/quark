@@ -29,6 +29,13 @@ export class ImageLightbox implements Modal {
   private _saveTargets: SaveTarget[] = ["files"];
   private _saveBtns: HTMLElement;
   private _saving = false;
+  /**
+   * Bumped whenever the viewer opens on a new image. A save still in flight
+   * from before then belongs to a previous image and must not touch the
+   * buttons — and one whose answer never comes (a native dialog that failed to
+   * appear) must not leave them disabled for the rest of the session.
+   */
+  private _saveGen = 0;
 
   constructor() {
     this._el = document.createElement("div");
@@ -293,6 +300,9 @@ export class ImageLightbox implements Modal {
     this._currentSrc = src;
     this._currentAlt = alt ?? "";
     this._currentMedia = media ?? null;
+    this._saveGen++;
+    this._saving = false;
+    this._renderSaveButtons();
     this._imgEl.src = src;
     this._imgEl.alt = alt ?? "";
     this._panX = 0;
@@ -361,6 +371,11 @@ export class ImageLightbox implements Modal {
   }
 
   private _renderSaveButtons(): void {
+    // On mobile the fallback download is an `<a download>` the webview ignores
+    // — the dead button of #125. With no original to fetch there is nothing
+    // that would work, so offer nothing rather than a button that does nothing.
+    const canSave = this._currentMedia !== null || !this._saveTargets.includes("photos");
+    this._saveBtns.style.display = canSave ? "" : "none";
     this._saveBtns.replaceChildren(
       ...this._saveTargets.map((target) => {
         const btn = this._makeBtn(this._saveTargets.length === 1 ? "⬇ save" : SAVE_LABELS[target], () => {
@@ -385,6 +400,7 @@ export class ImageLightbox implements Modal {
       return;
     }
     this._saving = true;
+    const gen = this._saveGen;
     const buttons = [...this._saveBtns.querySelectorAll<HTMLButtonElement>("button")];
     const label = btn?.textContent ?? "";
     for (const b of buttons) b.disabled = true;
@@ -392,9 +408,11 @@ export class ImageLightbox implements Modal {
     try {
       await this._saveHandler(media, target);
     } finally {
-      this._saving = false;
-      for (const b of buttons) b.disabled = false;
-      if (btn) btn.textContent = label;
+      if (gen === this._saveGen) {
+        this._saving = false;
+        for (const b of buttons) b.disabled = false;
+        if (btn) btn.textContent = label;
+      }
     }
   }
 

@@ -50,6 +50,9 @@ pub type SaveResult = Result<Option<String>, String>;
 
 // ─── Naming ──────────────────────────────────────────────────────────────────
 
+/// Upper bound on a saved file's name, in UTF-8 bytes (filesystems cap at 255).
+const MAX_NAME_BYTES: usize = 120;
+
 /// Extension for an image or video mimetype, for a name that arrived without one.
 fn ext_for_mime(mime: &str) -> Option<&'static str> {
     Some(match mime {
@@ -67,6 +70,21 @@ fn ext_for_mime(mime: &str) -> Option<&'static str> {
         "video/webm" => "webm",
         _ => return None,
     })
+}
+
+/// The type to save as: the event's declared mimetype when it names one, the
+/// sniffed download type otherwise.
+///
+/// The sniffer knows only gif/webp/png/jpeg by magic bytes and calls *any* ISO
+/// base-media file `video/mp4` — which is what a HEIC or AVIF photo is. Saving
+/// on that would file an iPhone photo as a video: rejected by Photos, filed
+/// under Movies on Android, renamed `.mp4` by the file picker. The sender's
+/// declaration is right far more often than that.
+pub fn effective_mime<'a>(declared: Option<&'a str>, sniffed: &'a str) -> &'a str {
+    match declared.map(str::trim) {
+        Some(d) if d.contains('/') && d != "application/octet-stream" => d,
+        _ => sniffed,
+    }
 }
 
 /// The name the saved file is offered under.
@@ -90,16 +108,29 @@ pub fn export_filename(suggested: Option<&str>, mime: &str) -> String {
         .trim_start_matches('.')
         .to_string();
     if name.is_empty() {
-        name = if mime.starts_with("video/") { "video" } else { "image" }.to_string();
+        name = if mime.starts_with("video/") {
+            "video"
+        } else if mime.starts_with("image/") {
+            "image"
+        } else {
+            "file"
+        }
+        .to_string();
     }
     // Long enough for any real filename, short enough for every filesystem.
-    if name.chars().count() > 120 {
+    // Counted in bytes: the 255 limit is on the encoded name, and 86 CJK
+    // characters already exceed it.
+    if name.len() > MAX_NAME_BYTES {
         let ext = Path::new(&name)
             .extension()
             .and_then(|e| e.to_str())
             .filter(|e| e.len() <= 8)
             .map(str::to_string);
-        name = name.chars().take(100).collect::<String>().trim_end().to_string();
+        let mut cut = MAX_NAME_BYTES - 16;
+        while !name.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        name = name[..cut].trim_end().to_string();
         if let Some(ext) = ext {
             if !name.ends_with(&format!(".{ext}")) {
                 name = format!("{name}.{ext}");
@@ -387,8 +418,40 @@ mod tests {
     fn shortens_an_absurd_name_but_keeps_its_extension() {
         let long = format!("{}.png", "a".repeat(300));
         let name = export_filename(Some(&long), "image/png");
-        assert!(name.chars().count() <= 120, "{name}");
+        assert!(name.len() <= MAX_NAME_BYTES, "{name}");
         assert!(name.ends_with(".png"), "{name}");
+    }
+
+    /// 100 CJK characters is 300 bytes — past every filesystem's limit even
+    /// though the character count looks modest.
+    #[test]
+    fn shortens_by_bytes_not_characters_and_never_splits_one() {
+        let long = format!("{}.jpg", "猫".repeat(100));
+        let name = export_filename(Some(&long), "image/jpeg");
+        assert!(name.len() <= MAX_NAME_BYTES, "{} bytes", name.len());
+        assert!(name.ends_with(".jpg"), "{name}");
+        assert!(name.starts_with('猫'));
+    }
+
+    #[test]
+    fn a_nameless_file_that_is_not_an_image_is_not_called_one() {
+        assert_eq!(export_filename(None, "application/pdf"), "file");
+    }
+
+    /// A HEIC photo sniffs as video/mp4 (any ISO-BMFF does); saved as that it
+    /// would be refused by Photos and filed under Movies on Android.
+    #[test]
+    fn the_declared_mimetype_beats_the_sniffed_one() {
+        assert_eq!(effective_mime(Some("image/heic"), "video/mp4"), "image/heic");
+        assert_eq!(effective_mime(Some("image/bmp"), "application/octet-stream"), "image/bmp");
+    }
+
+    #[test]
+    fn a_missing_or_useless_declaration_falls_back_to_the_sniff() {
+        assert_eq!(effective_mime(None, "image/png"), "image/png");
+        assert_eq!(effective_mime(Some(""), "image/png"), "image/png");
+        assert_eq!(effective_mime(Some("application/octet-stream"), "image/png"), "image/png");
+        assert_eq!(effective_mime(Some("garbage"), "image/png"), "image/png");
     }
 
     #[test]

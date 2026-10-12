@@ -24,6 +24,11 @@ export interface SavableMedia {
   filename?: string;
   /** JSON-serialised EncryptedFile for E2EE media. */
   encryptionInfo?: string;
+  /**
+   * The event's declared `info.mimetype`. The backend prefers it over its byte
+   * sniff, which calls a HEIC photo `video/mp4` and would file it as a video.
+   */
+  mimeType?: string;
 }
 
 /** The destinations this platform offers, in the order to show them. */
@@ -65,6 +70,7 @@ export function savableMediaForEvent(evt: TimelineEvent | undefined): SavableMed
     mxcUrl,
     filename: evt.filename ?? evt.body ?? undefined,
     encryptionInfo: evt.media_encryption_info ?? undefined,
+    mimeType: evt.media_mimetype ?? undefined,
   };
 }
 
@@ -100,12 +106,15 @@ export function savedMessage(target: SaveTarget, where: string): string {
  * of what #125 reported.
  */
 export async function saveMedia(media: SavableMedia, target: SaveTarget): Promise<void> {
-  const dismissProgress = showToast("Saving…", "info", 60_000);
+  // Grouped, so it is ambient: a message toast arriving while the user sits in
+  // the save dialog replaces it rather than being thrown away behind it.
+  const dismissProgress = showToast("Saving…", "info", 60_000, { group: "save-progress" });
   try {
+    const { mxcUrl, filename, encryptionInfo, mimeType } = media;
     const where =
       target === "photos"
-        ? await saveMediaToPhotos(media.mxcUrl, media.filename, media.encryptionInfo)
-        : await saveMediaWithDialog(media.mxcUrl, media.filename, media.encryptionInfo);
+        ? await saveMediaToPhotos(mxcUrl, filename, encryptionInfo, mimeType)
+        : await saveMediaWithDialog(mxcUrl, filename, encryptionInfo, mimeType);
     if (where === null) {
       dismissProgress(); // cancelled in the dialog
       return;

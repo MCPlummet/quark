@@ -36,8 +36,9 @@ class MediaSavePlugin(private val activity: Activity) : Plugin(activity) {
     const val ALBUM = "Quark"
   }
 
-  /** The staged file a create-document picker is open for. */
+  /** The staged file a create-document picker is open for, and who asked. */
   private var pendingSource: File? = null
+  private var pendingInvoke: Invoke? = null
 
   private fun args(invoke: Invoke): Triple<File, String, String>? {
     val args = invoke.getArgs()
@@ -115,20 +116,25 @@ class MediaSavePlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun saveToFile(invoke: Invoke) {
     val (source, mime, name) = args(invoke) ?: return
-    if (pendingSource != null) {
-      invoke.reject("A save is already in progress")
-      return
-    }
+    // A picker whose answer never came back — the Activity was recreated while
+    // it was open, and Tauri's result launcher went with the old one. Refusing
+    // here would disable saving until the process died; instead release the
+    // stranded request (Rust is still awaiting it, and holding its staged file)
+    // and start over. The UI allows one save at a time, so a pending request
+    // reaching this point is stranded rather than concurrent.
+    pendingInvoke?.resolve(JSObject().apply { put("saved", false) })
     val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
       addCategory(Intent.CATEGORY_OPENABLE)
       type = mime
       putExtra(Intent.EXTRA_TITLE, name)
     }
     pendingSource = source
+    pendingInvoke = invoke
     try {
       startActivityForResult(invoke, intent, "onDocumentCreated")
     } catch (e: Throwable) {
       pendingSource = null
+      pendingInvoke = null
       Log.e(TAG, "Could not open the file picker", e)
       invoke.reject("Couldn't open the file picker")
     }
@@ -138,6 +144,7 @@ class MediaSavePlugin(private val activity: Activity) : Plugin(activity) {
   fun onDocumentCreated(invoke: Invoke, result: ActivityResult) {
     val source = pendingSource
     pendingSource = null
+    pendingInvoke = null
     val uri = result.data?.data
     if (result.resultCode != Activity.RESULT_OK || uri == null || source == null) {
       invoke.resolve(JSObject().apply { put("saved", false) })

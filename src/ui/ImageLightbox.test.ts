@@ -80,4 +80,32 @@ describe("ImageLightbox saving (#125)", () => {
     expect(click).toHaveBeenCalled();
     click.mockRestore();
   });
+
+  it("offers no save button on mobile for an image with no original to fetch", () => {
+    lightbox.setSaveTargets(["photos", "files"]);
+    lightbox.show("data:image/png;base64,AAAA", "cat");
+    expect(lightbox.getElement().querySelector<HTMLElement>(".image-lightbox__save")!.style.display).toBe("none");
+    lightbox.show("blob:x", "cat", media);
+    expect(lightbox.getElement().querySelector<HTMLElement>(".image-lightbox__save")!.style.display).toBe("");
+  });
+
+  // A native dialog that never appears never answers; the next image opened
+  // must not inherit a viewer stuck on "saving…".
+  it("recovers from a save that never finishes once another image is opened", () => {
+    const handler = vi.fn(() => new Promise<void>(() => {}));
+    lightbox.setSaveHandler(handler);
+    lightbox.setSaveTargets(["photos", "files"]);
+    lightbox.show("blob:x", "cat", media);
+    saveButtons()[0].click();
+    lightbox.hide();
+
+    lightbox.show("blob:y", "dog", media);
+
+    expect(saveButtons().map((b) => [b.textContent, b.disabled])).toEqual([
+      ["⬇ photos", false],
+      ["⬇ files", false],
+    ]);
+    saveButtons()[1].click();
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
 });

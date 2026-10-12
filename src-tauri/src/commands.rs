@@ -1156,6 +1156,7 @@ pub async fn save_media_with_dialog(
     mxc_url: String,
     encryption_info: Option<String>,
     suggested_filename: Option<String>,
+    mime_type: Option<String>,
 ) -> Result<Option<String>, String> {
     let client = get_client(&state)?;
 
@@ -1171,12 +1172,16 @@ pub async fn save_media_with_dialog(
     .await?;
 
     let bytes = crate::matrix::media::decode_base64(&dl.data_base64)?;
-    save_bytes_via_dialog(&app_handle, bytes, suggested_filename.as_deref(), &dl.mime_type).await
+    let mime = crate::media_save::effective_mime(mime_type.as_deref(), &dl.mime_type);
+    save_bytes_via_dialog(&app_handle, bytes, suggested_filename.as_deref(), mime).await
 }
 
 /// Download media from the homeserver and add it to the device's photo library
 /// (Android `MediaStore` under Pictures/Quark, iOS Photos). Mobile only — the
 /// frontend offers it nowhere else, and desktop answers with an error.
+///
+/// `mime_type` is the event's declared `info.mimetype`, preferred over the
+/// sniffed type — see [`crate::media_save::effective_mime`].
 ///
 /// Returns where it went, for the confirmation toast; the user can't cancel
 /// this one, but iOS can refuse it (Photos access denied), which is an error.
@@ -1188,6 +1193,7 @@ pub async fn save_media_to_photos(
     mxc_url: String,
     encryption_info: Option<String>,
     suggested_filename: Option<String>,
+    mime_type: Option<String>,
 ) -> Result<Option<String>, String> {
     let client = get_client(&state)?;
 
@@ -1203,12 +1209,13 @@ pub async fn save_media_to_photos(
     .await?;
 
     let bytes = crate::matrix::media::decode_base64(&dl.data_base64)?;
-    let name = crate::media_save::export_filename(suggested_filename.as_deref(), &dl.mime_type);
+    let mime = crate::media_save::effective_mime(mime_type.as_deref(), &dl.mime_type);
+    let name = crate::media_save::export_filename(suggested_filename.as_deref(), mime);
     let staged = crate::media_save::stage(&bytes, &name)?;
     crate::media_save::save_staged(
         &app_handle,
         &staged,
-        &dl.mime_type,
+        mime,
         crate::media_save::SaveTarget::Photos,
     )
     .await

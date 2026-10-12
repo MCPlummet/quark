@@ -19,12 +19,17 @@ export interface ToastOptions {
    * queueing. An ambient toast never displaces a status toast (an error, a
    * "saved"): those answer something the user just did, while a message
    * notification is already carried by the room list's unread badge.
+   *
+   * Among status toasts, an `info` never displaces a visible `error` either:
+   * an incidental notice ("Checking for updates…") must not wipe a failure the
+   * user has not had time to read. Errors and successes replace anything.
    */
   group?: string;
 }
 
 interface ToastEntry {
   el: HTMLElement;
+  type: ToastType;
   timerId: ReturnType<typeof setTimeout>;
   group?: string;
   /** How many toasts this one stands for (grouped toasts only). */
@@ -71,6 +76,7 @@ function _placeAboveCompose(): void {
   for (const wrap of document.querySelectorAll<HTMLElement>(".input-bar-wrap")) {
     const rect = wrap.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) continue; // hidden
+    if (_isCovered(wrap, rect)) continue;
     top = Math.min(top, rect.top);
   }
   if (!Number.isFinite(top)) {
@@ -83,6 +89,18 @@ function _placeAboveCompose(): void {
   const layoutHeight = document.documentElement.clientHeight || window.innerHeight;
   const bottom = Math.max(0, layoutHeight - (top - viewportPan())) + 8;
   _container.style.setProperty("--toast-bottom", `${bottom}px`);
+}
+
+/**
+ * Whether something else is drawn over the compose bar — the mobile room-list
+ * drawer slides over a room whose compose bar keeps its full rect. Parking above
+ * a bar the user cannot see would float the toast mid-drawer for no reason.
+ */
+function _isCovered(wrap: HTMLElement, rect: DOMRect): boolean {
+  if (typeof document.elementFromPoint !== "function") return false;
+  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  // The toast container itself lets pointer events through, so it is never the hit.
+  return hit !== null && !wrap.contains(hit);
 }
 
 // ── Core dismiss logic ────────────────────────────────────────────────────────
@@ -141,6 +159,8 @@ export function showToast(
       count = _current.count + 1;
     } else if (group !== undefined && _current.group === undefined) {
       return () => {}; // ambient toasts never displace a status toast
+    } else if (type === "info" && _current.group === undefined && _current.type === "error") {
+      return () => {}; // nor does a passing notice displace an unread error
     }
     _replaceCurrent();
   }
@@ -184,7 +204,7 @@ export function showToast(
   container.appendChild(el);
 
   const timerId = setTimeout(() => _dismiss(entry), duration);
-  const entry: ToastEntry = { el, timerId, group, count };
+  const entry: ToastEntry = { el, type, timerId, group, count };
   _current = entry;
 
   // Allow click anywhere on the toast to dismiss it early

@@ -527,10 +527,10 @@ export function setupMessageActionHandlers(): void {
   });
 
   document.addEventListener("quark:open-file" as keyof DocumentEventMap, (e: Event) => {
-    const { mxcUrl, filename, encryptionInfo } =
-      (e as CustomEvent<{ mxcUrl?: string; filename?: string; encryptionInfo?: string }>).detail;
+    const { mxcUrl, filename, mimeType, encryptionInfo } =
+      (e as CustomEvent<{ mxcUrl?: string; filename?: string; mimeType?: string; encryptionInfo?: string }>).detail;
     if (!mxcUrl) return;
-    void saveMedia({ mxcUrl, filename, encryptionInfo }, "files");
+    void saveMedia({ mxcUrl, filename, mimeType, encryptionInfo }, "files");
   });
 
   document.addEventListener("quark:open-video" as keyof DocumentEventMap, (e: Event) => {

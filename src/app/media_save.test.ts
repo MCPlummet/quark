@@ -65,7 +65,12 @@ describe("savableMediaForEvent", () => {
   it("reads the mxc:// address, name and key from the raw event", () => {
     expect(
       savableMediaForEvent(event({ filename: "original.png", body: "a caption", media_encryption_info: "{}" })),
-    ).toEqual({ mxcUrl: "mxc://example.com/abc", filename: "original.png", encryptionInfo: "{}" });
+    ).toEqual({
+      mxcUrl: "mxc://example.com/abc",
+      filename: "original.png",
+      encryptionInfo: "{}",
+      mimeType: "image/png",
+    });
   });
 
   it("falls back to the body for an uncaptioned upload with no filename", () => {
@@ -94,8 +99,9 @@ describe("saveMenuHandlers (#124)", () => {
   });
 
   it("saves the image to the chosen destination", () => {
-    saveMenuHandlers(event())["save-image-photos"]!();
-    expect(saveMediaToPhotos).toHaveBeenCalledWith("mxc://example.com/abc", "cat.png", undefined);
+    saveMenuHandlers(event({ media_mimetype: "image/heic" }))["save-image-photos"]!();
+    // The declared type travels with it: the backend's sniff would call HEIC a video.
+    expect(saveMediaToPhotos).toHaveBeenCalledWith("mxc://example.com/abc", "cat.png", undefined, "image/heic");
   });
 });
 
@@ -120,13 +126,13 @@ describe("saveMedia", () => {
 
   it("saves to Photos through its own command and confirms where", async () => {
     await saveMedia(media, "photos");
-    expect(saveMediaToPhotos).toHaveBeenCalledWith("mxc://example.com/abc", "cat.png", undefined);
+    expect(saveMediaToPhotos).toHaveBeenCalledWith("mxc://example.com/abc", "cat.png", undefined, undefined);
     expect(showSuccess).toHaveBeenCalledWith("Saved to Pictures/Quark");
   });
 
   it("saves to Files through the dialog command", async () => {
     await saveMedia(media, "files");
-    expect(saveMediaWithDialog).toHaveBeenCalledWith("mxc://example.com/abc", "cat.png", undefined);
+    expect(saveMediaWithDialog).toHaveBeenCalledWith("mxc://example.com/abc", "cat.png", undefined, undefined);
     expect(showSuccess).toHaveBeenCalledWith("Saved cat.png");
   });
 

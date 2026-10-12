@@ -329,6 +329,8 @@ static void quark_save_to_photos(NSURL *url, NSString *mime, uint64_t request) {
 @interface QuarkExportDelegate : NSObject <UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate>
 @property(nonatomic) uint64_t request;
 @property(nonatomic) BOOL answered;
+/// Answer the request once; later calls are no-ops.
+- (void)finishWithStatus:(int32_t)status detail:(NSString *)detail;
 @end
 
 static NSMutableSet<QuarkExportDelegate *> *quark_live_exports;
@@ -364,6 +366,14 @@ static void quark_export_to_files(NSURL *url, uint64_t request) {
         ffi::quark_media_save_finished(request, QUARK_SAVE_FAILED, "Nothing to show the save dialog on");
         return;
     }
+    // UIKit ignores a presentation over a controller that is itself mid-
+    // transition — logs a warning and calls nothing, so no delegate method would
+    // ever answer and the save would hang. Refuse it out loud instead.
+    if (top.isBeingPresented || top.isBeingDismissed) {
+        ffi::quark_media_save_finished(request, QUARK_SAVE_FAILED,
+                                       "The save dialog couldn't open just now. Try again.");
+        return;
+    }
     if (quark_live_exports == nil) {
         quark_live_exports = [NSMutableSet set];
     }
@@ -376,6 +386,16 @@ static void quark_export_to_files(NSURL *url, uint64_t request) {
     picker.delegate = delegate;
     picker.presentationController.delegate = delegate;
     [top presentViewController:picker animated:YES completion:nil];
+
+    // The backstop for any other way the presentation can be dropped: if the
+    // picker never made it on screen, nothing will ever answer for it.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (picker.presentingViewController == nil) {
+            [delegate finishWithStatus:QUARK_SAVE_FAILED
+                                detail:@"The save dialog couldn't open. Try again."];
+        }
+    });
 }
 
 // Called from Rust on a runtime thread. Copies both strings before returning,

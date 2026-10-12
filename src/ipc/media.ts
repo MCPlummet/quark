@@ -267,11 +267,13 @@ export async function saveMediaWithDialog(
   mxcUrl: string,
   suggestedFilename?: string,
   encryptionInfo?: string | null,
+  mimeType?: string | null,
 ): Promise<string | null> {
   return invoke<string | null>("save_media_with_dialog", {
     mxcUrl,
     suggestedFilename: suggestedFilename ?? null,
     encryptionInfo: encryptionInfo ?? null,
+    mimeType: mimeType ?? null,
   });
 }
 
@@ -280,16 +282,21 @@ export async function saveMediaWithDialog(
  * (Pictures/Quark on Android, Photos on iOS). Mobile only — desktop has no
  * library to add to and the backend rejects it there. Returns a short
  * description of where it went.
+ *
+ * `mimeType` is the event's declared type, which the backend prefers over its
+ * byte sniff — that calls a HEIC photo `video/mp4`.
  */
 export async function saveMediaToPhotos(
   mxcUrl: string,
   suggestedFilename?: string,
   encryptionInfo?: string | null,
+  mimeType?: string | null,
 ): Promise<string | null> {
   return invoke<string | null>("save_media_to_photos", {
     mxcUrl,
     suggestedFilename: suggestedFilename ?? null,
     encryptionInfo: encryptionInfo ?? null,
+    mimeType: mimeType ?? null,
   });
 }
 
