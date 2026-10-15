@@ -76,7 +76,7 @@ export {
 // ─── Media ────────────────────────────────────────────────────────────────────
 export type { MessageTarget } from "./types.js";
 export type { AttachmentSend } from "./media.js";
-export { downloadMedia, getThumbnail, uploadMedia, sendPastedImage, sendFile, sendVideo, readDroppedFile, readClipboardFiles, saveMediaToTemp, serveMedia, saveMediaWithDialog, getPlatform, openMediaExternally, getCacheStats, clearMediaCache, setCacheSizeLimit, getEventCacheSize, clearEventCache, getUrlPreview } from "./media.js";
+export { downloadMedia, getThumbnail, uploadMedia, sendPastedImage, sendFile, sendVideo, readDroppedFile, readClipboardFiles, saveMediaToTemp, serveMedia, saveMediaWithDialog, saveMediaToPhotos, getPlatform, openMediaExternally, getCacheStats, clearMediaCache, setCacheSizeLimit, getEventCacheSize, clearEventCache, getUrlPreview } from "./media.js";
 export type { CacheStats, UrlPreview } from "./media.js";
 
 // ─── Notifications ────────────────────────────────────────────────────────────
@@ -89,9 +89,6 @@ export {
   initNotificationChannels,
   clearRoomNotificationsIpc,
   takePendingNotificationAction,
-  setBackgroundSync,
-  getBackgroundSyncState,
-  requestBatteryExemption,
   getPushStatus,
   setPushEnabled,
   selectPushDistributor,
@@ -102,7 +99,6 @@ export type {
   NotificationConfig,
   PushStatus,
   PlatformTransport,
-  BackgroundSyncState,
   PendingNotificationAction,
 } from "./notifications.js";
 

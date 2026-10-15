@@ -70,16 +70,22 @@ A single-page app styled as a terminal interface. No framework required initiall
 
 ### Mobile lifecycle
 
-iOS reclaims memory by killing the WKWebView's *content* process while an app is backgrounded. The app process itself survives, so the app resumes to a live window wrapping a dead page — a blank screen that nothing but a force-quit clears (#39). Tauri ≥ 2.11 implements WebKit's `webViewWebContentProcessDidTerminate:` callback and reloads the webview in response, which is why `src-tauri/Cargo.toml` floors `tauri` at `2.11` rather than `2`; dropping back to a 2.10.x lock reintroduces the blank screen.
+iOS reclaims memory by killing the WKWebView's *content* process while an app is backgrounded. The app process itself survives, so the app resumes to a live window wrapping a dead page — a blank screen that nothing but a force-quit clears (#39). Tauri ≥ 2.11 implements WebKit's `webViewWebContentProcessDidTerminate:` callback and reloads the webview in response; dropping back to a 2.10.x lock reintroduces the blank screen.
+
+**The app must be on the UIScene lifecycle.** An app linked against the iOS 27 SDK that hasn't adopted scenes is killed by UIKit at launch — `EXC_BREAKPOINT` in `_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption`, raised while the first scene is created, before any Rust or JS runs. The check keys on the SDK the app was *built* with, so a build from Xcode 26 still launches on iOS 27 and the same source built with Xcode 27 does not. Quark adopts scenes through tao, not through its own Info.plist: tao ≥ 0.37 (first pulled in by Tauri 2.12) always implements `application:configurationForConnectingSceneSession:options:` on its app delegate and attaches the window to whichever scene connects. On tao 0.35 the delegate only did so when the Info.plist enabled multiple scenes, which ours never has. Both requirements are why `src-tauri/Cargo.toml` floors `tauri` at `2.12` rather than `2`.
 
 Recovery is a full page reload, so it costs the user their scroll position and any unsent draft. The reloaded page re-runs the normal startup path — `restore_session` reads the session back out of the keyring and lands on the room list — and because `start_sync` aborts any running loop before spawning one, a reload can never leave two sync loops polling the homeserver.
 
 ### Push notifications
 
 Desktop holds a live sync connection, so it never needs push. Mobile does: iOS
-suspends a backgrounded app outright, and on Android the alternative is
-`SyncForegroundService` holding the connection open — which costs battery, shows
-a permanent shade entry, and loses to Doze and OEM task-killers. Push inverts
+suspends a backgrounded app outright, and on Android the alternative — a
+foreground service holding the connection open — costs battery, shows a
+permanent shade entry, and loses to Doze and OEM task-killers. Quark shipped
+that service as an opt-in "Background sync" until push covered Android, then
+removed it (#122): push is the only way a closed app hears about a message on
+either mobile platform. A `background_sync` key left in an older
+`notifications.toml` is ignored on load. Push inverts
 that: the homeserver POSTs to a **push gateway**, the gateway wakes the device
 through the platform transport, and the device runs a bounded sync.
 
@@ -144,7 +150,7 @@ room's user-defined rules outright so the account default applies.
 
 Because these each have an effect outside the config file, **`set_notification_config`
 only accepts the fields Settings owns** (`NotificationConfig::with_preferences`):
-enabled, preview, sender. Mutes, background sync and push have
+enabled, preview, sender. Mutes and push have
 dedicated commands, and the Settings dialog builds its draft from a config it
 cached when it opened — so treating that draft as authoritative would let [save]
 silently undo a mute or a push opt-out taken while the dialog was open.
@@ -186,11 +192,11 @@ the handing over.
 `enabled` and the OS permission together, on login and on every settings save,
 and the Settings toggle there reports rather than sets — a flip would be undone
 by the next save. iOS has no other way to hear about a message while the app is
-closed: no background-sync service, no connection left open. A separate opt-in
+closed: no connection survives backgrounding. A separate opt-in
 could therefore only produce the state where notifications are on and nothing
-ever arrives. Android keeps its own switch, because background sync is a real
-alternative there and choosing a distributor is choosing who carries this
-device's traffic. The permission is part of the condition for the same reason
+ever arrives. Android keeps its own switch, because push there needs a
+third-party UnifiedPush distributor and choosing one is choosing who carries
+this device's traffic. The permission is part of the condition for the same reason
 registration is gated at all: a pusher for a device that cannot display
 anything hands the gateway an address for nothing.
 
@@ -201,8 +207,8 @@ five (`off`, `muted_account`, `no_transport`, `waiting`, `ready`) and Settings
 reports them separately, because collapsing any two produces the failure push
 can least afford: telling someone it works while nothing delivers it.
 `no_transport` earns its own state on Android as both the likeliest cause and
-the only one the user can fix — the foreground service remains the fallback
-there.
+the only one the user can fix — without a distributor a closed Android app
+hears about nothing.
 
 The push section shows a one-line status for the current state and, beneath
 it, a hint only when there is something for the user to do (install a
@@ -306,7 +312,7 @@ application context and the `PushNotifier` class once (`nativeInstall`) —
 the class resolved on a Java thread, since `FindClass` from a native thread
 sees only the system class loader. The plugin could not stay, for two
 reasons. Every plugin call dispatches onto the Activity, and wry `expect`s
-one: a process that outlived its Activity (kept by a foreground service, or
+one: a process that outlived its Activity (kept by the push service, or
 just not yet reclaimed) panicked on its first notification, inside the sync
 loop that raised it. And its tap intents use `FLAG_CANCEL_CURRENT`, which
 kills the old PendingIntent before the replacement row is posted — the room
@@ -638,6 +644,8 @@ use one.
 Adding chrome inside one of those containers needs no new `touch-action` rule. Adding a *new* compose surface does need its own guard. The guard is attached only while mobile mode is on, so desktop never pays for a blocking touch path, and it stands down while the page is pinch-zoomed, where panning is how the user reaches the rest of the shell.
 
 **Overlays follow the pan.** The shell compensates for the pan with a transform on `#app` (`--viewport-pan`, published by `mobile.ts`). Overlays mount on `<body>` so nothing can clip them, which puts them outside that element — so they mount through `mountOverlay` (`src/ui/overlay.ts`), which tags them with `.quark-overlay` and earns them the same offset. Without it the two shear apart as the pan grows: toasts land off-screen and the emoji picker floats away from the compose bar it is anchored to. The offset uses the individual `translate` property, not `transform`, so it composes with the `translate(-50%, -50%)` that dialogs centre themselves with. The shell and the overlay layer therefore share a coordinate space that client rects do not: an overlay placed off an anchor's `getBoundingClientRect()` must subtract `viewportPan()`, or it lands a pan below its anchor.
+
+**Toasts are one at a time and sit above the compose bar** (#126). A stack of them used to cover the compose field on mobile and, given a burst of messages, the whole window. `showToast` (`src/ui/NotificationToast.ts`) now replaces whatever toast is showing. Incoming-message toasts pass `{ group: "message" }`: they replace one another in place with a running "(+N more)" count, and never displace a status toast (an error, a "saved") — those answer something the user just did, while a message is already carried by the room list's unread badge. Among status toasts, an `info` never displaces a visible error, so a passing notice cannot wipe a failure before it is read. `showToast` returns a dismiss for that toast alone (the save flow uses it to clear its "Saving…" on cancel). The container is parked just above the highest visible `.input-bar-wrap` not drawn over by something else (the mobile drawer) via `--toast-bottom` (recomputed on show and on window/visual-viewport resize, pan subtracted as above); with no compose bar on screen it falls back to the bottom-right inset.
 
 **Pinch-zoom is off, but the layout is still zoom-aware.** The viewport meta (`user-scalable=no`, `maximum-scale=1`) disables page zoom — on iOS the meta is the only mechanism, since WebKit does not let `touch-action` suppress its page-level pinch; a body-level `touch-action: pan-x pan-y` covers engines that do honor it. Zoom can still happen regardless: Android's "force enable zoom" accessibility setting overrides the meta, and a ≤768px desktop window can be trackpad-pinched. A pinch shrinks the visual viewport to roughly `layoutHeight / scale`, which from a height difference alone is indistinguishable from an open keyboard — so `viewportMetrics` takes `visualViewport.scale` and claims neither a keyboard inset nor a pan while zoomed, and the compose guards stand down there too. `ImageLightbox` implements its own pinch-to-zoom for images in JS; the meta does not affect it.
 
@@ -994,7 +1002,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 | **Media** | Image auto-load, max dimensions, cache-size limit |
 | **GIF** | Provider (Klipy / Giphy), API key, content rating |
 | **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
-| **Notifications** | Enable / preview / sender toggles, push and background-sync controls, test notification |
+| **Notifications** | Enable / preview / sender toggles, push controls, test notification |
 | **Themes** | Theme picker and hot-reload path |
 | **About** | App version, Quark on GitHub link, Updates section (desktop only — see below) |
 
@@ -1346,6 +1354,31 @@ alongside `openExternalUrl` opened every link twice.
 - Image uploads with thumbnail generation
 - Blurhash placeholders during loading
 - Media cache on disk with configurable size limit
+- **Saving media (#124, #125).** The image viewer's toolbar and the message
+  menu (right-click / long-press on an image) save the *original* — fetched
+  again by its `mxc://` from the raw event (`savableMediaForEvent`), since the
+  rendered image is a blob URL — never the displayed copy. Two destinations:
+  **Files** is the system save dialog everywhere (`rfd` on desktop, the Storage
+  Access Framework create-document picker on Android, the Files export sheet —
+  `UIDocumentPickerViewController` with `asCopy` — on iOS); **Photos** exists
+  only on iOS and Android (`MediaStore` under `Pictures/Quark`, needing no
+  permission but Android 10+; `PHPhotoLibrary` with add-only access on iOS,
+  keeping the file byte-for-byte so a GIF stays animated). Desktop shows one
+  "save" button, mobile shows "photos" and "files"; `s` in the viewer saves
+  through the dialog. File attachments' save affordance uses the same path, so
+  it now works on mobile too. A "Saving…" toast covers the download and is
+  replaced by the outcome; a cancelled dialog is silent. The backend stages the
+  file under its sanitised name (`media_save::export_filename` — the name is the
+  sender's, so no directories, `..` or leading dots) in a private temp
+  directory that is removed once the native side answers. The type saved as is
+  the event's declared `info.mimetype` where it names one
+  (`media_save::effective_mime`): the byte sniffer calls any ISO-BMFF file
+  `video/mp4`, so a HEIC photo would otherwise be filed as a video. Every native
+  save must answer exactly once — a stranded Android picker is released by the
+  next save, iOS fails a presentation that UIKit dropped, and the viewer resets
+  its buttons whenever it opens another image. On iOS the UIKit and
+  Photos work lives in `main.mm`, reached through a function pointer and
+  answered through `quark_media_save_finished`, like the other Rust↔ObjC calls.
 
 ### Not in Scope (v1)
 - VoIP / MatrixRTC (group calls) — fundamentally incompatible with CLI aesthetic

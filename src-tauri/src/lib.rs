@@ -7,8 +7,8 @@ pub mod gif;
 pub mod local_files;
 pub mod matrix;
 pub mod media_cache;
+pub mod media_save;
 pub mod media_server;
-pub mod mobile_sync;
 pub mod net_guard;
 pub mod notifications;
 pub mod notify;
@@ -123,11 +123,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init());
 
-    // Android: register the app-local Kotlin plugins driving the background-
-    // sync foreground service (mobile_sync.rs) and UnifiedPush distributor
-    // selection (unifiedpush.rs).
+    // Android: register the app-local Kotlin plugins driving UnifiedPush
+    // distributor selection (unifiedpush.rs) and saving media to the gallery or
+    // through the system file picker (media_save.rs).
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(mobile_sync::init()).plugin(unifiedpush::init());
+    let builder = builder.plugin(unifiedpush::init()).plugin(media_save::init());
 
     // Desktop auto-updater (AppImage / macOS .app / Windows NSIS). Endpoints are
     // set per-channel at runtime in updater.rs; the config endpoint is a fallback.
@@ -219,6 +219,7 @@ pub fn run() {
             commands::save_media_to_temp,
             commands::serve_media,
             commands::save_media_with_dialog,
+            commands::save_media_to_photos,
             commands::get_platform,
             commands::open_media_externally,
             commands::upload_media,
@@ -295,14 +296,11 @@ pub fn run() {
             commands::init_notification_channels,
             commands::clear_room_notifications,
             commands::take_pending_notification_action,
-            commands::set_background_sync,
-            commands::get_background_sync_state,
             commands::get_push_status,
             commands::get_account_mute,
             commands::set_account_mute,
             commands::set_push_enabled,
             commands::select_push_distributor,
-            commands::request_battery_exemption,
             // Shell
             commands::open_external_url,
         ])

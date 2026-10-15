@@ -8,7 +8,6 @@ vi.mock("../ipc/notifications.js", () => ({
   muteRoomIpc: vi.fn(),
   unmuteRoomIpc: vi.fn(),
   initNotificationChannels: vi.fn(async () => undefined),
-  setBackgroundSync: vi.fn(async () => undefined),
   setPushEnabled: vi.fn(async () => undefined),
 }));
 vi.mock("../ipc/index.js", () => ({ getPlatform: vi.fn(async () => "linux") }));
@@ -83,7 +82,6 @@ describe("muteRoom mirrors what the backend writes to mute_rooms", () => {
       show_body: true,
       show_sender: true,
       mute_rooms: [],
-      background_sync: false,
       push_enabled: false,
       push_gateway_override: null,
     });

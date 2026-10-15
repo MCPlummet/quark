@@ -5,6 +5,7 @@ import { keymapManager, eventChord } from "../vim/keybindings.js";
 import { registerDefaultBindings } from "./registry.js";
 import { currentAvailability } from "./availability.js";
 import { buildMenu } from "./context_menus.js";
+import { initSaveTargets, savableMediaForEvent, saveMedia, saveMenuHandlers, type SavableMedia } from "./media_save.js";
 import { ComposeNormalEditor } from "../vim/compose_normal.js";
 import { modalManager } from "../ui/ModalManager.js";
 import type { AppComponents } from "../ui/App.js";
@@ -241,7 +242,7 @@ export function dispatchAction(action: string, components: AppComponents): void 
       // If in the timeline and the selected message is an image, open the lightbox
       const sel = timeline.selectedMessage;
       if (sel?.type === "image" && sel.mediaUrl && AppState.get("activePanel") === "timeline") {
-        imageLightbox.show(sel.mediaUrl, sel.mediaAlt ?? sel.body);
+        imageLightbox.show(sel.mediaUrl, sel.mediaAlt ?? sel.body, savableMediaForMessage(sel.id));
       } else {
         AppState.select();
       }
@@ -253,7 +254,7 @@ export function dispatchAction(action: string, components: AppComponents): void 
       // (and other media) have no text to select — fall back to the lightbox.
       const sel = timeline.selectedMessage;
       if (sel?.type === "image" && sel.mediaUrl) {
-        imageLightbox.show(sel.mediaUrl, sel.mediaAlt ?? sel.body);
+        imageLightbox.show(sel.mediaUrl, sel.mediaAlt ?? sel.body, savableMediaForMessage(sel.id));
         break;
       }
       const bodyEl = timeline.getSelectedMessageBodyElement();
@@ -1025,10 +1026,14 @@ export function setupKeyboard(components: AppComponents): void {
   // "Jump to latest" button
   timeline.onJumpToLatest(() => void jumpToLatest());
 
-  // Image lightbox — wire timeline image clicks
-  timeline.onImageClick((src, alt) => {
-    imageLightbox.show(src, alt);
+  // Image lightbox — wire timeline image clicks, and saving from it. The
+  // destinations depend on the platform (Photos exists only on mobile), so the
+  // buttons are filled in once the backend has said which one this is.
+  timeline.onImageClick((src, alt, eventId) => {
+    imageLightbox.show(src, alt, eventId ? savableMediaForMessage(eventId) : null);
   });
+  imageLightbox.setSaveHandler(saveMedia);
+  void initSaveTargets().then((targets) => imageLightbox.setSaveTargets(targets));
 
   // Revision history — wire (edited) marker clicks
   timeline.onShowRevisionHistory((eventId, originalBody) => {
@@ -1083,6 +1088,9 @@ export function setupKeyboard(components: AppComponents): void {
           }
         : undefined,
       "view-raw-event": () => void openDebugViewerForEvent(eventId),
+      // Image messages only, and Photos only where there is a photo library —
+      // which is why these are withheld rather than registry requirements.
+      ...saveMenuHandlers(evt),
       "edit": () => {
         // Prefer the MessageData body (reflects applied edits) over the raw
         // timeline event.
@@ -1551,4 +1559,10 @@ export function setupKeyboard(components: AppComponents): void {
       }
     }
   });
+}
+
+/** The savable original behind a message in the loaded timeline, if any. */
+function savableMediaForMessage(eventId: string): SavableMedia | null {
+  const evt = AppState.get("currentTimeline").find((ev) => ev.event_id === eventId);
+  return savableMediaForEvent(evt);
 }

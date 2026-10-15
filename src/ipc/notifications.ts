@@ -10,8 +10,6 @@ export interface NotificationConfig {
   show_body: boolean;
   show_sender: boolean;
   mute_rooms: string[];
-  /** Keep the sync loop alive in the background (Android foreground service). */
-  background_sync: boolean;
   /** Register a pusher so the homeserver wakes the device (mobile only). */
   push_enabled: boolean;
   /** Override the discovered push gateway URL (self-hosters). */
@@ -76,14 +74,6 @@ export type PushReadiness =
   | "no_transport"
   | "waiting"
   | "ready";
-
-/** Background-sync snapshot — matches mobile_sync::BackgroundSyncState */
-export interface BackgroundSyncState {
-  supported: boolean;
-  enabled: boolean;
-  running: boolean;
-  battery_exempt: boolean;
-}
 
 // ─── IPC Functions ────────────────────────────────────────────────────────────
 
@@ -155,21 +145,6 @@ export async function clearRoomNotificationsIpc(roomId: string): Promise<void> {
  */
 export async function takePendingNotificationAction(): Promise<PendingNotificationAction | null> {
   return invoke<PendingNotificationAction | null>("take_pending_notification_action");
-}
-
-/** Persist the background-sync choice and start/stop the Android service. */
-export async function setBackgroundSync(enabled: boolean): Promise<void> {
-  return invoke<void>("set_background_sync", { enabled });
-}
-
-/** Current background-sync state for the Settings UI. */
-export async function getBackgroundSyncState(): Promise<BackgroundSyncState> {
-  return invoke<BackgroundSyncState>("get_background_sync_state");
-}
-
-/** Surface the Android battery-optimization exemption prompt. */
-export async function requestBatteryExemption(): Promise<void> {
-  return invoke<void>("request_battery_exemption");
 }
 
 /** Current push state for the Settings UI. */

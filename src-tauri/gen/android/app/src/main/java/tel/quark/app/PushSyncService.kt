@@ -1,5 +1,7 @@
 package tel.quark.app
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -16,8 +18,8 @@ import kotlin.concurrent.thread
  * A broadcast receiver gets roughly ten seconds before Android considers it
  * hung, and a cold push has to build a Matrix client, open an encrypted SQLite
  * store and sync — comfortably more than that on a sleeping phone. A
- * `shortService` foreground service buys the time without claiming the
- * long-running exemption [SyncForegroundService] needs.
+ * `shortService` foreground service buys the time without claiming a
+ * long-running exemption.
  *
  * It holds no state and does no work of its own: [PushNative] does the sync and
  * decides what to show, [PushNotifier] shows it, and then this stops itself.
@@ -26,8 +28,30 @@ class PushSyncService : Service() {
   companion object {
     const val EXTRA_PAYLOAD = "payload"
     private const val TAG = "quark"
-    private const val CHANNEL_ID = SyncForegroundService.CHANNEL_ID
+    // Kept at the id the retired background-sync service used, so an upgraded
+    // install reuses the channel (and whatever the user set on it) rather than
+    // gaining a second one beside an orphan.
+    const val CHANNEL_ID = "background_sync" // must match notify.rs CHANNEL_BACKGROUND
     private const val NOTIFICATION_ID = 0x51_4B_50 // "QKP"
+
+    /**
+     * The channel is normally created by the Rust side via the notification
+     * plugin (init_notification_channels), but a foreground service must be
+     * able to post its required notification even when it starts first — which
+     * a push wake does routinely, in a process the webview has never run in.
+     * Idempotent, so calling it after Rust already did costs nothing. The name
+     * and description must match notify.rs, or whichever ran first wins.
+     */
+    fun ensureChannel(context: Context) {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return // channels exist since API 26
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+        manager.createNotificationChannel(
+          NotificationChannel(CHANNEL_ID, "Background activity", NotificationManager.IMPORTANCE_MIN)
+            .apply { description = "Shown briefly while Quark fetches a pushed message" }
+        )
+      }
+    }
 
     /** Start the service for a push payload; false if Android refuses. */
     fun start(context: Context, payload: String): Boolean {
@@ -58,7 +82,7 @@ class PushSyncService : Service() {
     // before any of the slow work.
     var foreground = false
     try {
-      SyncForegroundService.ensureChannel(this)
+      ensureChannel(this)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
         startForeground(
           NOTIFICATION_ID,

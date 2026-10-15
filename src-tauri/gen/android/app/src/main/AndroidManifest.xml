@@ -4,16 +4,10 @@
     <!-- Notifications (runtime-prompted on Android 13+; declared explicitly
          rather than relying on the notification plugin's manifest merge). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Background sync foreground service (Settings → Notifications). -->
+    <!-- Push wake-ups (PushSyncService): a short-lived, typed foreground
+         service, so it carries no long-running exemption's obligations. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <!-- Push wake-ups (PushSyncService). Separate from the special-use grant
-         above: this one is short-lived and typed, so it carries none of the
-         long-running exemption's obligations. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
-    <!-- Lets the app ask the user to exempt it from battery optimization so
-         Doze doesn't strangle the persistent sync connection. -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -46,20 +40,6 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Keeps the Rust sync loop alive while backgrounded, for devices with
-             no UnifiedPush distributor installed. Off by default now that push
-             exists; it is the fallback, not the mechanism. specialUse because
-             dataSync is runtime-capped on Android 15 and nothing else fits a
-             persistent Matrix connection. -->
-        <service
-            android:name=".SyncForegroundService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Persistent Matrix sync connection, used only when the user has no UnifiedPush distributor installed to deliver push notifications" />
-        </service>
 
         <!-- Receives everything the UnifiedPush distributor sends: messages,
              endpoints, revocations. The connector library binds it, so it must

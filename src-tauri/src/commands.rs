@@ -1156,6 +1156,7 @@ pub async fn save_media_with_dialog(
     mxc_url: String,
     encryption_info: Option<String>,
     suggested_filename: Option<String>,
+    mime_type: Option<String>,
 ) -> Result<Option<String>, String> {
     let client = get_client(&state)?;
 
@@ -1171,7 +1172,53 @@ pub async fn save_media_with_dialog(
     .await?;
 
     let bytes = crate::matrix::media::decode_base64(&dl.data_base64)?;
-    save_bytes_via_dialog(&app_handle, bytes, suggested_filename.as_deref()).await
+    let mime = crate::media_save::effective_mime(mime_type.as_deref(), &dl.mime_type);
+    save_bytes_via_dialog(&app_handle, bytes, suggested_filename.as_deref(), mime).await
+}
+
+/// Download media from the homeserver and add it to the device's photo library
+/// (Android `MediaStore` under Pictures/Quark, iOS Photos). Mobile only — the
+/// frontend offers it nowhere else, and desktop answers with an error.
+///
+/// `mime_type` is the event's declared `info.mimetype`, preferred over the
+/// sniffed type — see [`crate::media_save::effective_mime`].
+///
+/// Returns where it went, for the confirmation toast; the user can't cancel
+/// this one, but iOS can refuse it (Photos access denied), which is an error.
+#[tauri::command]
+pub async fn save_media_to_photos(
+    app_handle: AppHandle,
+    state: State<'_, MatrixState>,
+    cache_state: State<'_, CacheState>,
+    mxc_url: String,
+    encryption_info: Option<String>,
+    suggested_filename: Option<String>,
+    mime_type: Option<String>,
+) -> Result<Option<String>, String> {
+    let client = get_client(&state)?;
+
+    let dl = crate::matrix::media::download_media_with_cache(
+        &client,
+        &mxc_url,
+        false,
+        None,
+        None,
+        Some(&cache_state.0),
+        encryption_info.as_deref(),
+    )
+    .await?;
+
+    let bytes = crate::matrix::media::decode_base64(&dl.data_base64)?;
+    let mime = crate::media_save::effective_mime(mime_type.as_deref(), &dl.mime_type);
+    let name = crate::media_save::export_filename(suggested_filename.as_deref(), mime);
+    let staged = crate::media_save::stage(&bytes, &name)?;
+    crate::media_save::save_staged(
+        &app_handle,
+        &staged,
+        mime,
+        crate::media_save::SaveTarget::Photos,
+    )
+    .await
 }
 
 /// macOS builds the save panel on the main (AppKit) thread. A Tauri `async`
@@ -1186,6 +1233,7 @@ async fn save_bytes_via_dialog(
     app_handle: &AppHandle,
     bytes: Vec<u8>,
     suggested_filename: Option<&str>,
+    _mime: &str,
 ) -> Result<Option<String>, String> {
     let suggested = suggested_filename.map(str::to_owned);
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1218,6 +1266,7 @@ async fn save_bytes_via_dialog(
     _app_handle: &AppHandle,
     bytes: Vec<u8>,
     suggested_filename: Option<&str>,
+    _mime: &str,
 ) -> Result<Option<String>, String> {
     let mut dialog = rfd::AsyncFileDialog::new();
     if let Some(name) = suggested_filename {
@@ -1233,15 +1282,22 @@ async fn save_bytes_via_dialog(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
-/// Mobile (iOS/Android) has no desktop file picker, and saving arbitrary files
-/// isn't wired up there yet.
+/// Mobile (iOS/Android) has no `rfd`; the platform's own save dialog takes a
+/// file rather than a path to write to, so the bytes are staged under the name
+/// the user will see and handed over (`media_save.rs`). The result is a name to
+/// show, not a filesystem path — on both platforms the destination is a
+/// document URI the app never sees as a path.
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 async fn save_bytes_via_dialog(
-    _app_handle: &AppHandle,
-    _bytes: Vec<u8>,
-    _suggested_filename: Option<&str>,
+    app_handle: &AppHandle,
+    bytes: Vec<u8>,
+    suggested_filename: Option<&str>,
+    mime: &str,
 ) -> Result<Option<String>, String> {
-    Err("Saving files isn't supported on this platform yet".to_string())
+    let name = crate::media_save::export_filename(suggested_filename, mime);
+    let staged = crate::media_save::stage(&bytes, &name)?;
+    crate::media_save::save_staged(app_handle, &staged, mime, crate::media_save::SaveTarget::Files)
+        .await
 }
 
 /// Return the compile-time target OS ("linux", "macos", "windows", "ios",
@@ -2806,9 +2862,9 @@ pub async fn get_notification_config(
 /// Apply a Settings edit to the notification configuration and persist it.
 ///
 /// Only the fields Settings owns are taken from `config` — see
-/// [`NotificationConfig::with_preferences`]. Mutes, background sync and push
-/// each have their own command because each has a homeserver- or OS-side effect
-/// to keep in step, and a stale Settings draft must not be able to undo one.
+/// [`NotificationConfig::with_preferences`]. Mutes and push each have their
+/// own command because each has a homeserver- or OS-side effect to keep in
+/// step, and a stale Settings draft must not be able to undo one.
 #[tauri::command]
 pub async fn set_notification_config(
     config_state: State<'_, Mutex<NotificationConfig>>,
@@ -2980,40 +3036,6 @@ pub async fn clear_room_notifications(
 ) -> Result<(), String> {
     crate::notify::cancel_room(&app_handle, &room_id);
     Ok(())
-}
-
-/// Enable or disable background sync: persists the choice in the notification
-/// config and starts/stops the Android foreground service to match. On
-/// platforms without the service this only persists the flag.
-#[tauri::command]
-pub async fn set_background_sync(
-    app_handle: AppHandle,
-    config_state: State<'_, Mutex<NotificationConfig>>,
-    paths: State<'_, crate::Paths>,
-    enabled: bool,
-) -> Result<(), String> {
-    {
-        let mut guard = config_state
-            .lock()
-            .map_err(|_| "Notification config lock poisoned")?;
-        guard.background_sync = enabled;
-        let snapshot = guard.clone();
-        crate::notifications::save_notification_config_to(&paths.config_dir, &snapshot)?;
-    }
-    crate::mobile_sync::apply(&app_handle, enabled)
-}
-
-/// Current background-sync state for the Settings UI.
-#[tauri::command]
-pub async fn get_background_sync_state(
-    app_handle: AppHandle,
-    config_state: State<'_, Mutex<NotificationConfig>>,
-) -> Result<crate::mobile_sync::BackgroundSyncState, String> {
-    let enabled = config_state
-        .lock()
-        .map_err(|_| "Notification config lock poisoned")?
-        .background_sync;
-    Ok(crate::mobile_sync::state(&app_handle, enabled))
 }
 
 /// Current push state for the Settings UI.
@@ -3210,12 +3232,6 @@ pub async fn select_push_distributor(
         Ok(false) => Err(format!("{distributor} would not accept the registration")),
         Err(e) => Err(e),
     }
-}
-
-/// Surface the Android battery-optimization exemption prompt (no-op elsewhere).
-#[tauri::command]
-pub async fn request_battery_exemption(app_handle: AppHandle) -> Result<(), String> {
-    crate::mobile_sync::request_battery_exemption(&app_handle)
 }
 
 /// Read-and-delete the cold-start notification action the platform captured —

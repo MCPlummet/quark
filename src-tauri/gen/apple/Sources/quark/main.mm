@@ -1,5 +1,6 @@
 #include "bindings/bindings.h"
 
+#import <Photos/Photos.h>
 #import <UIKit/UIKit.h>
 #import <UserNotifications/UserNotifications.h>
 #import <objc/runtime.h>
@@ -253,6 +254,169 @@ static void quark_clear_room_delivered(const char *room_id) {
     }];
 }
 
+// ─── Saving media (#124, #125) ───────────────────────────────────────────────
+//
+// Rust downloads the media and stages it under the name the user will see
+// (media_save.rs), then hands the path here. Two destinations: the photo
+// library, and a location the user picks in the Files export dialog. Either
+// way the answer goes back through quark_media_save_finished exactly once, and
+// Rust deletes the staged copy when it arrives — so nothing here may answer
+// before it has finished reading the file.
+
+static const int32_t QUARK_SAVE_SAVED = 0;
+static const int32_t QUARK_SAVE_CANCELLED = 1;
+static const int32_t QUARK_SAVE_FAILED = 2;
+
+// The controller to present over: the top of the key window's stack, so the
+// dialog appears above the webview and anything already presented on it.
+static UIViewController *quark_top_view_controller(void) {
+    UIWindow *window = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) {
+            continue;
+        }
+        for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+            if (candidate.isKeyWindow) {
+                window = candidate;
+                break;
+            }
+            if (window == nil) {
+                window = candidate;
+            }
+        }
+    }
+    UIViewController *top = window.rootViewController;
+    while (top.presentedViewController != nil) {
+        top = top.presentedViewController;
+    }
+    return top;
+}
+
+// Add-only access: enough to save, and the narrower prompt ("add photos")
+// rather than asking to read the whole library. PHAssetCreationRequest with
+// the file keeps it byte-for-byte, so an animated GIF stays animated — unlike
+// UIImageWriteToSavedPhotosAlbum, which re-encodes a single frame.
+static void quark_save_to_photos(NSURL *url, NSString *mime, uint64_t request) {
+    [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelAddOnly
+                                               handler:^(PHAuthorizationStatus status) {
+        if (status != PHAuthorizationStatusAuthorized && status != PHAuthorizationStatusLimited) {
+            ffi::quark_media_save_finished(
+                request, QUARK_SAVE_FAILED,
+                "Quark isn't allowed to add to Photos. Turn it on in Settings → Quark → Photos.");
+            return;
+        }
+        BOOL video = [mime hasPrefix:@"video/"];
+        [PHPhotoLibrary.sharedPhotoLibrary performChanges:^{
+            PHAssetCreationRequest *create = [PHAssetCreationRequest creationRequestForAsset];
+            PHAssetResourceCreationOptions *options = [PHAssetResourceCreationOptions new];
+            options.originalFilename = url.lastPathComponent;
+            [create addResourceWithType:(video ? PHAssetResourceTypeVideo : PHAssetResourceTypePhoto)
+                                fileURL:url
+                                options:options];
+        } completionHandler:^(BOOL success, NSError *error) {
+            if (success) {
+                ffi::quark_media_save_finished(request, QUARK_SAVE_SAVED, "Photos");
+            } else {
+                NSString *reason = error.localizedDescription ?: @"Couldn't save to Photos";
+                ffi::quark_media_save_finished(request, QUARK_SAVE_FAILED, reason.UTF8String);
+            }
+        }];
+    }];
+}
+
+// The document picker's delegate is weak, so each export keeps its delegate
+// alive in this set until it has answered.
+@interface QuarkExportDelegate : NSObject <UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate>
+@property(nonatomic) uint64_t request;
+@property(nonatomic) BOOL answered;
+/// Answer the request once; later calls are no-ops.
+- (void)finishWithStatus:(int32_t)status detail:(NSString *)detail;
+@end
+
+static NSMutableSet<QuarkExportDelegate *> *quark_live_exports;
+
+@implementation QuarkExportDelegate
+- (void)finishWithStatus:(int32_t)status detail:(NSString *)detail {
+    if (self.answered) {
+        return;
+    }
+    self.answered = YES;
+    ffi::quark_media_save_finished(self.request, status, detail.UTF8String);
+    [quark_live_exports removeObject:self];
+}
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    // asCopy: the file has already been copied to where the user chose.
+    [self finishWithStatus:QUARK_SAVE_SAVED detail:urls.firstObject.lastPathComponent ?: @"Files"];
+}
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    [self finishWithStatus:QUARK_SAVE_CANCELLED detail:nil];
+}
+// A swipe-down dismissal. The picker reports it as a cancel on current iOS,
+// but an unanswered request would leave the save spinning forever, so this is
+// the backstop; `answered` makes the second report a no-op.
+- (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
+    [self finishWithStatus:QUARK_SAVE_CANCELLED detail:nil];
+}
+@end
+
+static void quark_export_to_files(NSURL *url, uint64_t request) {
+    UIViewController *top = quark_top_view_controller();
+    if (top == nil) {
+        ffi::quark_media_save_finished(request, QUARK_SAVE_FAILED, "Nothing to show the save dialog on");
+        return;
+    }
+    // UIKit ignores a presentation over a controller that is itself mid-
+    // transition — logs a warning and calls nothing, so no delegate method would
+    // ever answer and the save would hang. Refuse it out loud instead.
+    if (top.isBeingPresented || top.isBeingDismissed) {
+        ffi::quark_media_save_finished(request, QUARK_SAVE_FAILED,
+                                       "The save dialog couldn't open just now. Try again.");
+        return;
+    }
+    if (quark_live_exports == nil) {
+        quark_live_exports = [NSMutableSet set];
+    }
+    QuarkExportDelegate *delegate = [QuarkExportDelegate new];
+    delegate.request = request;
+    [quark_live_exports addObject:delegate];
+
+    UIDocumentPickerViewController *picker =
+        [[UIDocumentPickerViewController alloc] initForExportingURLs:@[ url ] asCopy:YES];
+    picker.delegate = delegate;
+    picker.presentationController.delegate = delegate;
+    [top presentViewController:picker animated:YES completion:nil];
+
+    // The backstop for any other way the presentation can be dropped: if the
+    // picker never made it on screen, nothing will ever answer for it.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (picker.presentingViewController == nil) {
+            [delegate finishWithStatus:QUARK_SAVE_FAILED
+                                detail:@"The save dialog couldn't open. Try again."];
+        }
+    });
+}
+
+// Called from Rust on a runtime thread. Copies both strings before returning,
+// as the contract in media_save.rs requires, then does the UIKit work on the
+// main queue.
+static void quark_save_media(const char *path, const char *mime, uint8_t target, uint64_t request) {
+    if (path == NULL) {
+        ffi::quark_media_save_finished(request, QUARK_SAVE_FAILED, "No file to save");
+        return;
+    }
+    NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+    NSString *type = mime != NULL ? [NSString stringWithUTF8String:mime] : @"";
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (target == 0) {
+            quark_save_to_photos(url, type, request);
+        } else {
+            quark_export_to_files(url, request);
+        }
+    });
+}
+
 int main(int argc, char * argv[]) {
     @autoreleasepool {
         // Hand Rust the shared container and the one Foundation call it needs
@@ -269,6 +433,9 @@ int main(int argc, char * argv[]) {
         // Likewise the call that asks APNs for a device token, which Rust makes
         // when push is enabled rather than unconditionally at launch.
         ffi::quark_register_token_requester(quark_request_apns_token);
+
+        // And the call that saves media to Photos or Files (media_save.rs).
+        ffi::quark_register_media_saver(quark_save_media);
 
         // Registered before start_app because start_app runs the run loop and
         // never returns. The observer fires once the delegate exists, which is

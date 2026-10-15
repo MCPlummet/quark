@@ -16,7 +16,7 @@ import org.unifiedpush.android.connector.UnifiedPush
  *
  * Registered from Rust via `register_android_plugin` (unifiedpush.rs) and
  * reached only through `run_mobile_plugin`, so there is no JS surface and no
- * capability wiring — same arrangement as [SyncServicePlugin].
+ * capability wiring.
  *
  * Everything that happens *after* registration — endpoints arriving, messages,
  * revocations — lands in [PushEventService] instead, because it has to work

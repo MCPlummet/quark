@@ -3212,6 +3212,12 @@ body.quark-mobile .attach-tray__remove {
 .image-lightbox {
   position: fixed;
   inset: 0;
+  /* Like the other bottom-anchored surfaces: clear of the system bars for a
+     webview laid out under them. Quark's own shells lay it out between the
+     bars (MainActivity.applyWindowInsets on Android, WKWebView on iOS), so
+     these are 0 there, as on desktop. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: var(--overlay-bg-dark);
   display: none;
   align-items: center;
@@ -3250,6 +3256,16 @@ body.quark-mobile .attach-tray__remove {
   padding: 10px 16px;
   align-items: center;
   flex-shrink: 0;
+}
+
+.image-lightbox__save {
+  /* Only groups the save buttons for re-rendering; they space like the rest. */
+  display: contents;
+}
+
+.image-lightbox__btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 .image-lightbox__btn {
@@ -7228,16 +7244,26 @@ body.quark-mobile .settings-dialog__tab {
  * The `__body` collapses to a single pane. List view shows the (vertical) tab
  * rail full-width and hides the content; the `--detail` modifier flips it to
  * show one tab's content with a back button. All scoped under `__body` so the
- * room/space dialogs above are unaffected. */
+ * room/space dialogs above are unaffected.
+ *
+ * `__body` stays a flex container (a column here) rather than a block: the
+ * visible pane is then a flex item held to the panel's height, so its own
+ * overflow-y scrolls. As a block, `flex: 1; min-height: 0` on the pane meant
+ * nothing, it grew to its full content height, and `__body`'s overflow:hidden
+ * clipped everything past the screen — a long tab (Account's session list,
+ * #128) could not be scrolled at all. */
 body.quark-mobile .settings-dialog__body {
-  display: block;
+  flex-direction: column;
 }
 
 body.quark-mobile .settings-dialog__body .settings-dialog__tabs {
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
   border-right: none;
   overflow-x: visible;
+  overscroll-behavior: contain;
 }
 
 body.quark-mobile .settings-dialog__body .settings-dialog__tab {
@@ -7258,6 +7284,7 @@ body.quark-mobile .settings-dialog__panel--detail .settings-dialog__tabs {
 
 body.quark-mobile .settings-dialog__panel--detail .settings-dialog__content {
   display: block;
+  overscroll-behavior: contain;
 }
 
 body.quark-mobile .settings-dialog__panel--detail .settings-dialog__back {
@@ -7767,14 +7794,17 @@ body.quark-mobile .attach-progress {
  * painted a full viewport below the fold, unreachable and unscrollable.
  *
  * Anchored bottom-right rather than top: the top edge is where the mobile top
- * bar and the room header live, and a toast over the compose bar is the thing
- * the user is most likely to be looking at when a send fails. */
+ * bar and the room header live. Not *over* the compose bar, though (#126):
+ * NotificationToast sets --toast-bottom to park the toast just above it, so it
+ * covers a strip of timeline instead of the field the user is typing in. Only
+ * one toast shows at a time, so it never grows into a stack that buries the
+ * window. */
 .toast-container {
   position: fixed;
   right: 16px;
-  /* Clear the home indicator / gesture bar; collapses to the plain inset on
-     desktop where the env() resolves to 0. */
-  bottom: calc(16px + env(safe-area-inset-bottom));
+  /* Without a compose bar on screen: clear the home indicator / gesture bar;
+     collapses to the plain inset on desktop where the env() resolves to 0. */
+  bottom: var(--toast-bottom, calc(16px + env(safe-area-inset-bottom)));
   z-index: 10500; /* above dialogs and context menus (10000), below #startup-overlay */
   display: flex;
   flex-direction: column;
@@ -7845,6 +7875,11 @@ body.quark-mobile .attach-progress {
   min-width: 0;
   /* Backend error strings are long and arrive unbroken (URLs, event IDs). */
   overflow-wrap: anywhere;
+}
+
+.toast__more {
+  color: color-mix(in srgb, var(--fg) 55%, transparent);
+  white-space: nowrap;
 }
 
 .toast__close {

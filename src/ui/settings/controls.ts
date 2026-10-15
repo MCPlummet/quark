@@ -13,10 +13,10 @@ import { showError } from "../NotificationToast.js";
  * A backend-owned switch: something with a live state the backend reports, that
  * applies the moment it is flipped rather than on [save].
  *
- * Push and background sync are both this shape — a supported/enabled snapshot,
- * a toggle with an immediate side effect (registering a pusher, starting a
- * foreground service), and a status line describing what the backend actually
- * did. Any further mobile switch would be a third copy of the same forty lines.
+ * Push is this shape — a supported/enabled snapshot, a toggle with an
+ * immediate side effect (registering a pusher), and a status line describing
+ * what the backend actually did. Any further mobile switch would otherwise be a
+ * second copy of the same forty lines.
  */
 export interface ToggleState {
   /** This platform/build can do it at all. False hides the whole section. */
@@ -37,7 +37,7 @@ export interface ToggleSectionSpec<S extends ToggleState> {
   /** What the user can do about the current state; "" hides the line. */
   hint: (state: S) => string;
   /**
-   * Anything bespoke this section needs (Android's battery-exemption button).
+   * Anything bespoke this section needs (Android's distributor picker).
    * `refresh` re-reads the backend and repaints the status, returning the new
    * state so the caller can react to it.
    */

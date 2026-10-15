@@ -257,20 +257,46 @@ export async function serveMedia(
 
 /**
  * Download media from the homeserver and save it via the OS native save dialog
- * (XDG desktop portal on Linux, native picker on macOS/Windows). The backend
+ * (XDG desktop portal on Linux, native picker on macOS/Windows, the
+ * create-document picker on Android, the Files export sheet on iOS). The backend
  * shows the dialog and writes the file; the user picks the destination there, so
- * the frontend never supplies — or even sees — a filesystem path. Returns the
- * written path, or `null` if the user cancelled.
+ * the frontend never supplies a filesystem path. Returns where it went (a path
+ * on desktop, the file's name on mobile), or `null` if the user cancelled.
  */
 export async function saveMediaWithDialog(
   mxcUrl: string,
   suggestedFilename?: string,
   encryptionInfo?: string | null,
+  mimeType?: string | null,
 ): Promise<string | null> {
   return invoke<string | null>("save_media_with_dialog", {
     mxcUrl,
     suggestedFilename: suggestedFilename ?? null,
     encryptionInfo: encryptionInfo ?? null,
+    mimeType: mimeType ?? null,
+  });
+}
+
+/**
+ * Download media from the homeserver and add it to the device's photo library
+ * (Pictures/Quark on Android, Photos on iOS). Mobile only — desktop has no
+ * library to add to and the backend rejects it there. Returns a short
+ * description of where it went.
+ *
+ * `mimeType` is the event's declared type, which the backend prefers over its
+ * byte sniff — that calls a HEIC photo `video/mp4`.
+ */
+export async function saveMediaToPhotos(
+  mxcUrl: string,
+  suggestedFilename?: string,
+  encryptionInfo?: string | null,
+  mimeType?: string | null,
+): Promise<string | null> {
+  return invoke<string | null>("save_media_to_photos", {
+    mxcUrl,
+    suggestedFilename: suggestedFilename ?? null,
+    encryptionInfo: encryptionInfo ?? null,
+    mimeType: mimeType ?? null,
   });
 }
 

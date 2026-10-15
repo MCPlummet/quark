@@ -85,7 +85,7 @@ beforeEach(() => {
   mocks.unmuteRoom.mockReset().mockResolvedValue({ synced: true, warning: null });
   mocks.getConfig.mockResolvedValue({
     enabled: true, show_body: true, show_sender: true, mute_rooms: [],
-    background_sync: false, push_enabled: false, push_gateway_override: null,
+    push_enabled: false, push_gateway_override: null,
   });
   AppState.set("currentRoomId", "!r:x");
   AppState.set("roomListCache", [makeRoom()]);

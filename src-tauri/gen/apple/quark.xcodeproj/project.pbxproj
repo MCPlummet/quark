@@ -12,6 +12,7 @@
 		28C26086AEDDE50C17FF0E0F /* Intents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC6F0191929EDE8A5E0BB84 /* Intents.framework */; };
 		456B175B40B887297AA6A2E3 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 11E698919B7DF03B5F1DFAA2 /* LaunchScreen.storyboard */; };
 		5D50CE864BA2CDF537FF78CD /* assets in Resources */ = {isa = PBXBuildFile; fileRef = 64AB5F1809196600E24D4A12 /* assets */; };
+		5B7E2A91C4D8F3062E19A4B5 /* Photos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3D92C6E15A0B47F8E6D21C93 /* Photos.framework */; };
 		61AB49632AE6AB47549D385E /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F802D2C3C67788CB617FE5DB /* QuartzCore.framework */; };
 		71C8BA438A5B5459FE1C94AC /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 064E084588FF60F3E691F9BF /* MetalKit.framework */; };
 		89FE51C8EC746384976C6E50 /* QuarkNSE.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BE8186A178C2E24CC76D850C /* QuarkNSE.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -69,6 +70,7 @@
 		437F82C0EFE1FFB06BBC2D96 /* emoji.rs */ = {isa = PBXFileReference; path = emoji.rs; sourceTree = "<group>"; };
 		4C4BEC4F6DDBE7868059F69A /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		5FC6F0191929EDE8A5E0BB84 /* Intents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Intents.framework; path = System/Library/Frameworks/Intents.framework; sourceTree = SDKROOT; };
+		3D92C6E15A0B47F8E6D21C93 /* Photos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Photos.framework; path = System/Library/Frameworks/Photos.framework; sourceTree = SDKROOT; };
 		63A48257C35B25AF383EF1D5 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		64AB5F1809196600E24D4A12 /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 		6C767C0B388C3A6F800A865E /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
@@ -85,7 +87,6 @@
 		8E36620ADC5519E9D18C4106 /* notifications.rs */ = {isa = PBXFileReference; path = notifications.rs; sourceTree = "<group>"; };
 		8E7F544E5A12B91EABD17494 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		8F99DE7CA7AFC8D691A5A0D2 /* push_jni.rs */ = {isa = PBXFileReference; path = push_jni.rs; sourceTree = "<group>"; };
-		9485CFA77FAD35612509472C /* mobile_sync.rs */ = {isa = PBXFileReference; path = mobile_sync.rs; sourceTree = "<group>"; };
 		9543BF492D7C6FCC7F54E40A /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		97267C532EEACAEB979EDC71 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		9861659CD6479E789A8BAA73 /* quark_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = quark_iOS.entitlements; sourceTree = "<group>"; };
@@ -108,6 +109,7 @@
 		E2BFC48F008E8ED8BE348317 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		EF178041CBE41AA17EEFF283 /* quarkrc.rs */ = {isa = PBXFileReference; path = quarkrc.rs; sourceTree = "<group>"; };
 		F306E13B92399AFD8F7A900A /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
+		A61F3C0E7B2D49E58C14D0A7 /* media_save.rs */ = {isa = PBXFileReference; path = media_save.rs; sourceTree = "<group>"; };
 		F342BDAB6EA648E083BAEFD1 /* media_server.rs */ = {isa = PBXFileReference; path = media_server.rs; sourceTree = "<group>"; };
 		F4933279D0E4E8C4EEEC6EF1 /* mod.rs */ = {isa = PBXFileReference; path = mod.rs; sourceTree = "<group>"; };
 		F7165896A5EB3177E7AC440D /* giphy.rs */ = {isa = PBXFileReference; path = giphy.rs; sourceTree = "<group>"; };
@@ -135,6 +137,7 @@
 				DEC05FF889A653F06DC453B6 /* CoreGraphics.framework in Frameworks */,
 				E03E8A1C7A9622621CC96252 /* Metal.framework in Frameworks */,
 				71C8BA438A5B5459FE1C94AC /* MetalKit.framework in Frameworks */,
+				5B7E2A91C4D8F3062E19A4B5 /* Photos.framework in Frameworks */,
 				61AB49632AE6AB47549D385E /* QuartzCore.framework in Frameworks */,
 				0E47EA99D6F87BBA3C13B284 /* Security.framework in Frameworks */,
 				E3EBA699AF02CA5521855820 /* UIKit.framework in Frameworks */,
@@ -243,8 +246,8 @@
 				03DC0F6E09B2EA1D24E1B150 /* lib.rs */,
 				256F479A5D492F6F8794A484 /* main.rs */,
 				CD6C42F38C5035118DE3DEAB /* media_cache.rs */,
+				A61F3C0E7B2D49E58C14D0A7 /* media_save.rs */,
 				F342BDAB6EA648E083BAEFD1 /* media_server.rs */,
-				9485CFA77FAD35612509472C /* mobile_sync.rs */,
 				F85614369567937F3AC38D5F /* net_guard.rs */,
 				8E36620ADC5519E9D18C4106 /* notifications.rs */,
 				A19B2179CF11C33AB3ECD1BE /* notify.rs */,
@@ -287,6 +290,7 @@
 				4C4BEC4F6DDBE7868059F69A /* libapp.a */,
 				8E7F544E5A12B91EABD17494 /* Metal.framework */,
 				064E084588FF60F3E691F9BF /* MetalKit.framework */,
+				3D92C6E15A0B47F8E6D21C93 /* Photos.framework */,
 				F802D2C3C67788CB617FE5DB /* QuartzCore.framework */,
 				18B0105FE2B4B079095AEAEC /* Security.framework */,
 				71BB63E26C00CC3B1AE6B91B /* UIKit.framework */,

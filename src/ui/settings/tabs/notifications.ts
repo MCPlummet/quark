@@ -1,24 +1,20 @@
 // Settings → Notifications tab.
 //
-// Enable/preview toggles, Android background-sync controls, and a
-// test-notification button. Migrated from SettingsDialog._buildNotificationsTab;
-// behaviour is unchanged. The bespoke background-sync / test DOM stays inline
-// (no shared control covers it); the standard rows use controls.
+// Enable/preview toggles, push controls, and a test-notification button.
+// The bespoke test DOM stays inline (no shared control covers it); the standard
+// rows use controls.
 
 import { getConfig, setNotificationConfig } from "../../../app/notifications.js";
 import type { NotificationConfig } from "../../../app/notifications.js";
 import {
   testNotification,
-  getBackgroundSyncState,
-  setBackgroundSync,
-  requestBatteryExemption,
   getPushStatus,
   setPushEnabled,
   selectPushDistributor,
   getAccountMute,
   setAccountMute,
 } from "../../../ipc/notifications.js";
-import type { PushStatus, BackgroundSyncState } from "../../../ipc/notifications.js";
+import type { PushStatus } from "../../../ipc/notifications.js";
 import { showSuccess, showError } from "../../NotificationToast.js";
 import type { SettingsTab } from "../types.js";
 
@@ -177,10 +173,10 @@ export const notificationsTab: SettingsTab = {
     section.appendChild(controls.checkbox("Show message preview", draft.show_body, (v) => { draft = { ...draft, show_body: v }; }));
     section.appendChild(controls.checkbox("Show sender name", draft.show_sender, (v) => { draft = { ...draft, show_sender: v }; }));
 
-    // Push and background sync are both backend-owned switches: mobile-only,
-    // with a side effect that lands the moment they are flipped (registering a
-    // pusher, starting the foreground service) rather than on [save]. Deferring
-    // them would let a stale draft contradict what already happened.
+    // Push is a backend-owned switch: mobile-only, with a side effect that
+    // lands the moment it is flipped (registering a pusher) rather than on
+    // [save]. Deferring it would let a stale draft contradict what already
+    // happened.
     const pushSection = await controls.toggleSection<PushStatus>({
       title: "Push notifications",
       label: "Let your homeserver wake the app (saves battery)",
@@ -198,10 +194,10 @@ export const notificationsTab: SettingsTab = {
       // settle it, and without a control here the section sits on "waiting"
       // with nothing attached to it that would ever change that.
       //
-      // Like the battery button below, this is built once from the state the
-      // section opened with — installing a distributor while Settings is open
-      // won't grow the list until it is reopened, which is acceptable for a
-      // list that only changes when the user installs an app.
+      // Built once from the state the section opened with — installing a
+      // distributor while Settings is open won't grow the list until it is
+      // reopened, which is acceptable for a list that only changes when the
+      // user installs an app.
       extra: (state, refresh) => {
         if (state.distributors.length < 2) return null;
         const options: [string, string][] = state.distributors.map((d) => [d, d]);
@@ -219,32 +215,6 @@ export const notificationsTab: SettingsTab = {
     });
     if (pushSection) content.appendChild(pushSection);
 
-    const bgSection = await controls.toggleSection<BackgroundSyncState>({
-      title: "Background sync",
-      label: "Stay connected in the background (uses more battery)",
-      get: getBackgroundSyncState,
-      set: setBackgroundSync,
-      status: (s) =>
-        `service: ${s.running ? "running" : "stopped"} · ` +
-        `battery optimization: ${s.battery_exempt ? "unrestricted" : "restricted"}`,
-      hint: () => "Notification sounds are set in Android Settings → Notifications.",
-      extra: (state, refresh) => {
-        if (state.battery_exempt) return null;
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "settings-dialog__save-btn";
-        btn.textContent = "[ allow unrestricted battery ]";
-        btn.addEventListener("click", () => {
-          void requestBatteryExemption()
-            .then(refresh)
-            .then((s) => { if (s.battery_exempt) btn.remove(); })
-            .catch(() => {/* user dismissed the system dialog */});
-        });
-        return btn;
-      },
-      failureLabel: "Background sync",
-    });
-    if (bgSection) content.appendChild(bgSection);
 
     const footer = document.createElement("div");
     footer.className = "settings-dialog__actions";

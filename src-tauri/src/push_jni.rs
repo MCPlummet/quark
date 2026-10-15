@@ -253,9 +253,8 @@ fn handle_push(payload: &str, data_dir: &std::path::Path) -> PushResult {
 // The warm path used to post through tauri-plugin-notification, whose calls go
 // through `run_mobile_plugin` → wry's `dispatch`, which runs the closure on the
 // Activity and `expect`s there to be one. A process kept alive after its
-// Activity was destroyed — by the push service, the background-sync service,
-// or simply not yet reclaimed — has none, so the first notification panicked
-// the calling thread. That thread is the sync loop, running the event handler.
+// Activity was destroyed — by the push service, or simply not yet reclaimed —
+// has none, so the first notification panicked the calling thread. That thread is the sync loop, running the event handler.
 //
 // A notification needs a `Context`, not an Activity. So Kotlin hands over the
 // application context and `PushNotifier`'s class once (`nativeInstall`), and

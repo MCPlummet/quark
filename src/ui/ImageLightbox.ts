@@ -1,6 +1,13 @@
-// Image lightbox — full-screen viewer with zoom, pan, and download
+// Image lightbox — full-screen viewer with zoom, pan, and save
 
 import { modalManager, type Modal } from "./ModalManager.js";
+import type { SavableMedia, SaveTarget } from "../app/media_save.js";
+
+/** Toolbar label per save destination. Desktop only ever shows `files`. */
+const SAVE_LABELS: Record<SaveTarget, string> = {
+  photos: "⬇ photos",
+  files: "⬇ files",
+};
 
 export class ImageLightbox implements Modal {
   private _el: HTMLElement;
@@ -16,6 +23,19 @@ export class ImageLightbox implements Modal {
   private _panStartY = 0;
   private _currentSrc = "";
   private _currentAlt = "";
+  /** The original behind the displayed image; null when the caller had none. */
+  private _currentMedia: SavableMedia | null = null;
+  private _saveHandler: ((media: SavableMedia, target: SaveTarget) => Promise<void>) | null = null;
+  private _saveTargets: SaveTarget[] = ["files"];
+  private _saveBtns: HTMLElement;
+  private _saving = false;
+  /**
+   * Bumped whenever the viewer opens on a new image. A save still in flight
+   * from before then belongs to a previous image and must not touch the
+   * buttons — and one whose answer never comes (a native dialog that failed to
+   * appear) must not leave them disabled for the rest of the session.
+   */
+  private _saveGen = 0;
 
   constructor() {
     this._el = document.createElement("div");
@@ -113,7 +133,10 @@ export class ImageLightbox implements Modal {
     this._zoomLabel.className = "image-lightbox__zoom-label image-lightbox__zoom-ctl";
     this._zoomLabel.textContent = "100%";
 
-    const downloadBtn = this._makeBtn("⬇ download", () => this._download());
+    // Filled by setSaveTargets once the platform is known.
+    this._saveBtns = document.createElement("span");
+    this._saveBtns.className = "image-lightbox__save";
+    this._renderSaveButtons();
     const closeBtn = this._makeBtn("✕ close", () => this.hide());
     closeBtn.classList.add("image-lightbox__close");
 
@@ -121,7 +144,7 @@ export class ImageLightbox implements Modal {
     toolbar.appendChild(zoomInBtn);
     toolbar.appendChild(resetBtn);
     toolbar.appendChild(this._zoomLabel);
-    toolbar.appendChild(downloadBtn);
+    toolbar.appendChild(this._saveBtns);
     toolbar.appendChild(closeBtn);
     this._el.appendChild(toolbar);
 
@@ -254,9 +277,32 @@ export class ImageLightbox implements Modal {
     return this._el.classList.contains("image-lightbox--open");
   }
 
-  show(src: string, alt?: string): void {
+  /**
+   * How to save the image. The handler fetches the original by its `mxc://`
+   * (the displayed `src` is a blob URL) and reports the outcome itself.
+   */
+  setSaveHandler(handler: (media: SavableMedia, target: SaveTarget) => Promise<void>): void {
+    this._saveHandler = handler;
+  }
+
+  /** The destinations to offer — Photos and Files on mobile, Files elsewhere. */
+  setSaveTargets(targets: SaveTarget[]): void {
+    this._saveTargets = targets.length > 0 ? targets : ["files"];
+    this._renderSaveButtons();
+  }
+
+  /**
+   * @param media The original behind `src`, for saving. Without it saving falls
+   *              back to a plain download of `src`, which only a desktop
+   *              webview honours.
+   */
+  show(src: string, alt?: string, media?: SavableMedia | null): void {
     this._currentSrc = src;
     this._currentAlt = alt ?? "";
+    this._currentMedia = media ?? null;
+    this._saveGen++;
+    this._saving = false;
+    this._renderSaveButtons();
     this._imgEl.src = src;
     this._imgEl.alt = alt ?? "";
     this._panX = 0;
@@ -272,6 +318,7 @@ export class ImageLightbox implements Modal {
     this._el.classList.remove("image-lightbox--open");
     this._imgEl.src = "";
     this._currentSrc = "";
+    this._currentMedia = null;
     modalManager.remove(this);
   }
 
@@ -323,7 +370,54 @@ export class ImageLightbox implements Modal {
     this._panY = Math.min(maxY, Math.max(-maxY, this._panY));
   }
 
-  private _download(): void {
+  private _renderSaveButtons(): void {
+    // On mobile the fallback download is an `<a download>` the webview ignores
+    // — the dead button of #125. With no original to fetch there is nothing
+    // that would work, so offer nothing rather than a button that does nothing.
+    const canSave = this._currentMedia !== null || !this._saveTargets.includes("photos");
+    this._saveBtns.style.display = canSave ? "" : "none";
+    this._saveBtns.replaceChildren(
+      ...this._saveTargets.map((target) => {
+        const btn = this._makeBtn(this._saveTargets.length === 1 ? "⬇ save" : SAVE_LABELS[target], () => {
+          void this._save(target, btn);
+        });
+        btn.dataset.saveTarget = target;
+        return btn;
+      }),
+    );
+  }
+
+  /**
+   * Save the current image. The buttons are disabled for the duration so a
+   * second tap can't start a second download, and the tapped one says what it
+   * is doing (#125: it used to give no sign of anything happening at all).
+   */
+  private async _save(target: SaveTarget, btn?: HTMLButtonElement): Promise<void> {
+    if (this._saving) return;
+    const media = this._currentMedia;
+    if (!media || !this._saveHandler) {
+      this._downloadSrc();
+      return;
+    }
+    this._saving = true;
+    const gen = this._saveGen;
+    const buttons = [...this._saveBtns.querySelectorAll<HTMLButtonElement>("button")];
+    const label = btn?.textContent ?? "";
+    for (const b of buttons) b.disabled = true;
+    if (btn) btn.textContent = "saving…";
+    try {
+      await this._saveHandler(media, target);
+    } finally {
+      if (gen === this._saveGen) {
+        this._saving = false;
+        for (const b of buttons) b.disabled = false;
+        if (btn) btn.textContent = label;
+      }
+    }
+  }
+
+  /** Last resort for an image with no original to fetch: a browser download. */
+  private _downloadSrc(): void {
     if (!this._currentSrc) return;
     const a = document.createElement("a");
     a.href = this._currentSrc;
@@ -353,6 +447,15 @@ export class ImageLightbox implements Modal {
         e.preventDefault();
         this._zoom(-0.25);
         break;
+      case "s": {
+        // Save through the dialog where there is one; the only target
+        // otherwise. Photos is a tap away on the touch devices that have it.
+        e.preventDefault();
+        const target = this._saveTargets.includes("files") ? "files" : this._saveTargets[0];
+        const btn = this._saveBtns.querySelector<HTMLButtonElement>(`[data-save-target="${target}"]`);
+        void this._save(target, btn ?? undefined);
+        break;
+      }
       case "0":
         e.preventDefault();
         this._panX = 0;

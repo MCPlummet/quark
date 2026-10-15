@@ -98,6 +98,7 @@ targets:
         NSCameraUsageDescription: Quark needs camera access so you can take a photo or video to send in a chat.
         NSMicrophoneUsageDescription: Quark needs microphone access so videos you record to send include sound.
         NSPhotoLibraryUsageDescription: Quark needs photo library access so you can attach existing photos and videos to a chat.
+        NSPhotoLibraryAddUsageDescription: Quark needs permission to add photos so you can save images from a chat to your library.
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
@@ -109,7 +110,7 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        CFBundleShortVersionString: 0.20.2
+        CFBundleShortVersionString: 0.21.0
         # The BUILD NUMBER, not the marketing version. App Store Connect
         # requires this to strictly increase on every upload sharing one
         # CFBundleShortVersionString, so it cannot track the version: a
@@ -171,6 +172,8 @@ targets:
       - sdk: CoreGraphics.framework
       - sdk: Metal.framework
       - sdk: MetalKit.framework
+      # main.mm adds saved images to the photo library (media_save.rs).
+      - sdk: Photos.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
       - sdk: UIKit.framework
@@ -210,7 +213,7 @@ targets:
         # version-bump script rewrites both keys across every target in this
         # file — the marketing version on a version bump, the build number on
         # `version-bump build` — so these stay in lockstep with the app's above.
-        CFBundleShortVersionString: 0.20.2
+        CFBundleShortVersionString: 0.21.0
         CFBundleVersion: "4"
     entitlements:
       # The app group and nothing else. `aps-environment` belongs to the app,
