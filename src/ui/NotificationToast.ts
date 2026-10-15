@@ -54,7 +54,7 @@ function _getContainer(): HTMLElement {
 
   // The compose bar moves when the keyboard opens or the window is resized;
   // keep a visible toast parked above it rather than wherever it was when shown.
-  const reposition = (): void => { if (_current) _placeAboveCompose(); };
+  const reposition = (): void => { if (_current) _placeAboveBottomBar(); };
   window.addEventListener("resize", reposition);
   window.visualViewport?.addEventListener("resize", reposition);
 
@@ -62,21 +62,29 @@ function _getContainer(): HTMLElement {
 }
 
 /**
- * Park the container just above the compose bar, so a toast never covers the
- * field the user is typing in (#126). The top edge is no better — it holds the
+ * The bottom-anchored strips a toast parks above: the compose bar, and the
+ * image viewer's toolbar while the viewer is open — it covers the compose bar,
+ * and its save buttons are what raise the "Saving…" toast in the first place.
+ */
+const BOTTOM_BARS = ".input-bar-wrap, .image-lightbox--open .image-lightbox__toolbar";
+
+/**
+ * Park the container just above the compose bar (or the image viewer's
+ * toolbar), so a toast never covers the field the user is typing in or the
+ * buttons they just pressed (#126). The top edge is no better — it holds the
  * mobile top bar and the room header — but the timeline between the two is
  * reading space, and a few seconds of it is the cheapest thing to cover.
  *
- * Where no compose bar is showing (the mobile room list, the login screen) the
+ * Where no such bar is showing (the mobile room list, the login screen) the
  * stylesheet's own bottom inset applies.
  */
-function _placeAboveCompose(): void {
+function _placeAboveBottomBar(): void {
   if (!_container) return;
   let top = Infinity;
-  for (const wrap of document.querySelectorAll<HTMLElement>(".input-bar-wrap")) {
-    const rect = wrap.getBoundingClientRect();
+  for (const bar of document.querySelectorAll<HTMLElement>(BOTTOM_BARS)) {
+    const rect = bar.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) continue; // hidden
-    if (_isCovered(wrap, rect)) continue;
+    if (_isCovered(bar, rect)) continue;
     top = Math.min(top, rect.top);
   }
   if (!Number.isFinite(top)) {
@@ -92,15 +100,16 @@ function _placeAboveCompose(): void {
 }
 
 /**
- * Whether something else is drawn over the compose bar — the mobile room-list
- * drawer slides over a room whose compose bar keeps its full rect. Parking above
- * a bar the user cannot see would float the toast mid-drawer for no reason.
+ * Whether something else is drawn over the bar — the mobile room-list drawer
+ * slides over a room whose compose bar keeps its full rect, and the image viewer
+ * covers it outright. Parking above a bar the user cannot see would float the
+ * toast mid-drawer for no reason.
  */
-function _isCovered(wrap: HTMLElement, rect: DOMRect): boolean {
+function _isCovered(bar: HTMLElement, rect: DOMRect): boolean {
   if (typeof document.elementFromPoint !== "function") return false;
   const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
   // The toast container itself lets pointer events through, so it is never the hit.
-  return hit !== null && !wrap.contains(hit);
+  return hit !== null && !bar.contains(hit);
 }
 
 // ── Core dismiss logic ────────────────────────────────────────────────────────
@@ -166,7 +175,7 @@ export function showToast(
   }
 
   const container = _getContainer();
-  _placeAboveCompose();
+  _placeAboveBottomBar();
 
   const el = document.createElement("div");
   el.className = `toast toast--${type}`;

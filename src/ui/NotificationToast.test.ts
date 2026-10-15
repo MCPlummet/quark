@@ -85,7 +85,7 @@ describe("NotificationToast: one at a time (#126)", () => {
     clearToasts();
     vi.runAllTimers();
     vi.useRealTimers();
-    document.querySelectorAll(".input-bar-wrap").forEach((el) => el.remove());
+    document.querySelectorAll(".input-bar-wrap, .image-lightbox").forEach((el) => el.remove());
   });
 
   const live = (): HTMLElement[] =>
@@ -178,6 +178,50 @@ describe("NotificationToast: one at a time (#126)", () => {
       document.elementFromPoint = original;
       drawer.remove();
     }
+  });
+
+  /** The viewer covers the compose bar, and its save buttons raise the "Saving…" toast. */
+  it("parks the toast above the open image viewer's toolbar", () => {
+    const wrap = document.createElement("div");
+    wrap.className = "input-bar-wrap";
+    document.body.appendChild(wrap);
+    wrap.getBoundingClientRect = () =>
+      ({ top: 700, bottom: 768, left: 0, right: 400, width: 400, height: 68, x: 0, y: 700, toJSON: () => ({}) }) as DOMRect;
+    const lightbox = document.createElement("div");
+    lightbox.className = "image-lightbox image-lightbox--open";
+    const toolbar = document.createElement("div");
+    toolbar.className = "image-lightbox__toolbar";
+    lightbox.appendChild(toolbar);
+    document.body.appendChild(lightbox);
+    toolbar.getBoundingClientRect = () =>
+      ({ top: 650, bottom: 698, left: 0, right: 400, width: 400, height: 48, x: 0, y: 650, toJSON: () => ({}) }) as DOMRect;
+    const height = document.documentElement.clientHeight || window.innerHeight;
+    // The viewer is drawn over the compose bar; the toolbar is its own hit.
+    const original = document.elementFromPoint;
+    document.elementFromPoint = (_x: number, y: number) => (y < 700 ? toolbar : lightbox);
+    try {
+      showToast("Saving…");
+      const container = document.querySelector<HTMLElement>(".toast-container")!;
+      expect(container.style.getPropertyValue("--toast-bottom")).toBe(`${height - 650 + 8}px`);
+    } finally {
+      document.elementFromPoint = original;
+    }
+  });
+
+  it("ignores the toolbar of a closed image viewer", () => {
+    const lightbox = document.createElement("div");
+    lightbox.className = "image-lightbox";
+    const toolbar = document.createElement("div");
+    toolbar.className = "image-lightbox__toolbar";
+    lightbox.appendChild(toolbar);
+    document.body.appendChild(lightbox);
+    toolbar.getBoundingClientRect = () =>
+      ({ top: 650, bottom: 698, left: 0, right: 400, width: 400, height: 48, x: 0, y: 650, toJSON: () => ({}) }) as DOMRect;
+
+    showToast("hello");
+
+    const container = document.querySelector<HTMLElement>(".toast-container")!;
+    expect(container.style.getPropertyValue("--toast-bottom")).toBe("");
   });
 
   it("falls back to the stylesheet inset when no compose bar is showing", () => {

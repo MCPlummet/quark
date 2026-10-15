@@ -3212,6 +3212,12 @@ body.quark-mobile .attach-tray__remove {
 .image-lightbox {
   position: fixed;
   inset: 0;
+  /* The backdrop runs edge to edge, but the image and toolbar keep clear of
+     the system bars: on Android the app draws under the navigation bar
+     (edge-to-edge), which would otherwise sit on the toolbar and take its
+     taps. All four are 0 on desktop. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: var(--overlay-bg-dark);
   display: none;
   align-items: center;
