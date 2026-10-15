@@ -99,7 +99,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     # and prints the correct hash in its job summary, so a contributor without
     # Nix can fix it by copying a string. Locally: set to lib.fakeHash, rebuild,
     # copy the "got:" hash from the mismatch error.
-    hash = "sha256-8MOecinRFwm70YC2Rzvjabo9kMY4fmnfCGpUK4tHIvk=";
+    hash = "sha256-bi+QNwUGVWCX16tCgByb9muhVCV8FhP7CVtrdoElP7c=";
   };
 
   nativeBuildInputs = [
