@@ -1,0 +1,9 @@
+[env]
+# Read by the vendored swift-rs (src-tauri/vendor/swift-rs, carrying
+# Brendonovich/swift-rs#80): on Xcode 27 its runtime shim's @_cdecl exports
+# must be made global in exactly one Swift archive of the final link, and the
+# Tauri package is linked exactly once by every Tauri iOS app. Globalizing them
+# in more than one archive crashes Xcode 27's ld with duplicate atoms. Lives at
+# the repo root because cargo looks for config from its working directory
+# upward, and the iOS build runs it from both the root and src-tauri/gen/apple.
+SWIFT_RS_RUNTIME_ARCHIVE = "Tauri"
