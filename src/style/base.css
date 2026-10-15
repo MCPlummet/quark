@@ -3212,10 +3212,10 @@ body.quark-mobile .attach-tray__remove {
 .image-lightbox {
   position: fixed;
   inset: 0;
-  /* The backdrop runs edge to edge, but the image and toolbar keep clear of
-     the system bars: on Android the app draws under the navigation bar
-     (edge-to-edge), which would otherwise sit on the toolbar and take its
-     taps. All four are 0 on desktop. */
+  /* Like the other bottom-anchored surfaces: clear of the system bars for a
+     webview laid out under them. Quark's own shells lay it out between the
+     bars (MainActivity.applyWindowInsets on Android, WKWebView on iOS), so
+     these are 0 there, as on desktop. */
   padding: env(safe-area-inset-top) env(safe-area-inset-right)
     env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: var(--overlay-bg-dark);
