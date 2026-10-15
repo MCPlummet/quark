@@ -7238,16 +7238,26 @@ body.quark-mobile .settings-dialog__tab {
  * The `__body` collapses to a single pane. List view shows the (vertical) tab
  * rail full-width and hides the content; the `--detail` modifier flips it to
  * show one tab's content with a back button. All scoped under `__body` so the
- * room/space dialogs above are unaffected. */
+ * room/space dialogs above are unaffected.
+ *
+ * `__body` stays a flex container (a column here) rather than a block: the
+ * visible pane is then a flex item held to the panel's height, so its own
+ * overflow-y scrolls. As a block, `flex: 1; min-height: 0` on the pane meant
+ * nothing, it grew to its full content height, and `__body`'s overflow:hidden
+ * clipped everything past the screen — a long tab (Account's session list,
+ * #128) could not be scrolled at all. */
 body.quark-mobile .settings-dialog__body {
-  display: block;
+  flex-direction: column;
 }
 
 body.quark-mobile .settings-dialog__body .settings-dialog__tabs {
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
   border-right: none;
   overflow-x: visible;
+  overscroll-behavior: contain;
 }
 
 body.quark-mobile .settings-dialog__body .settings-dialog__tab {
@@ -7268,6 +7278,7 @@ body.quark-mobile .settings-dialog__panel--detail .settings-dialog__tabs {
 
 body.quark-mobile .settings-dialog__panel--detail .settings-dialog__content {
   display: block;
+  overscroll-behavior: contain;
 }
 
 body.quark-mobile .settings-dialog__panel--detail .settings-dialog__back {
