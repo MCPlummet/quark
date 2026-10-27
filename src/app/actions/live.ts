@@ -9,6 +9,7 @@
 import { AppState } from "../state.js";
 import type { TimelineEvent } from "../../ipc/types.js";
 import type { Timeline } from "../../ui/Timeline.js";
+import type { ThreadView } from "../../ui/ThreadView.js";
 
 import {
   getComponents,
@@ -22,6 +23,7 @@ import {
 } from "./context.js";
 import { appendRoomTimelineCache, bumpRoomActivity } from "./rooms.js";
 import { homeViewHandleMessage } from "./home.js";
+import { openThreadEvents } from "./threads.js";
 
 /**
  * Record a live event everywhere that tracks a room's recent history, whether
@@ -56,7 +58,7 @@ export function recordLiveEvent(roomId: string, event: TimelineEvent): void {
  * the same as "its room is open": a thread reply with its panel closed lands
  * nowhere, and the caller's toast is then the only sign it arrived (#89).
  */
-export function renderLiveEvent(event: TimelineEvent, timeline: Timeline): boolean {
+export function renderLiveEvent(event: TimelineEvent, timeline: Timeline, threadView: ThreadView): boolean {
   // Deduplicate: skip events already in the state cache (e.g. initial sync
   // replay of messages already loaded via getTimeline, an attachment's local
   // echo followed by its sync echo, or a second client emitting the same event
@@ -83,19 +85,21 @@ export function renderLiveEvent(event: TimelineEvent, timeline: Timeline): boole
     let rendered = false;
     if (openThreadId !== null && event.thread_root === openThreadId) {
       // Map with the same converter the thread-open path uses, so a reply that
-      // arrives live renders with its media (image/video/sticker/file) instead
-      // of a bare filename line.
-      timeline.appendInlineReply(timelineEventToThreadMessage(event));
-      // …and resolve its mxc:// media into the panel, mirroring what
+      // arrives live renders with its media (image/video/sticker/file) and its
+      // in-thread reply banner instead of a bare line.
+      threadView.appendReply(
+        timelineEventToThreadMessage(event, openThreadEvents(), AppState.get("currentTimeline")),
+      );
+      // …and resolve its mxc:// media into the sheet, mirroring what
       // openThread() does for the replies it loads.
       downloadSyncMessageImage(event, {
-        updateMessageMedia: (id, url) => timeline.updateInlineThreadMedia(id, url),
+        updateMessageMedia: (id, url) => threadView.updateMessageMedia(id, url),
       });
       // Inline custom emoji in the reply (or its caption) need the same
-      // treatment as the main-timeline append below — the panel renders into
-      // the timeline's list, so one resolver covers both.
+      // treatment as the main-timeline append below; the sheet is its own
+      // emoji host.
       if (event.formatted_body || event.caption_formatted) {
-        resolveInlineEmojiForTimeline(timeline);
+        resolveInlineEmojiForTimeline(threadView);
       }
       rendered = true;
     }
@@ -143,5 +147,6 @@ export function renderLiveEvent(event: TimelineEvent, timeline: Timeline): boole
 export function showSentEvent(roomId: string, event: TimelineEvent): void {
   recordLiveEvent(roomId, event);
   if (roomId !== AppState.get("currentRoomId") || isInContextView()) return;
-  renderLiveEvent(event, getComponents().timeline);
+  const { timeline, threadView } = getComponents();
+  renderLiveEvent(event, timeline, threadView);
 }

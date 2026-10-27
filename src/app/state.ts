@@ -6,7 +6,10 @@ import type { SendKeyBehavior } from "../ipc/app_config.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type ActivePanel = "roomlist" | "timeline" | "spaces" | "members" | "home";
+/** `"thread"` is the open thread's sheet. It is not in the h/l traversal
+ *  order: while a thread is open it owns the keys, and closing it hands focus
+ *  back to the timeline. */
+export type ActivePanel = "roomlist" | "timeline" | "spaces" | "members" | "home" | "thread";
 
 /**
  * Text-selection submode — orthogonal to vim Normal/Visual modes.
@@ -73,6 +76,9 @@ interface PanelNavCallbacks {
   focusActive?: () => void;
   /** Clear selection / cancel reply / close thread for this panel. No-op if absent. */
   close?: () => void;
+  /** The message this panel has selected, for message actions (r, e, y, dd).
+   *  Absent on panels that don't hold messages. */
+  selectedMessageId?: () => string | null;
 }
 
 // ── AppState class ───────────────────────────────────────────────────────────
@@ -187,6 +193,16 @@ class AppStateManager {
 
   close(): void {
     this._panelNavCallbacks.get(this._state.activePanel)?.close?.();
+  }
+
+  /**
+   * The message selected in the active panel, `null` if it holds messages but
+   * none is selected, or `undefined` if the active panel holds no messages at
+   * all (the caller then falls back to the timeline's selection, so `r` from
+   * the room list still replies to the message selected in the timeline).
+   */
+  selectedMessageId(): string | null | undefined {
+    return this._panelNavCallbacks.get(this._state.activePanel)?.selectedMessageId?.();
   }
 
   // ── User status cache ─────────────────────────────────────────────────────

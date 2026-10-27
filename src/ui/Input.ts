@@ -165,6 +165,8 @@ export class Input {
   private _fileInputEl: HTMLInputElement | null = null;
   private _attachProgress: AttachmentProgressList;
   private _vimMode: boolean = true;
+  /** A thread is open, so what is typed here is sent into it. */
+  private _threadMode = false;
 
   constructor() {
     this._el = document.createElement("div");
@@ -781,6 +783,13 @@ export class Input {
     return this._tray.remove(id);
   }
 
+  /** Mark the composer as sending into the open thread (placeholder hint). */
+  setThreadMode(active: boolean): void {
+    if (this._threadMode === active) return;
+    this._threadMode = active;
+    this._refreshPlaceholder();
+  }
+
   /** Clear the whole tray. Returns true if there was anything to clear. */
   discardStagedAttachments(): boolean {
     return this._tray.clear();
@@ -797,6 +806,8 @@ export class Input {
       this._fieldEl.placeholder = "command…";
     } else if (this.hasStagedAttachments()) {
       this._fieldEl.placeholder = "Add a caption…";
+    } else if (this._threadMode) {
+      this._fieldEl.placeholder = "reply in thread…";
     } else {
       this._fieldEl.placeholder = "…";
     }

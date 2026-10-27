@@ -77,7 +77,6 @@
   /* ── Layout ──────────────────────────────────────────────────────────── */
   --space-strip-width: 64px;
   --room-list-width: 220px;
-  --thread-view-width: 300px;
   --member-list-width: 200px;
   --status-bar-height: 24px;
 
@@ -111,6 +110,10 @@
   /* ── Overlays & shadows ──────────────────────────────────────────────── */
   --overlay-bg: rgba(0, 0, 0, 0.65);
   --overlay-bg-dark: rgba(0, 0, 0, 0.88);
+  /* Wash over the room while a thread is open. Mixed from the background, not
+     black, so it greys the room back toward the theme's own surface on light
+     and dark themes alike. */
+  --thread-focus-dim: color-mix(in srgb, var(--bg) 72%, transparent);
   --shadow-color: rgba(0, 0, 0, 0.6);
 
   /* ── Hover / surface tints (white-on-dark) ───────────────────────────── */

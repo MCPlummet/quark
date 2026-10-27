@@ -98,8 +98,7 @@ body {
    because scrollbar-gutter: stable reserves the gutter even while hidden. */
 body.quark-modal-open .space-strip,
 body.quark-modal-open .room-list__scroll,
-body.quark-modal-open .thread-view__timeline,
-body.quark-modal-open .thread-inline__timeline,
+body.quark-modal-open .thread-view__scroll,
 body.quark-modal-open .member-list__scroll,
 body.quark-modal-open .timeline,
 body.quark-modal-open .input-bar__field {
@@ -131,18 +130,9 @@ body.quark-modal-open .input-bar__field {
   overflow: hidden;
 }
 
-/* Thread view open: add a 4th column */
-.quark-layout--thread-open {
-  grid-template-columns: var(--space-strip-width) var(--room-list-width) 1fr var(--thread-view-width);
-}
-
-/* Member list open: add a 4th column (or 5th when thread is also open) */
+/* Member list open: add a 4th column */
 .quark-layout--member-list-open {
   grid-template-columns: var(--space-strip-width) var(--room-list-width) 1fr var(--member-list-width);
-}
-
-.quark-layout--thread-open.quark-layout--member-list-open {
-  grid-template-columns: var(--space-strip-width) var(--room-list-width) 1fr var(--thread-view-width) var(--member-list-width);
 }
 
 /* Home view active: the floating-DM canvas replaces every column except the
@@ -153,7 +143,6 @@ body.quark-modal-open .input-bar__field {
 
 .quark-layout--home .room-list,
 .quark-layout--home .content-area,
-.quark-layout--home .thread-view,
 .quark-layout--home .member-list {
   display: none;
 }
@@ -462,52 +451,109 @@ body.quark-mobile .room-list__header-btn {
   background-color: var(--presence-offline, #555);
 }
 
-/* ── Thread view sidebar (column 4, toggled via .quark-layout--thread-open) ── */
-
+/* ── Thread sheet ───────────────────────────────────────────────────────────
+ *
+ * The open thread, layered over the timeline region. ThreadView is mounted in
+ * .timeline-wrap beside the scroller — never inside it, where its rows used to
+ * confuse the windowed renderer (#132). The backdrop greys out the room
+ * timeline and takes its pointer events, so nothing behind the thread can be
+ * scrolled or clicked; clicking it closes the thread. The sheet sits on the
+ * compose box, aligned with the banner and the box below it, which stay live
+ * and send into the thread. The rest of the layout is dimmed by
+ * .quark-layout--thread-focus (below).
+ */
 .thread-view {
-  grid-column: 4;
+  position: absolute;
+  inset: 0;
+  /* Above the timeline's own overlays: loading indicator (1), jump button (10). */
+  z-index: 15;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  background-color: var(--bg);
-  border-left: var(--border-width) solid var(--msg-thread-indicator);
-  min-width: 0;
-  position: relative;
+  justify-content: flex-end;
 }
 
-.quark-layout:not(.quark-layout--thread-open) .thread-view {
-  width: 0;
-  overflow: hidden;
-  border: none;
+.thread-view__backdrop {
+  position: absolute;
+  inset: 0;
+  background-color: var(--thread-focus-dim);
+  cursor: pointer;
+  animation: thread-view-fade var(--transition-speed) ease-out;
+}
+
+.thread-view__sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Leave some of the dimmed room in view above a long thread: it is context,
+     and the click target that closes the thread. */
+  max-height: max(60%, calc(100% - 96px));
+  /* Same insets as .reply-preview-bar and the compose box, so the three read
+     as one column: thread → "replying in thread" → where you type. */
+  margin: 0 20px 0 44px;
+  background-color: var(--bg);
+  border: var(--border-width) solid color-mix(in srgb, var(--msg-thread-indicator) 55%, var(--border-color));
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  box-shadow: 0 -8px 24px var(--shadow-color);
+  animation: thread-view-rise 160ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+@keyframes thread-view-fade {
+  from { opacity: 0; }
+}
+
+@keyframes thread-view-rise {
+  from { opacity: 0; transform: translateY(12px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-view__backdrop,
+  .thread-view__sheet {
+    animation: none;
+  }
 }
 
 .thread-view__header {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
-  border-bottom: var(--border-width) solid var(--border-color);
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   flex-shrink: 0;
+  font-family: var(--font-family);
 }
 
 .thread-view__title {
-  flex: 1;
   color: var(--msg-thread-indicator);
   font-size: calc(var(--font-size) - 1px);
   font-weight: bold;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.thread-view__count {
+  color: var(--msg-timestamp);
+  font-size: calc(var(--font-size) - 2px);
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-view__hint {
+  color: var(--msg-timestamp);
+  font-size: calc(var(--font-size) - 3px);
+  flex-shrink: 0;
 }
 
 .thread-view__close {
   background: none;
   border: none;
-  color: var(--roomlist-muted);
+  color: var(--msg-system);
   font-family: var(--font-family);
   font-size: calc(var(--font-size) - 2px);
   cursor: pointer;
-  padding: 0;
-  line-height: 1;
+  padding: 0 0 0 4px;
+  flex-shrink: 0;
   transition: color var(--transition-speed);
 }
 
@@ -517,96 +563,76 @@ body.quark-mobile .room-list__header-btn {
   outline: none;
 }
 
-/* ── Thread root message ─────────────────────────────────────────────────── */
-
-.thread-view__root {
-  flex-shrink: 0;
-  padding: 8px 10px;
-  background-color: color-mix(in srgb, var(--msg-thread-indicator) 6%, transparent);
-  border-bottom: var(--border-width) solid var(--border-color);
-  border-left: 3px solid var(--msg-thread-indicator);
-  font-family: var(--font-family-messages);
+/* Root, divider and replies scroll together; the header stays put. */
+.thread-view__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* A fling that reaches the end stops here — nothing behind may scroll. */
+  overscroll-behavior: contain;
+  padding-bottom: 6px;
 }
 
-.thread-view__root-header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 4px;
+.thread-view__root .thread-view__message {
+  border-left: 2px solid var(--msg-thread-indicator);
+  background-color: color-mix(in srgb, var(--msg-thread-indicator) 5%, transparent);
+  padding-top: 6px;
+  padding-bottom: 8px;
 }
 
-.thread-view__root-sender {
-  color: var(--msg-thread-indicator);
+.thread-view__divider {
+  color: var(--msg-timestamp);
   font-family: var(--font-family);
-  font-size: calc(var(--font-size) - 1px);
-  font-weight: bold;
-  flex-shrink: 0;
+  font-size: calc(var(--font-size) - 3px);
+  letter-spacing: 0.05em;
+  text-align: center;
+  padding: 4px 0 2px;
 }
 
-.thread-view__root-timestamp {
+.thread-view__status {
+  padding: 10px;
   color: var(--msg-timestamp);
   font-family: var(--font-family);
   font-size: calc(var(--font-size) - 2px);
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.thread-view__root-body {
-  color: var(--fg);
-  font-size: calc(var(--font-size) - 1px);
-  word-break: break-word;
-  white-space: pre-wrap;
-  line-height: var(--line-height);
-  opacity: 0.85;
-}
-
-/* ── Replies divider ────────────────────────────────────────────────────── */
-
-.thread-view__divider {
+  font-style: italic;
   text-align: center;
-  color: var(--roomlist-muted);
-  font-family: var(--font-family);
-  font-size: calc(var(--font-size) - 3px);
-  letter-spacing: 0.1em;
-  padding: 4px 0;
-  flex-shrink: 0;
-  user-select: none;
-}
-
-/* ── Thread reply timeline ──────────────────────────────────────────────── */
-
-.thread-view__timeline {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 4px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  min-height: 0;
 }
 
 .thread-view__message {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 5px 10px 7px;
-  outline: none;
-  transition: background-color var(--transition-speed);
+  gap: 1px;
+  padding: 4px 10px 6px;
   font-family: var(--font-family-messages);
+  transition: background-color var(--transition-speed);
 }
 
-.thread-view__message + .thread-view__message {
-  border-top: 1px dashed color-mix(in srgb, var(--border-color) 60%, transparent);
+.thread-view__timeline .thread-view__message + .thread-view__message {
+  border-top: 1px dashed color-mix(in srgb, var(--border-color) 55%, transparent);
 }
 
 .thread-view__message:hover {
   background-color: var(--surface-dim);
 }
 
-.thread-view__message:focus {
+.thread-view__message:hover .message__actions {
+  display: flex;
+}
+
+.thread-view__message--own {
+  background-color: color-mix(in srgb, var(--msg-own) 3%, transparent);
+}
+
+.thread-view__message--selected,
+.thread-view__root .thread-view__message--selected {
   background-color: var(--roomlist-active-bg);
-  box-shadow: inset 3px 0 0 var(--focus-color);
+  box-shadow: inset 3px 0 0 var(--msg-thread-indicator);
+}
+
+.thread-view__message .reply-preview {
+  margin-bottom: 2px;
 }
 
 .thread-view__message-header {
@@ -644,246 +670,42 @@ body.quark-mobile .room-list__header-btn {
   line-height: var(--line-height);
 }
 
-.thread-view__message--own {
-  background-color: color-mix(in srgb, var(--msg-own) 3%, transparent);
-}
-
 .thread-view__message-image,
 .thread-view__message-sticker {
   max-width: 100%;
   max-height: 160px;
   object-fit: contain;
   display: block;
-  border-radius: 4px;
-  margin-top: 4px;
-}
-
-/* ── Thread reply input bar ─────────────────────────────────────────────── */
-
-.thread-view__input-bar {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  flex-shrink: 0;
-  padding: 8px;
-  border-top: var(--border-width) solid var(--border-color);
-  background-color: var(--bg);
-}
-
-.thread-view__prompt {
-  color: var(--msg-thread-indicator);
-  font-family: var(--font-family);
-  font-size: calc(var(--font-size) - 1px);
-  font-weight: bold;
-  padding: 6px 6px 6px 4px;
-  flex-shrink: 0;
-  user-select: none;
-}
-
-.thread-view__input {
-  flex: 1;
-  background: transparent;
-  border: var(--border-width) solid color-mix(in srgb, var(--border-color) 70%, var(--msg-thread-indicator) 30%);
-  border-radius: 6px;
-  color: var(--fg);
-  font-family: var(--font-family-messages);
-  font-size: calc(var(--font-size) - 1px);
-  line-height: var(--line-height);
-  padding: 5px 10px;
-  outline: none;
-  caret-color: var(--cursor);
-  transition: border-color var(--transition-speed), box-shadow var(--transition-speed);
-}
-
-.thread-view__input::placeholder {
-  color: var(--roomlist-muted);
-}
-
-.thread-view__input:focus {
-  border-color: color-mix(in srgb, var(--msg-thread-indicator) 60%, var(--border-color));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--msg-thread-indicator) 15%, transparent);
-}
-
-/* ── Inline thread expansion (opens in-timeline below the root message) ──── */
-
-/*
- * Animation: grid-template-rows 0fr → 1fr expands the inner content
- * from zero height to its natural height without needing a fixed max-height.
- * The inner div must have overflow:hidden and min-height:0 for this to work.
- */
-.thread-inline {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 220ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  /* Indent to sit under message content (past the avatar column) */
-  margin-left: 40px;
-  /* Left accent border matching the thread color */
-  border-left: 2px solid var(--msg-thread-indicator);
-  border-radius: 0 0 0 3px;
-  background-color: color-mix(in srgb, var(--msg-thread-indicator) 4%, var(--bg));
-  /* Horizontal margin to align with message group box */
-  margin-right: 0;
-  margin-bottom: 0;
-}
-
-.thread-inline--open {
-  grid-template-rows: 1fr;
-  margin-bottom: 12px;
-}
-
-.thread-inline__inner {
-  overflow: hidden;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  /* Cap height so very long threads don't overwhelm the viewport */
-  max-height: 360px;
-}
-
-/* ── Header ─────────────────────────────────────────────────────────────── */
-
-.thread-inline__header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
-  flex-shrink: 0;
-}
-
-.thread-inline__title {
-  color: var(--msg-thread-indicator);
-  font-family: var(--font-family);
-  font-size: calc(var(--font-size) - 2px);
-  font-weight: bold;
-  letter-spacing: 0.06em;
-  flex-shrink: 0;
-}
-
-.thread-inline__count {
-  color: var(--roomlist-muted);
-  font-family: var(--font-family);
-  font-size: calc(var(--font-size) - 3px);
-  flex: 1;
-}
-
-.thread-inline__close {
-  background: none;
-  border: none;
-  color: var(--roomlist-muted);
-  font-family: var(--font-family);
-  font-size: calc(var(--font-size) - 3px);
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-  transition: color var(--transition-speed);
-}
-
-.thread-inline__close:hover,
-.thread-inline__close:focus {
-  color: var(--accent-error);
-  outline: none;
-}
-
-/* ── Reply list ─────────────────────────────────────────────────────────── */
-
-.thread-inline__timeline {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 4px 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.thread-inline__message {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 4px 10px 6px;
-  font-family: var(--font-family-messages);
-  transition: background-color var(--transition-speed);
-}
-
-.thread-inline__message + .thread-inline__message {
-  border-top: 1px dashed color-mix(in srgb, var(--border-color) 55%, transparent);
-}
-
-.thread-inline__message:hover {
-  background-color: var(--surface-dim);
-}
-
-.thread-inline__message--own {
-  background-color: color-mix(in srgb, var(--msg-own) 3%, transparent);
-}
-
-.thread-inline__message--selected {
-  background-color: var(--roomlist-active-bg);
-  box-shadow: inset 3px 0 0 var(--msg-thread-indicator);
-}
-
-.thread-inline__message-header {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.thread-inline__message-sender {
-  color: var(--msg-other);
-  font-family: var(--font-family);
-  font-size: calc(var(--font-size) - 2px);
-  font-weight: bold;
-  flex-shrink: 0;
-}
-
-.thread-inline__message-sender--own {
-  color: var(--msg-own);
-  text-shadow: 0 0 var(--glow-radius) var(--glow-color);
-}
-
-.thread-inline__message-timestamp {
-  color: var(--msg-timestamp);
-  font-family: var(--font-family);
-  font-size: calc(var(--font-size) - 3px);
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.thread-inline__message-body {
-  color: var(--fg);
-  font-size: calc(var(--font-size) - 1px);
-  word-break: break-word;
-  white-space: pre-wrap;
-  line-height: var(--line-height);
-}
-
-.thread-inline__message-image,
-.thread-inline__message-sticker {
-  max-width: 100%;
-  max-height: 120px;
-  object-fit: contain;
-  display: block;
   border-radius: 3px;
   margin-top: 3px;
+  cursor: zoom-in;
 }
 
-/* ── Member list sidebar (column 4, or 5 when thread view is also open) */
+/* While a thread is open everything but the sheet, its banner and the
+ * composer is greyed back, and the room timeline is frozen: the backdrop
+ * already blocks the pointer, and with no overflow there is nothing for a key
+ * or a stray gesture to scroll. Programmatic writes still apply, so new
+ * messages keep the room pinned to its tail underneath. The side columns stay
+ * clickable — they are navigation, and navigating away closes the thread. */
+.quark-layout--thread-focus .space-strip,
+.quark-layout--thread-focus .room-list,
+.quark-layout--thread-focus .room-header,
+.quark-layout--thread-focus .member-list,
+.quark-layout--thread-focus .mobile-top-bar {
+  opacity: 0.45;
+  transition: opacity var(--transition-speed);
+}
+
+.quark-layout--thread-focus .timeline {
+  overflow: hidden;
+}
+
+/* ── Member list sidebar (column 4) */
 
 .member-list {
   grid-column: 4;
   position: relative;
   border-left: var(--border-width) solid var(--border-color);
-}
-
-.quark-layout--thread-open .member-list {
-  grid-column: 5;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background-color: var(--bg);
-  border-left: var(--border-width) solid var(--border-color);
-  min-width: 0;
 }
 
 /* When the layout class is absent the element still exists in the DOM but
@@ -1551,12 +1373,8 @@ body.quark-mobile .room-list__header-btn {
    the left. Restore indentation in every container that renders message HTML. */
 .message__body ul,
 .message__body ol,
-.thread-view__root-body ul,
-.thread-view__root-body ol,
 .thread-view__message-body ul,
-.thread-view__message-body ol,
-.thread-inline__message-body ul,
-.thread-inline__message-body ol {
+.thread-view__message-body ol {
   padding-left: 2em;
 }
 
@@ -1564,9 +1382,7 @@ body.quark-mobile .room-list__header-btn {
    give them a quote bar and indent in every container that renders message HTML.
    mx-reply's quote is stripped before render, so this only hits real quotes. */
 .message__body blockquote,
-.thread-view__root-body blockquote,
-.thread-view__message-body blockquote,
-.thread-inline__message-body blockquote {
+.thread-view__message-body blockquote {
   margin: 2px 0;
   padding-left: 0.8em;
   border-left: 2px solid var(--fg-dim, currentColor);
@@ -4568,8 +4384,6 @@ body.quark-mobile .profile-edit-dialog__panel {
  * anchor rendered by some future path still reads as a link. */
 .message__link,
 .message__body a[href],
-.thread-inline__message-body a[href],
-.thread-view__root-body a[href],
 .thread-view__message-body a[href] {
   color: var(--accent-link, var(--accent-secondary, #00aaff));
   text-decoration: underline;
@@ -4579,8 +4393,6 @@ body.quark-mobile .profile-edit-dialog__panel {
 
 .message__link:hover,
 .message__body a[href]:hover,
-.thread-inline__message-body a[href]:hover,
-.thread-view__root-body a[href]:hover,
 .thread-view__message-body a[href]:hover {
   opacity: 0.8;
 }
@@ -6721,9 +6533,7 @@ body.quark-mobile .dialog-close-btn {
 
 /* Mobile layout: single column timeline, space + room list become a drawer. */
 body.quark-mobile .quark-layout,
-body.quark-mobile .quark-layout--thread-open,
-body.quark-mobile .quark-layout--member-list-open,
-body.quark-mobile .quark-layout--thread-open.quark-layout--member-list-open {
+body.quark-mobile .quark-layout--member-list-open {
   grid-template-columns: 1fr;
   position: relative;
 }
@@ -6949,15 +6759,6 @@ body.quark-mobile .shortcode-preview {
   overscroll-behavior: contain;
 }
 
-/* The thread overlay's compose row is a third: ThreadView builds its own, so
- * it is covered by neither the wrap's rules nor its guard. Nothing in this one
- * scrolls — the reply field is a single line — so unlike the main composer the
- * whole row can take `none`: there is no descendant `pan-y` to intersect away.
- * ThreadView's guard backs it up on the surfaces WebKit hands over regardless. */
-body.quark-mobile .thread-view__input-bar {
-  touch-action: none;
-}
-
 /* Larger touch targets in the room list (drawer). */
 body.quark-mobile .room-list__item {
   padding: 12px 12px;
@@ -6970,7 +6771,6 @@ body.quark-mobile .room-list__item {
  * explicit so the compose / login fields render predictably across versions. */
 body.quark-mobile .input-bar__field,
 body.quark-mobile .login-screen__field-input,
-body.quark-mobile .thread-view__input,
 body.quark-mobile input[type="text"],
 body.quark-mobile input[type="url"],
 body.quark-mobile input[type="email"],
@@ -7045,23 +6845,29 @@ body.quark-mobile .input-bar__action-btn {
   padding: 0 4px;
 }
 
-/* Thread view becomes a full-screen overlay on mobile *when toggled on*. The
- * selector includes the layout's --open class so it stays hidden by default —
- * without it, the !important width would defeat the desktop
- * ":not(--open) { width: 0 }" rule and the panel would always cover the timeline. */
-body.quark-mobile .quark-layout--thread-open .thread-view {
-  position: fixed;
-  inset: 0;
-  width: 100% !important;
-  z-index: 12;
-  /* Mobile overlays float above the timeline — they need an opaque
-   * background or the timeline shows through. The desktop variant gets a
-   * bg from the thread-open compound selector. */
-  background-color: var(--bg);
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
+/* The thread sheet on mobile: full width, near full height, a bottom sheet
+ * over the timeline with a strip of the dimmed room left above it to tap
+ * closed. The composer below is the main one, so its pan guard covers it. */
+body.quark-mobile .thread-view__sheet {
+  margin: 0;
+  max-height: calc(100% - 40px);
+  border-left: none;
+  border-right: none;
+  border-radius: 10px 10px 0 0;
+}
+
+body.quark-mobile .thread-view__scroll {
+  touch-action: pan-y;
+}
+
+/* No hover on touch; long press opens the message's action sheet instead. */
+body.quark-mobile .thread-view__message:hover .message__actions {
+  display: none;
+}
+
+/* The key hint means nothing without a keyboard. */
+body.quark-mobile .thread-view__hint {
+  display: none;
 }
 
 /* Member list becomes a right-edge slide-over on mobile (#8), mirroring the

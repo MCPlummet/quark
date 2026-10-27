@@ -124,7 +124,7 @@ function _scheduleRoomListRefresh(): void {
  * Returns a cleanup function.
  */
 export async function startSync(components: AppComponents): Promise<() => void> {
-  const { timeline, roomList, statusBar, typingIndicator } = components;
+  const { timeline, threadView, roomList, statusBar, typingIndicator } = components;
 
   // Tear down any listeners from a previous startSync() before registering a new
   // set. Otherwise a second call (e.g. logout → login in the same session) would
@@ -157,7 +157,7 @@ export async function startSync(components: AppComponents): Promise<() => void> 
       let isRendered = false;
 
       if (isCurrentRoomLive) {
-        isRendered = renderLiveEvent(payload.event, timeline);
+        isRendered = renderLiveEvent(payload.event, timeline, threadView);
       } else if (!skipForContextView) {
         // Update unread count on room list item. Skip this for the current
         // room when we're in context view — the user is still focused on it,

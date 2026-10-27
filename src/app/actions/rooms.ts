@@ -66,7 +66,7 @@ import {
   setContextView,
   setMediaCacheLimit,
 } from "./context.js";
-import { closeThread, openThread } from "./threads.js";
+import { closeThread, openThread, openThreadEvents } from "./threads.js";
 import { cancelReply, cancelEdit } from "./messages.js";
 import { openRoomSettings } from "./dialogs.js";
 import { openProfileForUser } from "./profile.js";
@@ -689,7 +689,7 @@ export async function jumpToMessage(eventId: string): Promise<void> {
   // the loaded buffer first, then against the fetched context below.
   const loaded = AppState.get("currentTimeline").find((e) => e.event_id === eventId);
   if (loaded?.thread_root) {
-    await openThread(loaded.thread_root);
+    await openThread(loaded.thread_root, { focusEventId: eventId });
     return;
   }
 
@@ -699,7 +699,7 @@ export async function jumpToMessage(eventId: string): Promise<void> {
     if (roomId !== AppState.get("currentRoomId")) return;
     const target = ctx.events.find((e) => e.event_id === eventId);
     if (target?.thread_root) {
-      await openThread(target.thread_root);
+      await openThread(target.thread_root, { focusEventId: eventId });
       return;
     }
     if (!target) {
@@ -737,11 +737,12 @@ let _replyFetchesActive = 0;
 export function resolveReplyPreview(eventId: string): void {
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
-  const { timeline } = getComponents();
+  const { timeline, threadView } = getComponents();
 
-  const local = replyPreviewFor(eventId, AppState.get("currentTimeline"));
+  const local = replyPreviewFor(eventId, AppState.get("currentTimeline"), openThreadEvents());
   if (local.state !== "loading") {
     timeline.updateReplyPreview(eventId, local);
+    threadView?.updateReplyPreview(eventId, local);
     return;
   }
   if (_replyFetchesInFlight.has(eventId)) return;
@@ -779,6 +780,7 @@ async function _fetchReplyPreview(roomId: string, eventId: string): Promise<void
   // Event IDs are unique across rooms, so a room switch in the meantime just
   // means nothing in the timeline matches.
   getComponents().timeline.updateReplyPreview(eventId, preview);
+  getComponents().threadView?.updateReplyPreview(eventId, preview);
 }
 
 /**

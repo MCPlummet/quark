@@ -26,7 +26,7 @@ import { AppState } from "../state.js";
 
 const ROOM = "!room:x";
 const appendMessage = vi.fn();
-const appendInlineReply = vi.fn();
+const appendReply = vi.fn();
 const incrementThreadReplyCount = vi.fn();
 // The DOM as the timeline would report it: whatever has been appended.
 const rendered = new Set<string>();
@@ -38,13 +38,13 @@ function makeTimeline() {
       appendMessage(msg);
     },
     getMessageElementById: (id: string) => (rendered.has(id) ? ({} as HTMLElement) : null),
-    appendInlineReply,
     incrementThreadReplyCount,
     updateMessageBody: vi.fn(),
     updateMessageMedia: vi.fn(),
-    updateInlineThreadMedia: vi.fn(),
   };
 }
+
+const threadView = { appendReply, updateMessageMedia: vi.fn() };
 
 function image(over: Partial<TimelineEvent> = {}): TimelineEvent {
   return {
@@ -69,7 +69,7 @@ function image(over: Partial<TimelineEvent> = {}): TimelineEvent {
 beforeEach(() => {
   vi.clearAllMocks();
   rendered.clear();
-  setComponents({ timeline: makeTimeline() } as unknown as AppComponents);
+  setComponents({ timeline: makeTimeline(), threadView } as unknown as AppComponents);
   AppState.patch({
     currentRoomId: ROOM,
     threadRootEventId: null,
@@ -90,14 +90,14 @@ describe("showSentEvent (#112)", () => {
 
   it("is not painted a second time when its sync echo arrives", () => {
     showSentEvent(ROOM, image());
-    renderLiveEvent(image(), getComponents().timeline);
+    renderLiveEvent(image(), getComponents().timeline, getComponents().threadView);
 
     expect(appendMessage).toHaveBeenCalledTimes(1);
     expect(AppState.get("currentTimeline")).toHaveLength(1);
   });
 
   it("is not painted a second time when sync got there first", () => {
-    renderLiveEvent(image(), getComponents().timeline);
+    renderLiveEvent(image(), getComponents().timeline, getComponents().threadView);
     showSentEvent(ROOM, image());
 
     expect(appendMessage).toHaveBeenCalledTimes(1);
@@ -127,7 +127,7 @@ describe("showSentEvent (#112)", () => {
     showSentEvent(ROOM, image({ thread_root: "$root:x" }));
 
     expect(appendMessage).not.toHaveBeenCalled();
-    expect(appendInlineReply).toHaveBeenCalledTimes(1);
+    expect(appendReply).toHaveBeenCalledTimes(1);
     expect(incrementThreadReplyCount).toHaveBeenCalledWith("$root:x");
   });
 });

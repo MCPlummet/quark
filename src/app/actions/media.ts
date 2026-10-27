@@ -36,7 +36,7 @@ import { withSniffedType } from "../file_type.js";
 import { showSentEvent } from "./live.js";
 import { openQuickReactPicker } from "./reactions.js";
 import { startReply, cancelReply } from "./messages.js";
-import { openThread } from "./threads.js";
+import { openThread, findLoadedEvent, isInOpenThread } from "./threads.js";
 import { openProfileForUser } from "./profile.js";
 import { saveMedia } from "../media_save.js";
 
@@ -281,16 +281,12 @@ export function currentAttachmentTarget(): (MessageTarget & { roomId: string }) 
  * thread makes that relation point at an event the thread does not contain.
  *
  * Nothing forced the question before #78, because media carried no relation at
- * all. Now it does, and the two can be armed at once without the composer
- * showing it: `openThread` replaces the reply banner with the thread banner
- * (`ReplyPreview.showThread`), so an armed reply survives the swap invisibly.
- * The text path answers this by dropping the reply outright (`sendMessage`
- * hands off to `sendThreadReply`); media keeps the ones that are genuinely
- * in-thread and drops the rest.
- *
- * A parent that isn't in `currentTimeline` is treated as out of thread: the
- * thread's own replies are loaded separately, so absence is no proof either
- * way, and the safe reading is the one that can't misattribute the reply.
+ * all. Since #131 the reply and thread actions keep the two consistent — a
+ * reply to a message outside the open thread closes the thread, and opening a
+ * thread disarms a room reply — so this is a backstop rather than the rule.
+ * Membership is asked of the thread itself (`isInOpenThread`), which knows the
+ * replies loaded with it; the room buffer alone never held those, so an
+ * in-thread reply to one of them used to be dropped from the relation.
  */
 function replyBelongsToThread(
   replyToEventId: string | undefined,
@@ -298,9 +294,7 @@ function replyBelongsToThread(
 ): boolean {
   if (!replyToEventId) return false;
   if (!threadRootEventId) return true;
-  if (replyToEventId === threadRootEventId) return true;
-  const parent = AppState.get("currentTimeline").find((e) => e.event_id === replyToEventId);
-  return parent?.thread_root === threadRootEventId;
+  return isInOpenThread(replyToEventId);
 }
 
 /**
@@ -506,8 +500,9 @@ export function setupMessageActionHandlers(): void {
   document.addEventListener("quark:msg-reply" as keyof DocumentEventMap, (e: Event) => {
     const { eventId } = (e as CustomEvent<{ eventId: string }>).detail;
     if (!eventId) return;
-    const events = AppState.get("currentTimeline");
-    const evt = events.find((ev) => ev.event_id === eventId);
+    // The room buffer or the open thread — the thread sheet's rows bubble this
+    // event too, and their events were never in the buffer.
+    const evt = findLoadedEvent(eventId);
     if (evt) {
       const { input } = getComponents();
       startReply(eventId, evt.sender, evt.body.slice(0, 80));
