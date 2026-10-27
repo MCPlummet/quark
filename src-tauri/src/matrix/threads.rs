@@ -200,13 +200,21 @@ fn belongs_to_thread<C>(
     matches!(relates_to, Some(Relation::Thread(t)) if t.event_id == root_id)
 }
 
-/// Send a reply in a thread.
+/// Send a message into a thread.
+///
+/// `in_reply_to` quotes one of the thread's own messages: the event then
+/// carries it as a real reply (`is_falling_back: false`) inside the `m.thread`
+/// relation. Without it the message is a plain thread message, whose
+/// `m.in_reply_to` is only the fallback pointer for thread-unaware clients.
+/// This used to accept no reply target at all, so a reply typed inside a thread
+/// lost its quote (#131).
 pub async fn send_thread_reply(
     client: &Client,
     room_id: &str,
     thread_root_event_id: &str,
     body: &str,
     formatted_body: Option<&str>,
+    in_reply_to: Option<&str>,
 ) -> Result<String, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let root_id = EventId::parse(thread_root_event_id)
@@ -227,7 +235,7 @@ pub async fn send_thread_reply(
     // would drift.
     let mut thread_content = content;
     thread_content.relates_to =
-        crate::matrix::relations::build_relation(Some(root_id.as_str()), None)?;
+        crate::matrix::relations::build_relation(Some(root_id.as_str()), in_reply_to)?;
 
     let response = room
         .send(thread_content)
