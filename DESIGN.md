@@ -1349,7 +1349,7 @@ alongside `openExternalUrl` opened every link twice.
   render as a bare filename line.
 - Hovering a message reveals the exact send time (HH:MM:SS) in the action bar;
   its tooltip (and the header timestamps') shows the full localized date
-- Inline video playback — `m.video` plays inline and seekable: a loopback HTTP server (Range requests) on Linux/WebKitGTK, the asset protocol on macOS/Windows/iOS; graceful fallback to the external player on decode failure
+- Inline video playback — `m.video` plays inline and seekable: a loopback HTTP server (Range requests, random path token) on Linux/WebKitGTK and Android, the asset protocol on macOS/Windows/iOS; graceful fallback to the external player on decode failure. Android can't use the asset protocol: its WebView serves only the first range of an intercepted response, so every follow-up range request fails and the player spins until it gives up (#130). Release builds refuse cleartext except to `127.0.0.1` (`res/xml/network_security_config.xml`); debug builds override that to keep `tauri android dev`'s LAN dev server reachable
 - Sticker rendering (larger than emoji, centered)
 - Image uploads with thumbnail generation
 - Blurhash placeholders during loading
