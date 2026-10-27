@@ -29,6 +29,7 @@ import {
   type Notifier,
 } from "./verification.js";
 import { Verification } from "../../ui/Verification.js";
+import { modalManager } from "../../ui/ModalManager.js";
 import type { VerificationPhase, VerificationUpdate } from "../../ipc/types.js";
 
 const ME = "@me:example.org";
@@ -201,6 +202,18 @@ describe("VerificationController", () => {
     expect(status()).toMatch(/cancelled on the other device/);
   });
 
+  it("an off-screen cancel says what happened", () => {
+    // The SDK's own cancel on arrival (another flow with the same user open).
+    ctl.handleUpdate(upd("in-a", "cancelled", { cancel_code: "m.user", cancelled_by_us: true }));
+    expect(notify.info).toHaveBeenLastCalledWith(expect.stringMatching(/still open/));
+    ctl.handleUpdate(upd("in-b", "cancelled", { cancel_code: "m.user", cancelled_by_us: false }));
+    expect(notify.info).toHaveBeenLastCalledWith(expect.stringMatching(/cancelled on the other device/));
+    ctl.handleUpdate(upd("in-c", "cancelled", { cancel_code: "m.timeout", cancelled_by_us: false }));
+    expect(notify.info).toHaveBeenLastCalledWith(expect.stringMatching(/timed out/));
+    ctl.handleUpdate(upd("in-d", "cancelled", { cancel_code: "tel.quark.request_dropped", cancelled_by_us: true }));
+    expect(notify.info).toHaveBeenLastCalledWith(expect.not.stringMatching(/keys|still open/));
+  });
+
   it("has no client-side timeout: a slow human on the other device is fine", async () => {
     ipc.state.mockImplementation(async () => upd("out-1", "requested", { we_started: true }));
     await ctl.startOutgoing(ME, "OTHERDEV");
@@ -234,6 +247,93 @@ describe("VerificationController", () => {
     await flush();
     expect(ipc.cancel).toHaveBeenCalledWith(ME, "out-1", true);
     expect(ui.state).toBe("failed");
+  });
+
+  describe("closing the dialog at the emoji step is a cancel, not a mismatch", () => {
+    beforeEach(async () => {
+      await ctl.startOutgoing(ME, "OTHERDEV");
+      ctl.handleUpdate(upd("out-1", "keys_exchanged", { we_started: true }));
+    });
+
+    const expectPlainCancel = async (): Promise<void> => {
+      await flush();
+      expect(ipc.cancel).toHaveBeenCalledWith(ME, "out-1", false);
+      expect(ipc.cancel).not.toHaveBeenCalledWith(ME, "out-1", true);
+      expect(ctl.flow?.cancelCode).toBe("m.user");
+    };
+
+    it("Escape", async () => {
+      ui.getElement().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await expectPlainCancel();
+    });
+
+    it("the X", async () => {
+      (ui.getElement().querySelector(".dialog-close-btn") as HTMLButtonElement).click();
+      await expectPlainCancel();
+    });
+
+    it("the backdrop", async () => {
+      ui.getElement().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await expectPlainCancel();
+    });
+
+    it("Android back / Escape with focus outside the dialog", async () => {
+      expect(modalManager.closeTopMost()).toBe(true);
+      expect(ui.isVisible()).toBe(false);
+      await expectPlainCancel();
+    });
+  });
+
+  describe("another user's request while a flow is live", () => {
+    const mallory = { user_id: "@mallory:x", device_id: "EVIL", flow_id: "in-m" };
+
+    it("doesn't end the flow on screen", async () => {
+      await ctl.startOutgoing(ME, "OTHERDEV");
+      ctl.handleUpdate(upd("out-1", "keys_exchanged", { we_started: true }));
+      ctl.handleIncoming(mallory);
+      // Its state update takes the missed-request path; still held, one toast.
+      ctl.handleUpdate(upd("in-m", "requested", { user_id: "@mallory:x", other_device_id: "EVIL" }));
+      expect(ipc.cancel).not.toHaveBeenCalled();
+      expect(ctl.flow?.flowId).toBe("out-1");
+      expect(ui.state).toBe("comparing");
+      expect(notify.info).toHaveBeenCalledTimes(1);
+      expect(notify.info).toHaveBeenCalledWith(expect.stringMatching(/@mallory:x wants to verify/));
+    });
+
+    it("opens once the dialog is closed, if it's still waiting", async () => {
+      await ctl.startOutgoing(ME, "OTHERDEV");
+      ctl.handleIncoming(mallory);
+      ctl.handleUpdate(upd("out-1", "done", { we_started: true }));
+      ipc.state.mockResolvedValueOnce(upd("in-m", "requested", { user_id: "@mallory:x", other_device_id: "EVIL" }));
+      btn("dismiss").click();
+      await flush();
+      expect(ipc.state).toHaveBeenCalledWith("@mallory:x", "in-m");
+      expect(ctl.flow?.flowId).toBe("in-m");
+      expect(ui.state).toBe("incoming");
+    });
+
+    it("is dropped if it ended in the meantime", async () => {
+      await ctl.startOutgoing(ME, "OTHERDEV");
+      ctl.handleIncoming(mallory);
+      ctl.handleUpdate(upd("in-m", "cancelled", {
+        user_id: "@mallory:x", cancel_code: "m.user", cancelled_by_us: false,
+      }));
+      ui.getElement().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await flush();
+      expect(ipc.cancel).toHaveBeenCalledWith(ME, "out-1", false);
+      expect(ipc.state).not.toHaveBeenCalledWith("@mallory:x", "in-m");
+      expect(ctl.flow?.flowId).toBe("out-1");
+      expect(ui.isVisible()).toBe(false);
+    });
+  });
+
+  it("a failed accept cancels the request on the backend", async () => {
+    ipc.accept.mockRejectedValueOnce(new Error("Failed to accept verification request: network"));
+    ctl.handleIncoming({ user_id: ME, device_id: "NEWDEV", flow_id: "in-1" });
+    btn("confirm").click();
+    await flush();
+    expect(ui.state).toBe("cancelled");
+    expect(ipc.cancel).toHaveBeenCalledWith(ME, "in-1", false);
   });
 
   it("an older flow's late updates don't touch the dialog of a newer attempt", async () => {

@@ -129,6 +129,10 @@ export function cancelMessage(code: string | null, reason: string | null, byUs: 
       return byUs
         ? (reason ?? "This session didn't have the other device's keys yet. Try again in a few seconds.")
         : "The other device didn't have this device's keys yet. Try again in a few seconds.";
+    case "tel.quark.request_dropped":
+      return byUs
+        ? (reason ?? "This session couldn't take up the request. Try again.")
+        : "The other device couldn't take up this request. Try again.";
     case null:
       return reason ?? "Verification was cancelled.";
     default:
@@ -171,7 +175,15 @@ export function offscreenNotice(u: VerificationUpdate, deviceLabel: string): str
   if (u.cancel_code === "tel.quark.unknown_device") {
     return `A verification request from ${deviceLabel} couldn't be used: this session didn't have that device's keys yet. Start it again in a few seconds.`;
   }
-  return `A verification request from ${deviceLabel} was cancelled — another verification with this account was still open. Try again.`;
+  if (u.cancel_code === "tel.quark.request_dropped") {
+    return `A verification request from ${deviceLabel} couldn't be used. Start it again.`;
+  }
+  // The SDK cancels a request on arrival, as us with m.user, when another flow
+  // with the same user is open. Any other cancel says what it was.
+  if (u.cancel_code === "m.user" && u.cancelled_by_us) {
+    return `A verification request from ${deviceLabel} was cancelled — another verification with the same account was still open. Try again.`;
+  }
+  return `A verification request from ${deviceLabel} ended. ${cancelMessage(u.cancel_code, u.cancel_reason, u.cancelled_by_us)}`;
 }
 
 // ── Controller ───────────────────────────────────────────────────────────────
@@ -188,7 +200,10 @@ export interface VerificationUi {
   hide(): void;
   isVisible(): boolean;
   onConfirm(cb: () => void): void;
+  /** The deny button: Reject / Cancel / "They Don't Match". */
   onDeny(cb: () => void): void;
+  /** The user closed the dialog (Escape, X, backdrop, back). */
+  onCancel(cb: () => void): void;
   onDismiss(cb: () => void): void;
 }
 
@@ -227,6 +242,9 @@ export class VerificationController {
   /** Flows this controller has put on screen (bounded). */
   private _seen: string[] = [];
   private _recentDone = 0;
+  /** Another user's request that arrived while a flow was live. Offered once
+   *  the dialog closes, if the backend still has it waiting. */
+  private _deferred: IncomingVerificationRequest | null = null;
 
   constructor(
     private readonly ui: VerificationUi,
@@ -236,6 +254,7 @@ export class VerificationController {
   ) {
     ui.onConfirm(() => void this._onConfirm());
     ui.onDeny(() => void this._onDeny());
+    ui.onCancel(() => this._onCancel());
     ui.onDismiss(() => this._onDismiss());
   }
 
@@ -291,10 +310,17 @@ export class VerificationController {
       return;
     }
     if (prev && !isTerminal(prev.phase) && prev.userId !== req.user_id) {
-      // Same user: the SDK only lets a new request through once older ones are
-      // cancelled, so `prev` is already dead. Different user: end it, the
-      // dialog can only show one.
-      void this.ipc.cancel(prev.userId, prev.flowId, false).catch(() => {});
+      // Any Matrix user can send a request, so letting one replace the flow on
+      // screen would let anyone abort a verification in progress. Hold it
+      // until this dialog closes. (Same user needs no guard: the SDK only lets
+      // a new request through once older ones are cancelled, so `prev` is
+      // already dead.)
+      if (this._deferred?.flow_id !== req.flow_id) {
+        this._deferred = req;
+        const who = req.device_name ? `${req.device_name} (${req.device_id})` : req.device_id;
+        this.notify.info(`${who} from ${req.user_id} wants to verify. Their request will open when this verification is closed.`);
+      }
+      return;
     }
     // Nothing may cover the request (seen live: the startup prompt did).
     for (const o of this.supersede()) {
@@ -315,6 +341,7 @@ export class VerificationController {
     const flow = this._flow;
     if (!flow || flow.flowId !== u.flow_id) {
       if (this._seen.includes(u.flow_id)) return; // an older flow finishing
+      if (this._deferred?.flow_id === u.flow_id && isTerminal(u.phase)) this._deferred = null;
       if (u.phase === "requested" && !u.we_started && u.other_device_id) {
         // The request event itself was missed — the state says it's answerable.
         this.handleIncoming({ user_id: u.user_id, device_id: u.other_device_id, flow_id: u.flow_id });
@@ -435,6 +462,11 @@ export class VerificationController {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (this._flow?.flowId === flow.flowId) this._finishLocally("cancelled", null, msg, null);
+      // Shown as cancelled, so make it so: a flow left open on the backend
+      // keeps the other device waiting and blocks the next attempt. (The
+      // backend cancels on a failed send itself; this covers every other
+      // failure, and cancelling a finished flow is a no-op.)
+      void this.ipc.cancel(flow.userId, flow.flowId, false).catch(() => {});
       this.notify.error(msg);
     } finally {
       this._busy = false;
@@ -442,10 +474,26 @@ export class VerificationController {
     }
   }
 
+  /** The deny button. At the emoji step it reads "They Don't Match", the only
+   *  path that reports a mismatch; elsewhere it's Reject or Cancel. */
   private async _onDeny(): Promise<void> {
     const flow = this._flow;
     if (!flow || isTerminal(flow.phase)) return;
-    const mismatch = flow.phase === "keys_exchanged";
+    await this._cancel(flow, flow.phase === "keys_exchanged");
+  }
+
+  /** The dialog was closed. A live flow is cancelled (never as a mismatch:
+   *  backing out is not a claim about the emoji); a finished one dismissed. */
+  private _onCancel(): void {
+    const flow = this._flow;
+    if (!flow || isTerminal(flow.phase)) {
+      this._onDismiss();
+      return;
+    }
+    void this._cancel(flow, false).then(() => this._offerDeferred());
+  }
+
+  private async _cancel(flow: FlowView, mismatch: boolean): Promise<void> {
     // Show the outcome at once; the backend's cancelled update agrees with it.
     this._finishLocally("cancelled", mismatch ? "m.mismatched_sas" : "m.user", null, true);
     try {
@@ -459,6 +507,16 @@ export class VerificationController {
     // Only reachable in a terminal state; nothing to tell the backend.
     if (this._pollTimer) clearTimeout(this._pollTimer);
     this._pollTimer = null;
+    void this._offerDeferred();
+  }
+
+  /** Open the request held back by `handleIncoming`, if it's still waiting. */
+  private async _offerDeferred(): Promise<void> {
+    const req = this._deferred;
+    this._deferred = null;
+    if (!req || this.hasLiveFlow()) return;
+    const u = await this.ipc.state(req.user_id, req.flow_id).catch(() => null);
+    if (u?.phase === "requested" && !u.we_started && !this.hasLiveFlow()) this.handleIncoming(req);
   }
 }
 

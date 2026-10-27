@@ -20,6 +20,12 @@ export interface Modal {
   isVisible(): boolean;
   /** Dismiss the overlay. */
   hide(): void;
+  /**
+   * The user asked to close it (Escape with focus outside it, Android back).
+   * Optional; defaults to `hide()`. For overlays where closing has to do
+   * something first, such as Verification cancelling its flow.
+   */
+  requestClose?(): void;
 }
 
 class ModalManager {
@@ -73,7 +79,8 @@ class ModalManager {
   closeTopMost(): boolean {
     const top = this.topMost;
     if (top) {
-      top.hide();
+      if (top.requestClose) top.requestClose();
+      else top.hide();
       return true;
     }
     return false;

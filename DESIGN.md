@@ -1049,10 +1049,17 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
     automatically and only starts SAS itself if none arrived 5 s after the request turned ready.
   - The SDK allows one flow per user and cancels old *and* new when a second appears, so every abandoned
     flow is cancelled for real (request and SAS), a new request first cancels earlier live flows with that
-    user, and picking a device that already sent us a request accepts that request instead.
+    user, and picking a device that already sent us a request accepts that request instead. A failed
+    send (`ready`, SAS start, MAC) cancels the flow too, and so does any accept/confirm the UI reports
+    as failed.
+  - Closing the dialog (Esc, `[x]`, backdrop, Android back) cancels a live flow with `m.user`. Only
+    "They Don't Match" at the emoji step sends `m.mismatched_sas`.
   - `quark://sync/verification_request` fires only for requests the SDK holds in an answerable state.
     A request the SDK dropped because this session didn't have the sender's device keys yet is cancelled
-    back to the sender (`tel.quark.unknown_device`) and the keys are re-queried so a retry works.
+    back to the sender (`tel.quark.unknown_device`) and the keys are re-queried so a retry works; one
+    dropped for any other reason is cancelled with `tel.quark.request_dropped`.
+  - A request from a *different* user while a flow is live never replaces it (anyone can send one): a
+    toast names the requester, and the request opens when the dialog closes, if it is still waiting.
   - An incoming request dismisses the startup "verify this session" prompt and the device picker; the
     prompt is not shown while a flow is live.
 - [x] Room creation, join, leave, invite, kick, ban

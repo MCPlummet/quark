@@ -111,6 +111,10 @@ const PRUNE_AFTER: Duration = Duration::from_secs(30 * 60);
 /// know the requesting device's keys yet (custom codes use Java package naming).
 pub const CANCEL_UNKNOWN_DEVICE: &str = "tel.quark.unknown_device";
 
+/// Cancel code we send back when the SDK dropped a request for a reason we
+/// can't name (the device's keys are known and the timestamp is in range).
+pub const CANCEL_REQUEST_DROPPED: &str = "tel.quark.request_dropped";
+
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 /// Where a flow is. Ordered: the frontend never moves a flow backwards.
@@ -305,6 +309,29 @@ pub(crate) fn classify_dropped_request(
         DropReason::UnknownDevice
     } else {
         DropReason::Unknown
+    }
+}
+
+/// The cancel to send for a dropped request: `(code, reason shown here, reason
+/// sent to the requester)`, or `None` when the request is stale and nobody is
+/// still waiting on it. Only a missing device is blamed on keys; a request
+/// dropped for no reason we can name says so instead of sending the requester
+/// to retry for keys we already have.
+pub(crate) fn dropped_request_cancel(
+    reason: DropReason,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    match reason {
+        DropReason::TooOld | DropReason::FromTheFuture => None,
+        DropReason::UnknownDevice => Some((
+            CANCEL_UNKNOWN_DEVICE,
+            "This session didn't have the other device's keys yet. Try again in a few seconds.",
+            "The other session did not know this device's keys yet; try again.",
+        )),
+        DropReason::Unknown => Some((
+            CANCEL_REQUEST_DROPPED,
+            "This session couldn't take up the request. Try again.",
+            "The other session could not take up this request; try again.",
+        )),
     }
 }
 
@@ -908,18 +935,26 @@ pub async fn on_incoming_request(
             let device_known = matches!(enc.get_device(&sender, &from_device).await, Ok(Some(_)));
             let reason = classify_dropped_request(sent_ms, now_ms, device_known);
             let age_s = (now_ms as i64 - sent_ms as i64) / 1000;
-            match reason {
-                DropReason::TooOld | DropReason::FromTheFuture => {
+            match dropped_request_cancel(reason) {
+                None => {
                     info!(
                         flow_id = %flow_id, own_device = %own, other_device = %from_device, age_s, ?reason,
                         "verification: SDK ignored a stale request (timestamp outside its window) — not prompting"
                     );
                 }
-                DropReason::UnknownDevice | DropReason::Unknown => {
-                    warn!(
-                        flow_id = %flow_id, own_device = %own, other_device = %from_device, age_s, ?reason,
-                        "verification: SDK dropped the request — the requesting device's keys are not known here yet"
-                    );
+                Some((code, local_reason, peer_reason)) => {
+                    let keys_missing = reason == DropReason::UnknownDevice;
+                    if keys_missing {
+                        warn!(
+                            flow_id = %flow_id, own_device = %own, other_device = %from_device, age_s, ?reason,
+                            "verification: SDK dropped the request — the requesting device's keys are not known here yet"
+                        );
+                    } else {
+                        warn!(
+                            flow_id = %flow_id, own_device = %own, other_device = %from_device, age_s, ?reason,
+                            "verification: SDK dropped the request for an unknown reason (device keys known, timestamp in range)"
+                        );
+                    }
                     flows.register(&flow_id, sender.as_str(), Some(from_device.to_string()), None, false);
                     let update = VerificationUpdate {
                         flow_id: flow_id.clone(),
@@ -929,30 +964,31 @@ pub async fn on_incoming_request(
                         phase: Phase::Cancelled,
                         emoji: vec![],
                         decimals: None,
-                        cancel_code: Some(CANCEL_UNKNOWN_DEVICE.to_owned()),
-                        cancel_reason: Some(
-                            "This session didn't have the other device's keys yet. Try again in a few seconds."
-                                .to_owned(),
-                        ),
+                        cancel_code: Some(code.to_owned()),
+                        cancel_reason: Some(local_reason.to_owned()),
                         cancelled_by_us: Some(true),
                     };
                     flows.record(&update);
                     emit_update(&app, &update);
                     // Network work off the sync handler: tell the requester (so
                     // its UI stops waiting and its request can't block the
-                    // retry), and fetch the keys so the retry succeeds.
+                    // retry), and, when keys were the problem, fetch them so the
+                    // retry succeeds.
                     tokio::spawn(async move {
                         if let Err(e) = send_raw_cancel(
                             &client,
                             &sender,
                             &from_device,
                             &flow_id,
-                            CancelCode::from(CANCEL_UNKNOWN_DEVICE),
-                            "The other session did not know this device's keys yet; try again.",
+                            CancelCode::from(code),
+                            peer_reason,
                         )
                         .await
                         {
                             warn!(flow_id = %flow_id, error = %e, "verification: sending cancel for dropped request failed");
+                        }
+                        if !keys_missing {
+                            return;
                         }
                         match client.encryption().request_user_identity(&sender).await {
                             Ok(_) => {
@@ -1101,10 +1137,13 @@ pub async fn accept_verification_request(
             // Only SAS: this build has no QR support (matrix-sdk `qrcode`
             // feature off), so advertising QR methods would offer a flow we
             // can't complete.
-            request
-                .accept_with_methods(vec![VerificationMethod::SasV1])
-                .await
-                .map_err(|e| format!("Failed to accept verification request: {e}"))?;
+            if let Err(e) = request.accept_with_methods(vec![VerificationMethod::SasV1]).await {
+                // Left open, the request would block the next attempt with this
+                // user (one live flow per user) and keep the requester waiting.
+                error!(flow_id, error = %e, "verification: sending ready failed — cancelling the flow");
+                cancel_flow(client, &user_id, flow_id, false, "ready send failed").await;
+                return Err(format!("Failed to accept verification request: {e}"));
+            }
         }
         other => {
             info!(flow_id, state = ?other, "verification: request already accepted — not sending ready again");
@@ -1157,7 +1196,16 @@ pub async fn confirm_sas_verification(
     }
     let Some(_g) = flows.try_begin(flow_id, "confirm") else { return Ok(()) };
     info!(flow_id, own_device = %own_device(client), other_device = %sas.other_device().device_id(), "verification: user confirmed emoji match — sending MAC");
-    sas.confirm().await.map_err(|e| format!("Failed to confirm verification: {e}"))
+    if let Err(e) = sas.confirm().await {
+        // The SDK already counts the SAS as confirmed here, so without a cancel
+        // the other device waits for a MAC that never comes and the flow stays
+        // live, blocking the next attempt with this user. The cancel moves the
+        // local state to cancelled even if sending it fails too.
+        error!(flow_id, error = %e, "verification: sending MAC failed — cancelling the flow");
+        cancel_flow(client, &user_id, flow_id, false, "MAC send failed").await;
+        return Err(format!("Failed to confirm verification: {e}"));
+    }
+    Ok(())
 }
 
 /// Cancel a flow (request and/or SAS). `mismatch` sends `m.mismatched_sas`.
@@ -1316,6 +1364,18 @@ mod tests {
         assert_eq!(classify_dropped_request(now - 1_000, now, true), DropReason::Unknown);
         // Age checks come first: an old request from an unknown device is just old.
         assert_eq!(classify_dropped_request(now - 11 * 60_000, now, false), DropReason::TooOld);
+    }
+
+    #[test]
+    fn only_a_missing_device_is_blamed_on_keys() {
+        assert_eq!(dropped_request_cancel(DropReason::TooOld), None);
+        assert_eq!(dropped_request_cancel(DropReason::FromTheFuture), None);
+        let (code, _, peer) = dropped_request_cancel(DropReason::UnknownDevice).unwrap();
+        assert_eq!(code, CANCEL_UNKNOWN_DEVICE);
+        assert!(peer.contains("keys"));
+        let (code, local, peer) = dropped_request_cancel(DropReason::Unknown).unwrap();
+        assert_eq!(code, CANCEL_REQUEST_DROPPED);
+        assert!(!local.contains("keys") && !peer.contains("keys"));
     }
 
     #[test]

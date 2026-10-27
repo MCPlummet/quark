@@ -51,6 +51,7 @@ export class Verification extends DialogBase {
 
   private _onConfirm: VerificationCallback | null = null;
   private _onDeny: VerificationCallback | null = null;
+  private _onCancel: VerificationCallback | null = null;
   private _onDismiss: VerificationCallback | null = null;
 
   constructor() {
@@ -68,11 +69,8 @@ export class Verification extends DialogBase {
     title.textContent = "verify device";
     header.appendChild(title);
 
-    // Match the Escape-key path: deny the verification and dismiss the dialog.
-    const closeBtn = this.makeCloseButton("Close verification", () => {
-      this._onDeny?.();
-      this.hide();
-    });
+    // Same as Escape: cancel the flow (never a mismatch) and close.
+    const closeBtn = this.makeCloseButton("Close verification", () => this._userClose());
     header.appendChild(closeBtn);
 
     // ── Body ──────────────────────────────────────────────────────────────
@@ -151,8 +149,18 @@ export class Verification extends DialogBase {
     this._onConfirm = cb;
   }
 
+  /** The deny button: Reject, Cancel, or "They Don't Match", by state. */
   onDeny(cb: VerificationCallback): void {
     this._onDeny = cb;
+  }
+
+  /**
+   * The user closed the dialog (Escape, the X, the backdrop, Android back).
+   * Kept apart from `onDeny` so backing out at the emoji step is a plain
+   * cancel, not a report that the emoji didn't match.
+   */
+  onCancel(cb: VerificationCallback): void {
+    this._onCancel = cb;
   }
 
   onDismiss(cb: VerificationCallback): void {
@@ -164,10 +172,18 @@ export class Verification extends DialogBase {
     this._updateFocus();
   }
 
-  // Clicking the backdrop denies the request, matching the close button and
-  // the Escape key.
+  // Clicking the backdrop cancels, matching the close button and Escape.
   protected override onBackdropClick(): void {
-    this._onDeny?.();
+    this._userClose();
+  }
+
+  /** Escape with focus outside the dialog, or Android back (`modalManager`). */
+  requestClose(): void {
+    this._userClose();
+  }
+
+  private _userClose(): void {
+    this._onCancel?.();
     this.hide();
   }
 
@@ -317,8 +333,7 @@ export class Verification extends DialogBase {
 
     if (this.isEscape(e)) {
       e.preventDefault();
-      this._onDeny?.();
-      this.hide();
+      this._userClose();
       return;
     }
 
