@@ -365,8 +365,15 @@ overwhelmed its own homeserver with:
   two concurrent E2EE outgoing-request flushes from one device (#52). Instead
   `client::restart_sync` aborts the loop and spawns a fresh one — on Tauri's
   runtime, since the wake's JNI runtime dies when it returns — and the wake
-  waits, within its budget, for the new loop's first completed sync, which
-  delivers the event through the warm handlers. A restart never revives a loop
+  waits, within its budget, until the warm handlers report the pushed event
+  (`RESTART_SYNCS_WITHOUT_EVENT` completed syncs without it ends the wait
+  early). The first completed sync is not enough: it re-sends the `since`
+  token the stalled loop was polling with, and Synapse answers a repeated
+  request from its response cache — the stalled loop's long-poll, completed
+  while the process was frozen, from before the event existed. Ending the wake
+  there stopped the foreground service, Doze cut the network, and the sync that
+  carried the event never ran (#123). A counts-only push still waits for one
+  completed sync. A restart never revives a loop
   that was stopped: the "is one running?" check, the abort and the spawn all
   happen under the `SyncState` lock logout also takes. Restarting stamps the
   liveness clock, so a burst restarts the loop once. A dismissal push needs no

@@ -600,6 +600,48 @@ async fn warm_sync_completed_since(before: u64) {
     }
 }
 
+/// How many syncs a restarted loop may complete without delivering the pushed
+/// event before the wake stops waiting for it.
+///
+/// One is not enough. The first sync after a restart re-sends the `since` token
+/// the stalled loop was last polling with, and Synapse answers a repeated
+/// request from its response cache for a couple of minutes — so a long-poll
+/// that completed while the process was frozen (its answer lost with the
+/// socket) comes back verbatim, from before the pushed event existed. The event
+/// is in the *next* sync. Ending the wake on that first completion stopped the
+/// foreground service, and in Doze that cut the network before the next sync
+/// could run, so the notification never came (#123). Three leaves room for that
+/// stale answer and a slow second one, while still letting go promptly of an
+/// event the timeline will never carry.
+const RESTART_SYNCS_WITHOUT_EVENT: u64 = 3;
+
+/// Wait for a restarted warm loop to deliver: until the warm handler reports
+/// the pushed event, or — when the push named none, or the event never turns
+/// up — until the loop has completed enough syncs since `before` that waiting
+/// longer would not help. Unbounded in time; the caller owns the budget.
+async fn await_restarted_delivery(pushed: Option<(&str, &str)>, before: u64) {
+    match pushed {
+        Some((room_id, event_id)) => {
+            let seen = async {
+                while !warm_has_handled(room_id, event_id) {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+            };
+            tokio::select! {
+                _ = seen => {}
+                _ = warm_sync_completed_since(before + RESTART_SYNCS_WITHOUT_EVENT - 1) => {
+                    tracing::warn!(
+                        "Restarted warm sync loop completed {RESTART_SYNCS_WITHOUT_EVENT} syncs without delivering {event_id}"
+                    );
+                }
+            }
+        }
+        // A counts-only push names nothing to wait for; one completed sync is
+        // the loop showing it works again.
+        None => warm_sync_completed_since(before).await,
+    }
+}
+
 /// The one wake allowed to sync at a time, for the life of the process.
 pub static WAKE_GUARD: WakeGuard = WakeGuard::new();
 
@@ -915,31 +957,22 @@ async fn restart_warm_sync(pushed: Option<(&str, &str)>) -> Result<WakeOutcome, 
             // Not ours to bring back.
             return Ok::<_, String>(false);
         }
-        // Done when the new loop completes a sync, or as soon as the warm
-        // handler reports the pushed event — whichever comes first.
-        let seen = async {
-            match pushed {
-                Some((room_id, event_id))
-                    if await_warm_handoff(room_id, event_id, WAKE_BUDGET).await => {}
-                _ => std::future::pending::<()>().await,
-            }
-        };
-        tokio::select! {
-            _ = warm_sync_completed_since(before) => {}
-            _ = seen => {}
-        }
+        // Done when the warm handler reports the pushed event — not merely when
+        // the new loop completes a sync, which may predate it (see
+        // `RESTART_SYNCS_WITHOUT_EVENT`).
+        await_restarted_delivery(pushed, before).await;
         Ok(true)
     })
     .await;
 
     match restarted {
-        Ok(Ok(true)) => tracing::info!("Restarted warm sync loop completed a sync"),
+        Ok(Ok(true)) => tracing::info!("Restarted warm sync loop has caught up"),
         Ok(Ok(false)) => tracing::info!("Warm sync loop was stopped before it could be restarted"),
         Ok(Err(e)) => return Err(format!("Could not restart the warm sync loop: {e}")),
         // Not an error: the loop is running and will deliver when it can. The
         // wake only stops holding the service open for it.
         Err(_) => tracing::warn!(
-            "Restarted warm sync loop has not completed a sync within the wake budget"
+            "Restarted warm sync loop has not delivered within the wake budget"
         ),
     }
     Ok(WakeOutcome::nothing())
@@ -1578,10 +1611,72 @@ mod tests {
         );
     }
 
+    /// Held by every test that bumps or counts `WARM_SYNC_COMPLETIONS`, so one
+    /// test's completions can't satisfy another's wait.
+    static COMPLETION_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Let spawned waiters run, then report whether `task` has finished.
+    async fn settled<T>(task: &tokio::task::JoinHandle<T>) -> bool {
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        task.is_finished()
+    }
+
+    #[tokio::test]
+    async fn a_restarted_loop_has_not_delivered_until_it_handles_the_pushed_event() {
+        // #123: the first sync after a restart can be Synapse's cached answer to
+        // the stalled loop's last request, from before the pushed event existed.
+        let _serial = COMPLETION_TESTS.lock().await;
+        let before = WARM_SYNC_COMPLETIONS.load(Ordering::Acquire);
+        let waiter = tokio::spawn(async move {
+            await_restarted_delivery(Some(("!r:x", "$restart-delivery-seen")), before).await
+        });
+        note_warm_sync_progress(); // the stale first sync
+        assert!(!settled(&waiter).await, "one completion without the event is not delivery");
+        note_warm_event("$restart-delivery-seen");
+        tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("handling the pushed event ends the wait")
+            .expect("waiter task");
+    }
+
+    #[tokio::test]
+    async fn a_restarted_loop_stops_being_waited_on_after_syncs_without_the_event() {
+        let _serial = COMPLETION_TESTS.lock().await;
+        let before = WARM_SYNC_COMPLETIONS.load(Ordering::Acquire);
+        let waiter = tokio::spawn(async move {
+            await_restarted_delivery(Some(("!r:x", "$restart-delivery-never")), before).await
+        });
+        for _ in 1..RESTART_SYNCS_WITHOUT_EVENT {
+            note_warm_sync_progress();
+        }
+        assert!(!settled(&waiter).await, "still inside the allowance");
+        note_warm_sync_progress();
+        tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("the allowance running out ends the wait")
+            .expect("waiter task");
+    }
+
+    #[tokio::test]
+    async fn a_counts_only_wake_is_satisfied_by_one_restarted_sync() {
+        let _serial = COMPLETION_TESTS.lock().await;
+        let before = WARM_SYNC_COMPLETIONS.load(Ordering::Acquire);
+        let waiter = tokio::spawn(async move { await_restarted_delivery(None, before).await });
+        note_warm_sync_progress();
+        tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("one completion is enough with no event to wait for")
+            .expect("waiter task");
+    }
+
     #[tokio::test]
     async fn a_wake_waiting_on_a_restarted_loop_sees_its_next_completion() {
         // The counter is process-wide and other tests may bump it, so measure
         // from wherever it stands now.
+        let _serial = COMPLETION_TESTS.lock().await;
         let before = WARM_SYNC_COMPLETIONS.load(Ordering::Acquire);
         let waiter = tokio::spawn(warm_sync_completed_since(before));
         tokio::task::yield_now().await;
@@ -1596,6 +1691,7 @@ mod tests {
     async fn a_completion_that_already_happened_is_not_waited_for() {
         // The restart can finish its first sync before the wake gets round to
         // waiting; that must not read as "never synced".
+        let _serial = COMPLETION_TESTS.lock().await;
         let before = WARM_SYNC_COMPLETIONS.load(Ordering::Acquire);
         note_warm_sync_progress();
         tokio::time::timeout(
