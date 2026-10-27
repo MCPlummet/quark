@@ -11,6 +11,7 @@ import { hashColor } from "./avatarColors.js";
 import { isMobile, viewportPan } from "../app/mobile.js";
 import { appendLinkifiedText } from "../app/links.js";
 import { mountOverlay } from "./overlay.js";
+import { ReceiptIndex, readersSignature, type Reader } from "./receipt_placement.js";
 
 // ── Blob URL management ───────────────────────────────────────────────────────
 // Blob URLs are more memory-efficient than data: URIs — the binary data is held
@@ -938,10 +939,21 @@ export class Timeline {
   // ── Read receipts ──────────────────────────────────────────────────────────
   /** Each user's latest-read position: the receipted event ID and its timestamp
    *  (ms, if known). Held outside the DOM so receipt state survives
-   *  windowing/culling and full re-renders. The avatar is placed on the nearest
-   *  rendered message at or before `ts` (receipts often point at non-message
-   *  events — reactions, edits — that aren't in the timeline). */
+   *  windowing/culling and full re-renders. Which message the avatar actually
+   *  sits on is decided by `ReceiptIndex` (see receipt_placement.ts). */
   private _receiptByUser = new Map<string, { eventId: string; ts: number | null }>();
+  /** Buffer positions placement runs against; synced with `_messages` at the
+   *  start of each reconciliation pass. */
+  private _receiptIndex = new ReceiptIndex();
+  /** Every receipt cluster this timeline has put on screen, and the readers it
+   *  shows. Reconciliation diffs the wanted placement against this. A cluster
+   *  whose readers haven't changed keeps its node, so its listeners and any
+   *  open hover card stay as they are. */
+  private _receiptClusters = new Map<HTMLElement, { readers: Reader[]; sig: string }>();
+  /** A reconciliation is queued (see `_scheduleReceiptRender`). */
+  private _receiptRenderQueued = false;
+  /** The cluster the hover card is currently showing, if any. */
+  private _receiptTooltipAnchor: HTMLElement | null = null;
   /** Resolvers injected from the app layer so the decoration step can render
    *  real avatars/names without Timeline importing app/actions (layering). */
   private _receiptAvatarResolver: ((userId: string) => string | undefined) | null = null;
@@ -1523,6 +1535,7 @@ export class Timeline {
     if (msgs.length === 0) return;
 
     this._messages = [...msgs, ...this._messages];
+    this._scheduleReceiptRender();
     this._announceUnresolvedReplies(msgs);
     // Shift selection and render-window indices forward so they still point at
     // the same content after prepending.
@@ -1546,10 +1559,6 @@ export class Timeline {
       }
     }
     this._listEl.insertBefore(fragment, this._listEl.firstChild);
-
-    // Newly-rendered older messages may be a receipt target — re-decorate
-    // (same rationale as _extendWindowUp).
-    this._renderReceipts();
 
     // Prepending means the user is reading history, not following the tail —
     // disengage stick. scrollTop is unchanged (column-reverse held it), so the
@@ -1577,6 +1586,7 @@ export class Timeline {
   appendMessages(msgs: MessageData[]): void {
     if (msgs.length === 0) return;
     this._messages = [...this._messages, ...msgs];
+    this._scheduleReceiptRender();
     this._announceUnresolvedReplies(msgs);
     this._renderEnd = this._messages.length;
 
@@ -1598,9 +1608,6 @@ export class Timeline {
     this._scrolledUp = this._distanceFromBottom > 40;
     this._stickToBottom = false;
     this._prevScrollTop = this._el.scrollTop;
-    // Receipt containers are position:absolute (out of flow), so decorating
-    // after the compensation above can't perturb it.
-    this._renderReceipts();
     this._scheduleCull();
   }
 
@@ -1691,6 +1698,9 @@ export class Timeline {
   appendMessage(msg: MessageData, opts?: { animate?: boolean }): void {
     const wasAtBufferEnd = this._renderEnd === this._messages.length;
     this._messages.push(msg);
+    // Before any of the exits below: even a message kept off-screen can move its
+    // sender's avatar (sending implies reading).
+    this._scheduleReceiptRender();
     this._announceUnresolvedReplies([msg]);
     if (!wasAtBufferEnd) {
       // The DOM window doesn't extend to the live tail — leave DOM untouched.
@@ -1760,11 +1770,7 @@ export class Timeline {
    *  `flex-direction: column-reverse` the bottom is anchored, so appending below
    *  shifts the viewport toward the new tail — when scrolled up we subtract the
    *  added height to keep the previously-visible content fixed. `animate` uses the
-   *  send counter-animation instead of an instant pin.
-   *
-   *  Every tail-append exit (appendMessage's grouped and ungrouped paths,
-   *  appendMessageHidden's three) funnels through here, which makes it the one
-   *  place the live tail has to re-decorate read receipts. */
+   *  send counter-animation instead of an instant pin. */
   private _settleTailAppend(oldScrollHeight: number, animate = false): void {
     if (this._scrolledUp) {
       this._el.scrollTop -= this._el.scrollHeight - oldScrollHeight;
@@ -1774,13 +1780,6 @@ export class Timeline {
     } else {
       this._scrollToBottom();
     }
-    // A live message moves its *sender's* receipt: posting implies having read
-    // up to your own message, and homeservers do not bundle an m.receipt with
-    // the message. Without this, the sender's avatar sits above content they
-    // demonstrably saw until the next full render or explicit receipt. Runs
-    // after the scroll math — receipt containers are position:absolute, so they
-    // can't perturb the compensation above.
-    this._renderReceipts();
   }
 
   /** Force scroll to the latest message */
@@ -2168,6 +2167,7 @@ export class Timeline {
    */
   appendMessageHidden(msg: MessageData): void {
     this._messages.push(msg);
+    this._scheduleReceiptRender();
     this._announceUnresolvedReplies([msg]);
     // Send-time append always extends the rendered window to include the new
     // message — the user is presumably looking at the compose box, which is
@@ -2367,7 +2367,7 @@ export class Timeline {
   setReadReceipts(list: { userId: string; eventId: string; ts: number | null }[]): void {
     this._receiptByUser.clear();
     for (const { userId, eventId, ts } of list) this._receiptByUser.set(userId, { eventId, ts });
-    this._renderReceipts();
+    this._scheduleReceiptRender();
   }
 
   /** Apply one live receipt delta, moving the user's avatar if it advanced. */
@@ -2375,7 +2375,7 @@ export class Timeline {
     const prev = this._receiptByUser.get(userId);
     if (prev && prev.eventId === eventId) return;
     this._receiptByUser.set(userId, { eventId, ts });
-    this._renderReceipts();
+    this._scheduleReceiptRender();
   }
 
   /** Swap in a freshly-downloaded avatar for a user's receipt chips. Mirrors
@@ -2398,105 +2398,122 @@ export class Timeline {
     }
   }
 
-  /** Rebuild every read-receipt container from scratch. Cheap (bounded by member
-   *  count) and the only place receipts touch the DOM, so it's safe to call after
-   *  any render path. Each user is placed on the nearest rendered message at or
-   *  before their receipt timestamp — receipts frequently point at non-message
-   *  events (reactions, edits, redactions) that aren't in the timeline. */
-  private _renderReceipts(): void {
-    // Tear down all existing containers first (and any open hover card, whose
-    // anchor may be about to be removed).
-    this._hideReceiptTooltip();
-    for (const c of Array.from(this._listEl.querySelectorAll(".read-receipts"))) c.remove();
-    if (this._receiptByUser.size === 0) return;
-
-    // Each user's latest own message + its time. Sending a message implies the
-    // sender has read up to it, so their receipt is advanced to it when it's
-    // newer than their explicit receipt — this matches Element, where a user who
-    // posted after their last read receipt shows at their own message.
-    const lastOwn = new Map<string, { id: string; ts: number }>();
-    for (const m of this._messages) {
-      if (!m.senderId) continue;
-      lastOwn.set(m.senderId, { id: m.id, ts: Date.parse(m.timestamp) }); // ascending → last wins
-    }
-
-    // Group users onto their resolved display message.
-    const byMessage = new Map<string, { userId: string; ts: number | null }[]>();
-    for (const [userId, pos] of this._receiptByUser) {
-      const msgId = this._resolveReceiptMessageId(userId, pos, lastOwn);
-      if (!msgId || !this.getMessageElementById(msgId)) continue;
-      const list = byMessage.get(msgId);
-      if (list) list.push({ userId, ts: pos.ts });
-      else byMessage.set(msgId, [{ userId, ts: pos.ts }]);
-    }
-
-    for (const [msgId, entries] of byMessage) {
-      const el = this.getMessageElementById(msgId);
-      if (!el) continue;
-      // Most-recently-read first, so the visible two are the latest readers.
-      entries.sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
-      el.appendChild(this._buildReceiptContainer(msgId, entries));
-    }
+  /** Queue one receipt reconciliation for the end of the current task.
+   *
+   *  Call it wherever the message buffer, the rendered window or receipt state
+   *  changes, right at the change and before any early return, so that no exit
+   *  path can skip it. Calling it is idempotent and the work is deferred, so a
+   *  burst of changes in one task (opening a room, confirm → remove, a run of
+   *  appends) costs one pass, and that pass sees the finished DOM.
+   *
+   *  It uses a microtask rather than requestAnimationFrame. Both run before the
+   *  next paint, so neither leaves a frame with a stale avatar. A microtask also
+   *  runs when the window is hidden, when rAF may be paused, and tests can
+   *  flush it by awaiting a microtask. The cost: sync events that arrive as
+   *  separate tasks get a pass each instead of one per frame. Reconciliation
+   *  keeps those passes cheap: an index sync, a lookup per reader, and DOM
+   *  writes only for clusters that changed. */
+  private _scheduleReceiptRender(): void {
+    if (this._receiptRenderQueued) return;
+    // Nothing on screen and nothing to show: the pass would be a no-op.
+    if (this._receiptByUser.size === 0 && this._receiptClusters.size === 0) return;
+    this._receiptRenderQueued = true;
+    queueMicrotask(() => {
+      this._receiptRenderQueued = false;
+      this._reconcileReceipts();
+    });
   }
 
-  /** Resolve a receipt position to the message its avatar should sit on:
-   *  the later of (a) the nearest rendered message at or before the explicit
-   *  receipt's timestamp and (b) the user's own most recent message (sending
-   *  implies reading). Falls back to the receipted event itself. */
-  private _resolveReceiptMessageId(
-    userId: string,
-    pos: { eventId: string; ts: number | null },
-    lastOwn: Map<string, { id: string; ts: number }>,
-  ): string | null {
-    let bestId: string | null = null;
-    let bestTs = -Infinity;
-    if (pos.ts != null) {
-      const id = this._messageIdAtOrBeforeTs(pos.ts);
-      if (id) {
-        bestId = id;
-        bestTs = pos.ts;
+  /** Bring the receipt clusters on screen in line with receipt state. This
+   *  diffs instead of tearing down. A cluster whose readers haven't changed is
+   *  left alone, along with its node, its listeners and any open hover card.
+   *  One whose readers changed is refilled in place. Only clusters with no
+   *  readers left, or whose message is gone, are removed. */
+  private _reconcileReceipts(): void {
+    const wanted = this._wantedReceiptClusters();
+
+    for (const [container, shown] of this._receiptClusters) {
+      const host = container.parentElement;
+      const id = host?.dataset.messageId;
+      const want = id === undefined ? undefined : wanted.get(id);
+      // Its message is gone (redacted, re-rendered, culled) or nobody is left on it.
+      if (!want || want.host !== host) {
+        container.remove();
+        this._receiptClusters.delete(container);
+        continue;
       }
+      wanted.delete(id!);
+      container.dataset.receiptEvent = id; // follows confirmMessage's rename
+      const sig = readersSignature(want.readers);
+      if (sig === shown.sig) continue;
+      shown.readers = want.readers;
+      shown.sig = sig;
+      this._fillReceiptContainer(container, want.readers);
+      // Refresh an open card in place rather than closing it under the pointer.
+      if (this._receiptTooltipAnchor === container) this._showReceiptTooltip(container, want.readers);
     }
-    if (bestId == null) bestId = pos.eventId; // exact event (renders only if displayed)
 
-    // Advance to the user's own latest message when it's newer.
-    const own = lastOwn.get(userId);
-    if (own && own.ts > bestTs) bestId = own.id;
+    for (const [id, { host, readers }] of wanted) {
+      const container = this._buildReceiptContainer(id, readers);
+      this._receiptClusters.set(container, { readers, sig: readersSignature(readers) });
+      host.appendChild(container);
+    }
 
-    return bestId;
+    // The hovered cluster was removed. A detached node never gets mouseleave,
+    // so close its card here.
+    if (this._receiptTooltipAnchor && !this._receiptClusters.has(this._receiptTooltipAnchor)) {
+      this._hideReceiptTooltip();
+    }
   }
 
-  /** Binary-search the (chronological) buffer for the newest message whose
-   *  timestamp is ≤ `ts`. Returns its event ID, or null if all are newer. */
-  private _messageIdAtOrBeforeTs(ts: number): string | null {
-    let lo = 0;
-    let hi = this._messages.length - 1;
-    let ans = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (Date.parse(this._messages[mid].timestamp) <= ts) {
-        ans = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
+  /** Where clusters should be: rendered message ID → its element and readers. */
+  private _wantedReceiptClusters(): Map<string, { host: HTMLElement; readers: Reader[] }> {
+    const out = new Map<string, { host: HTMLElement; readers: Reader[] }>();
+    if (this._receiptByUser.size === 0) return out;
+    this._receiptIndex.sync(this._messages);
+
+    // The DOM decides what is rendered (not _renderStart/_renderEnd), so a
+    // message whose append bailed before drawing anything is treated as off
+    // screen. One walk, not a selector query per candidate. First match wins,
+    // same as getMessageElementById.
+    const rendered = new Map<string, HTMLElement>();
+    for (const el of this._listEl.querySelectorAll<HTMLElement>("[data-message-id]")) {
+      const id = el.dataset.messageId;
+      if (id !== undefined && !rendered.has(id)) rendered.set(id, el);
     }
-    return ans >= 0 ? this._messages[ans].id : null;
+    const hostAt = (idx: number): HTMLElement | undefined => {
+      const msg = this._messages[idx];
+      return msg ? rendered.get(msg.id) : undefined;
+    };
+
+    const placed = this._receiptIndex.place(this._receiptByUser, (idx) => hostAt(idx) !== undefined);
+    for (const [idx, readers] of placed) {
+      out.set(this._messages[idx].id, { host: hostAt(idx)!, readers });
+    }
+    return out;
   }
 
-  /** Build the bottom-right stack: up to MAX_RECEIPTS_SHOWN avatars, then a "…"
-   *  chip when more readers exist. Hovering the group lists every reader + time. */
-  private _buildReceiptContainer(
-    eventId: string,
-    entries: { userId: string; ts: number | null }[],
-  ): HTMLElement {
+  /** Build a cluster for `eventId`. The hover listeners read the cluster's
+   *  current readers from `_receiptClusters` when they fire, so a refill never
+   *  has to rebind them. */
+  private _buildReceiptContainer(eventId: string, readers: Reader[]): HTMLElement {
     const container = document.createElement("div");
     container.className = "read-receipts";
     container.dataset.receiptEvent = eventId;
     // Themed hover card (not the native `title` tooltip) listing every reader.
-    container.addEventListener("mouseenter", () => this._showReceiptTooltip(container, entries));
+    container.addEventListener("mouseenter", () => {
+      const shown = this._receiptClusters.get(container);
+      if (shown) this._showReceiptTooltip(container, shown.readers);
+    });
     container.addEventListener("mouseleave", () => this._hideReceiptTooltip());
+    this._fillReceiptContainer(container, readers);
+    return container;
+  }
 
+  /** The bottom-right stack: up to MAX_RECEIPTS_SHOWN avatars, then a "…" chip
+   *  when more readers exist. Hovering the group lists every reader + time. */
+  private _fillReceiptContainer(container: HTMLElement, entries: Reader[]): void {
+    container.replaceChildren();
     const shown = entries.slice(0, Timeline.MAX_RECEIPTS_SHOWN);
     for (const { userId } of shown) {
       const span = document.createElement("span");
@@ -2512,8 +2529,6 @@ export class Timeline {
       chip.textContent = "…";
       container.appendChild(chip);
     }
-
-    return container;
   }
 
   /** Lazily create the shared receipt hover card on `<body>`. */
@@ -2532,6 +2547,7 @@ export class Timeline {
     anchor: HTMLElement,
     entries: { userId: string; ts: number | null }[],
   ): void {
+    this._receiptTooltipAnchor = anchor;
     const tip = this._ensureReceiptTooltip();
     tip.replaceChildren();
 
@@ -2584,6 +2600,7 @@ export class Timeline {
   }
 
   private _hideReceiptTooltip(): void {
+    this._receiptTooltipAnchor = null;
     if (this._receiptTooltipEl) this._receiptTooltipEl.style.display = "none";
   }
 
@@ -2757,6 +2774,9 @@ export class Timeline {
     }
 
     this._messages.splice(idx, 1);
+    // A removed message takes any receipt cluster on it along; this puts those
+    // readers back on whatever they resolve to now.
+    this._scheduleReceiptRender();
 
     if (!wasInWindow) {
       // Nothing to update in the DOM.
@@ -2819,6 +2839,9 @@ export class Timeline {
     const idx = this._messages.findIndex((m) => m.id === optimisticId);
     if (idx >= 0) {
       this._messages[idx] = { ...this._messages[idx], id: realEventId };
+      // Receipts name the real ID, so a reader of this message can only land on
+      // it once the rename is in.
+      this._scheduleReceiptRender();
     }
     const el = this.getMessageElementById(optimisticId);
     if (el) {
@@ -3098,10 +3121,9 @@ export class Timeline {
       }
     }
 
-    // Re-decorate read-receipt avatars — the rebuild above wiped any from the
-    // previous render. State lives outside the DOM so this is the only re-attach
-    // point for the full-render paths (setMessages, cull, ensureInWindow).
-    this._renderReceipts();
+    // The rebuild above wiped every receipt cluster, and the full-render paths
+    // (setMessages, cull, ensureInWindow) all come through here.
+    this._scheduleReceiptRender();
   }
 
   private _scrollToBottom(): void {
@@ -3201,8 +3223,8 @@ export class Timeline {
     const added = this._messages.slice(newStart, this._renderStart);
     this._renderStart = newStart;
     this._listEl.insertBefore(this._buildGroupedFragment(added), this._listEl.firstChild);
-    // Newly-rendered older messages may be a receipt target — re-decorate.
-    this._renderReceipts();
+    // Newly-rendered older messages may be a receipt target.
+    this._scheduleReceiptRender();
     this._scheduleCull();
   }
 
@@ -3221,9 +3243,10 @@ export class Timeline {
     this._listEl.appendChild(this._buildGroupedFragment(added));
     this._el.scrollTop -= this._el.scrollHeight - oldH;
     this._prevScrollTop = this._el.scrollTop;
-    // Receipt containers are position:absolute (out of flow), so decorating here
-    // can't perturb the scrollTop compensation above.
-    this._renderReceipts();
+    // Newly-rendered newer messages may be a receipt target. Clusters are
+    // position:absolute (out of flow), so placing them can't perturb the
+    // scrollTop compensation above.
+    this._scheduleReceiptRender();
     this._scheduleCull();
   }
 
