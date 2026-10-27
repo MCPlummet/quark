@@ -1058,6 +1058,18 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       `m.new_content` keeps the HTML `formatted_body` and custom emoji survive
       the edit instead of degrading to literal `:shortcode:` text
 - [x] Read receipts (public m.read + private m.read.private) — displayed Element-style as shifting, overlapping avatars at the bottom-right of each other user's last-read message (seeded on room open via `get_room_receipts`, updated live). Settings toggles: "send my read receipts" (private-only when off) and "show others' read receipts".
+      Placement (`src/ui/receipt_placement.ts`) uses timeline order, never
+      timestamps. Local echoes carry the client clock and federated events can
+      arrive stamped earlier than what's already shown, so timestamps aren't
+      monotonic. A receipt sits on the event it names. A receipt naming an event
+      not in the timeline (a reaction, an edit) sits on the latest message
+      stamped at or before the receipt's time. Sending implies reading:
+      homeservers send no receipt with a message, so a reader whose own message
+      comes later moves to it. If that message is outside the rendered window,
+      the avatar stays on the explicit receipt rather than vanishing. The
+      timeline reconciles clusters in one microtask after any change to the
+      buffer, the window or receipt state. Unchanged clusters are left in
+      place, so a hovered reader list survives incoming messages.
 - [x] Typing indicators
 - [x] Presence (when homeserver enables it)
 - [x] Authenticated media (MSC3916)
