@@ -11,3 +11,4 @@ pub mod spaces;
 pub mod stickers;
 pub mod threads;
 pub mod timeline;
+pub mod verification;

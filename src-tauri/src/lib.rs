@@ -149,6 +149,7 @@ pub fn run() {
         .manage(Mutex::new(config::app_config::AppConfig::default()))
         .manage(Mutex::new(notifications::NotificationConfig::default()))
         .manage(matrix::rooms::RecencyState::default())
+        .manage(matrix::verification::VerificationFlows::default())
         .manage(matrix::rooms::LastEventCache::default())
         .manage(notify::NotificationRegistry::default())
         .manage(updater::UpdaterState::default())
@@ -253,6 +254,8 @@ pub fn run() {
             commands::confirm_sas_verification,
             commands::cancel_sas_verification,
             commands::get_sas_info,
+            commands::get_verification_state,
+            commands::pending_verification_requests,
             // Spaces
             commands::get_space_hierarchy,
             commands::get_user_spaces,
