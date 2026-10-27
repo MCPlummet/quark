@@ -1067,7 +1067,10 @@ export class Timeline {
     if (typeof ResizeObserver !== "undefined") {
       this._stickObserver = new ResizeObserver(() => {
         if (!this._stickToBottom || this._pinningToBottom) return;
-        if (this._el.scrollTop === 0) return; // already pinned to the tail
+        // At the tail already, or overscrolled past it (scrollTop > 0) with the
+        // rubber-band spring about to bring it back — writing 0 would cut the
+        // bounce short.
+        if (this._el.scrollTop >= 0) return;
         this._pinningToBottom = true;
         this._el.scrollTop = 0;
         this._prevScrollTop = 0;
