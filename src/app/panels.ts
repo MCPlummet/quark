@@ -2,7 +2,7 @@
 // Kept separate from keyboard.ts (keyboard concerns) and state.ts (no UI deps).
 
 import { AppState } from "./state.js";
-import { cancelReply, cancelEdit, closeThread } from "./actions.js";
+import { cancelReply, cancelEdit, closeThread, dismissComposeBanner } from "./actions.js";
 import type { AppComponents } from "../ui/App.js";
 
 export function setupPanelNav(components: AppComponents): void {
@@ -53,8 +53,10 @@ export function setupPanelNav(components: AppComponents): void {
     navUp: () => threadView.selectPrev(),
     jumpTop: () => threadView.selectFirst(),
     jumpBottom: () => { threadView.selectLast(); },
-    // Esc closes the thread outright — the sheet, the banner and the routing.
-    close: () => closeThread(),
+    // Esc in Normal does what the banner's [x] does: drops an armed reply or
+    // edit first, else closes the thread outright — sheet, banner and routing.
+    // (The Esc that leaves Insert doesn't get here; see escapeRunsPanelClose.)
+    close: () => dismissComposeBanner(),
     selectedMessageId: () => threadView.selectedMessageId,
   });
   threadView.onFocus(() => {

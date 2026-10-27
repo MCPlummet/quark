@@ -99,6 +99,22 @@ import { applySetOptions } from "./set_options.js";
 /** Which handler owns a keystroke, once modals and Escape have had their say. */
 export type ModeRoute = "insert" | "command" | "vim";
 
+
+/**
+ * Whether an Escape keypress also runs the active panel's `close`.
+ *
+ * Normally it does: Esc both resets to Normal and closes. The thread sheet is
+ * the exception. Opening a thread lands in Insert, so if leaving Insert also
+ * closed the thread, a vim user could never reach its rows (`k` from the
+ * composer) — and a reflexive Esc mid-reply would quietly retarget the draft
+ * at the room, the very surprise #131 is about. So inside a thread the Esc that
+ * leaves Insert or Visual only changes mode; the next one, in Normal, peels the
+ * banner a layer (reply, then the thread itself).
+ */
+export function escapeRunsPanelClose(modeBefore: Mode, activePanel: string, vimMode: boolean): boolean {
+  if (!vimMode || activePanel !== "thread") return true;
+  return modeBefore !== Mode.Insert && modeBefore !== Mode.Visual;
+}
 /**
  * Decide which handler a keystroke belongs to.
  *
@@ -1532,6 +1548,7 @@ export function setupKeyboard(components: AppComponents): void {
         keymapManager.resetSequence();
         return;
       }
+      const modeBefore = modeManager.current;
       if (AppState.get("vimMode")) {
         // If a text-select submode is active in Visual, drop the selection
         // first (back to Normal+text-select). A second Escape exits text-select
@@ -1553,7 +1570,9 @@ export function setupKeyboard(components: AppComponents): void {
         keymapManager.resetSequence();
         commandBar.hide();
       }
-      AppState.close();
+      if (escapeRunsPanelClose(modeBefore, AppState.get("activePanel"), AppState.get("vimMode"))) {
+        AppState.close();
+      }
       return;
     }
 

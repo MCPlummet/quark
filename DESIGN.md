@@ -736,8 +736,12 @@ box, with everything else greyed back:
   `[x]`, `Esc` (the thread panel's `close`), `t` again, Android back,
   switching rooms, opening the drawer on mobile, and **Close thread** in the
   command palette all end the thread completely. With a reply armed *inside*
-  the thread, the banner's `[x]` first cancels that reply (back to "replying in
-  thread"), and a second press closes the thread.
+  the thread, the banner's `[x]` — and `Esc` — first cancel that reply (back
+  to "replying in thread"), and a second press closes the thread. In vim mode
+  the `Esc` that leaves Insert or Visual inside a thread only changes mode
+  (`escapeRunsPanelClose`): opening a thread lands in Insert, so otherwise its
+  rows could never be reached, and a reflexive `Esc` mid-reply would retarget
+  the draft at the room.
 - **Replying.** A reply to one of the thread's messages (its root included) —
   the row's hover `↩`, its long-press sheet, `r` on a selected row — is sent
   into the thread as an MSC3440 threaded reply quoting it. A reply to anything
@@ -858,7 +862,7 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Timeline      | `>`           | Quote selection into compose  |
 | Thread        | `j`/`k`/`G`   | Move within the open thread   |
 | Thread        | `r` / `e`     | Reply in thread / react       |
-| Thread        | `Esc`         | Close the thread              |
+| Thread        | `Esc`         | Cancel an in-thread reply, else close the thread (from Insert: to Normal only) |
 | Insert        | `Ctrl-e`      | Open emoji/sticker picker     |
 | Insert        | `Ctrl-g`      | Open GIF search               |
 | Insert        | `Ctrl-b/i/u`  | Bold / italic / underline     |
