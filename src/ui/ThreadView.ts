@@ -19,7 +19,7 @@ import { createReactionBar, type ReactionGroup } from "./Reactions.js";
 import { appendLinkifiedText } from "../app/links.js";
 import { attachLongPress } from "../app/long_press.js";
 import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
-import { buildReplyPreview, buildVideoAffordance, type ReplyPreviewData } from "./Timeline.js";
+import { buildReplyPreview, buildVideoAffordance, playVideoInline, type ReplyPreviewData } from "./Timeline.js";
 
 export interface ThreadMessageData {
   id: string;
@@ -403,6 +403,11 @@ export class ThreadView {
 
   getMessageEl(eventId: string): HTMLElement | null {
     return this._scrollEl.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(eventId)}"]`);
+  }
+
+  /** Play a video row inline, as the timeline does (`playVideoInline`). */
+  showInlineVideo(eventId: string, src: string, onError?: (detail?: string) => void): void {
+    playVideoInline(this.getMessageEl(eventId), src, onError);
   }
 
   hasMessage(eventId: string): boolean {

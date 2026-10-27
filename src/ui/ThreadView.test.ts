@@ -214,6 +214,25 @@ describe("ThreadView", () => {
     expect(view.getMessageEl("$a")!.querySelector(".reaction-bar")).toBeNull();
   });
 
+  // As an inline panel inside the timeline's list, a thread video was found by
+  // the timeline and played in place; the sheet keeps that rather than
+  // dropping to the external player.
+  it("plays a video reply inline in its own row", () => {
+    const play = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+    try {
+      view.open(ROOT);
+      view.setReplies([msg({ id: "$v", type: "video", mediaUrl: "mxc://x/v", mediaAlt: "clip.mp4" })]);
+      let failed = false;
+      view.showInlineVideo("$v", "http://127.0.0.1/clip", () => { failed = true; });
+      const video = view.getMessageEl("$v")!.querySelector<HTMLVideoElement>("video.message__video");
+      expect(failed).toBe(false);
+      expect(video?.getAttribute("src")).toBe("http://127.0.0.1/clip");
+    } finally {
+      HTMLMediaElement.prototype.play = play;
+    }
+  });
+
   it("bubbles the timeline's reply event from a row's ↩ button", () => {
     const seen: string[] = [];
     const onReply = (e: Event) => seen.push((e as CustomEvent<{ eventId: string }>).detail.eventId);

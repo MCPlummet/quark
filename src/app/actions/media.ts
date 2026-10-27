@@ -552,7 +552,9 @@ export function setupMessageActionHandlers(): void {
       return;
     }
 
-    const { timeline } = getComponents();
+    // A video in the open thread plays in the thread sheet's row.
+    const { timeline, threadView } = getComponents();
+    const host = threadView?.hasMessage(eventId) ? threadView : timeline;
 
     // Respect the "Play videos inline" setting; when off, go straight to the
     // external player. Read fresh (cheap, in-memory) so toggling takes effect
@@ -572,7 +574,7 @@ export function setupMessageActionHandlers(): void {
           )
           .then((url) => {
             stopLoading();
-            timeline.showInlineVideo(eventId, url, (err) => {
+            host.showInlineVideo(eventId, url, (err) => {
               if (err) console.warn("[video] inline playback failed, opening externally:", err);
               void openExternally();
             });
