@@ -660,3 +660,57 @@ describe("inline thread file attachments", () => {
     expect(timeline.getPendingInlineEmojiUrls()).toContain("mxc://e/1");
   });
 });
+
+describe("Timeline stick-to-bottom observer", () => {
+  let observed: (() => void) | null;
+  let tl: Timeline;
+  let scroller: HTMLElement;
+  let scrollTop: number;
+  let writes: number[];
+
+  beforeEach(() => {
+    observed = null;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: () => void) {
+          // The constructor builds the stick observer before any other.
+          observed ??= cb;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    tl = new Timeline();
+    document.body.appendChild(tl.getElement());
+    scroller = tl.getElement().querySelector<HTMLElement>(".timeline")!;
+    scrollTop = 0;
+    writes = [];
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => {
+        writes.push(v);
+        scrollTop = v;
+      },
+    });
+  });
+
+  afterEach(() => {
+    tl.getElement().remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("re-pins to the tail when growth leaves the stuck view short of it", () => {
+    scrollTop = -12; // a resize clamped the view above the tail
+    observed!();
+    expect(writes).toEqual([0]);
+  });
+
+  it("leaves an overscroll past the tail to the rubber-band spring", () => {
+    // column-reverse: past the tail scrollTop is positive while the bounce runs.
+    scrollTop = 30;
+    observed!();
+    expect(writes).toEqual([]);
+  });
+});

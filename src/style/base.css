@@ -1241,9 +1241,11 @@ body.quark-mobile .room-list__header-btn {
      _listEl, which keeps the reverse anchoring clean; the loading indicator and
      jump-to-latest button live in .timeline-wrap (above), not in here. */
   overflow-anchor: none; /* belt-and-suspenders; unsupported on WebKit anyway */
-  /* Also disable the timeline's own rubber-band: a column-reverse scroller still
-     overscrolls past the tail, and the bounce-back spring can override a write. */
-  overscroll-behavior-y: none;
+  /* Keep the timeline's own overscroll effect (iOS rubber-band, Android stretch)
+     but stop it chaining to the page, which html's `none` holds still. Past the
+     tail scrollTop goes positive while the spring runs; the stick observer
+     leaves that alone rather than writing 0 into it. */
+  overscroll-behavior-y: contain;
   scrollbar-gutter: stable; /* always reserve scrollbar space so message-bubble right edges stay fixed */
   padding: 10px 12px;
   display: flex;
