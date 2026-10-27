@@ -464,7 +464,9 @@ impl VerificationFlows {
         flows
             .iter()
             .filter(|(_, e)| !e.we_started)
-            .filter(|(_, e)| e.last.as_ref().is_some_and(|u| u.phase == Phase::Requested))
+            // `None`: registered, watcher hasn't recorded yet — callers re-check
+            // the SDK, so include it rather than miss a fresh request.
+            .filter(|(_, e)| e.last.as_ref().is_none_or(|u| u.phase == Phase::Requested))
             .map(|(id, e)| SyncVerificationRequest {
                 user_id: e.user_id.clone(),
                 device_id: e.other_device_id.clone().unwrap_or_default(),
@@ -810,6 +812,10 @@ async fn after_done(client: &Client, app: &AppHandle, flow_id: &str, user_id: &U
             has_user_signing = cs.has_user_signing,
             "verification: done — local cross-signing keys (without self-signing this device cannot sign the other one)"
         );
+    }
+    // Own trust only changes when we verified one of our own devices.
+    if client.user_id() != Some(user_id) {
+        return;
     }
     let client = client.clone();
     let app = app.clone();
@@ -1355,14 +1361,22 @@ mod tests {
         flows.register("in", "@me:x", Some("DEVA".into()), Some("Quark on Linux".into()), false);
         flows.register("out", "@me:x", Some("DEVB".into()), None, true);
         flows.register("gone", "@me:x", Some("DEVC".into()), None, false);
+        flows.register("accepted", "@me:x", Some("DEVD".into()), None, false);
         flows.record(&upd("in", "@me:x", Phase::Requested));
         flows.record(&upd("out", "@me:x", Phase::Requested));
         flows.record(&upd("gone", "@me:x", Phase::Cancelled));
+        flows.record(&upd("accepted", "@me:x", Phase::Ready));
         let pending = flows.pending_incoming();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].flow_id, "in");
         assert_eq!(pending[0].device_id, "DEVA");
         assert_eq!(pending[0].device_name.as_deref(), Some("Quark on Linux"));
+        assert_eq!(flows.pending_incoming_from("@me:x", "DEVA").as_deref(), Some("in"));
+        assert_eq!(flows.pending_incoming_from("@me:x", "DEVB"), None);
+
+        // Registered but not yet recorded by its watcher: still offered.
+        flows.register("fresh", "@me:x", Some("DEVE".into()), None, false);
+        assert!(flows.pending_incoming().iter().any(|p| p.flow_id == "fresh"));
     }
 
     #[test]

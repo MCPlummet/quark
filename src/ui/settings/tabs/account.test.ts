@@ -14,14 +14,14 @@ vi.mock("../../../ipc/index.js", () => ({
   getKeyBackupStatus: vi.fn(async () => ({ enabled: true, exists_on_server: true })),
 }));
 
-vi.mock("../../../app/actions/crypto.js", () => ({
+vi.mock("../../../app/actions/verification.js", () => ({
   startVerification: vi.fn(async () => {}),
 }));
 
 import { accountTab } from "./account.js";
 import { makeControls } from "../controls.js";
 import * as ipc from "../../../ipc/index.js";
-import * as cryptoActions from "../../../app/actions/crypto.js";
+import * as verificationActions from "../../../app/actions/verification.js";
 
 async function tick(): Promise<void> {
   await new Promise<void>((r) => setTimeout(r, 0));
@@ -78,7 +78,7 @@ describe("accountTab", () => {
     verifyBtn!.click();
     await tick();
 
-    expect(cryptoActions.startVerification).toHaveBeenCalledWith("@bob:example.org");
+    expect(verificationActions.startVerification).toHaveBeenCalledWith("@bob:example.org");
     expect(closeSpy).toHaveBeenCalled();
   });
 
@@ -96,7 +96,7 @@ describe("accountTab", () => {
     verifyBtn!.click();
     await tick();
 
-    expect(cryptoActions.startVerification).not.toHaveBeenCalled();
+    expect(verificationActions.startVerification).not.toHaveBeenCalled();
   });
 
   it("removing an other session opens a confirm dialog, then runs the UIAA password flow", async () => {

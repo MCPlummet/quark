@@ -17,6 +17,9 @@ export type {
   CrossSigningInfo,
   KeyBackupStatus,
   SasInfo,
+  VerificationPhase,
+  VerificationUpdate,
+  IncomingVerificationRequest,
   SpaceChild,
   ThreadRoot,
   GifResult,
@@ -116,6 +119,8 @@ export {
   confirmSasVerification,
   cancelSasVerification,
   getSasInfo,
+  getVerificationState,
+  pendingVerificationRequests,
   verificationPromptTarget,
   logVerificationPromptChoice,
 } from "./crypto.js";

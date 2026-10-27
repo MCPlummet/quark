@@ -6668,9 +6668,12 @@ body.quark-mobile .dialog-close-btn {
  * hugs the content with no dead space between columns. */
 .device-picker__item {
   display: grid;
+  /* Name and ID may shrink (they ellipsize) so that on a phone-width card,
+   * clamped by max-width + overflow:hidden above, the status column stays
+   * fully visible instead of being clipped off the right edge. */
   grid-template-columns:
-    var(--device-name-col, max-content)
-    var(--device-id-col, max-content)
+    minmax(0, var(--device-name-col, max-content))
+    minmax(0, var(--device-id-col, max-content))
     var(--device-status-col, max-content);
   column-gap: 2ch;
   align-items: baseline;

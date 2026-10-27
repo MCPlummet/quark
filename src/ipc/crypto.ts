@@ -1,9 +1,23 @@
 // Crypto / verification IPC calls
 
 import { invoke } from "./invoke.js";
-import type { CrossSigningInfo, KeyBackupStatus, SasInfo, VerificationStatus } from "./types.js";
+import type {
+  CrossSigningInfo,
+  IncomingVerificationRequest,
+  KeyBackupStatus,
+  SasInfo,
+  VerificationStatus,
+  VerificationUpdate,
+} from "./types.js";
 
-export type { CrossSigningInfo, KeyBackupStatus, SasInfo, VerificationStatus };
+export type {
+  CrossSigningInfo,
+  IncomingVerificationRequest,
+  KeyBackupStatus,
+  SasInfo,
+  VerificationStatus,
+  VerificationUpdate,
+};
 
 /** Get the verification status of the local device. */
 export async function getVerificationStatus(): Promise<VerificationStatus> {
@@ -40,7 +54,9 @@ export async function getUserDevices(
 
 /**
  * Start a SAS verification flow with a specific user/device.
- * Returns the flow ID — use it with getSasInfo, acceptSasVerification, etc.
+ * Returns the flow ID. If that device already sent us an unanswered request,
+ * the backend accepts it instead and returns ITS flow ID (no competing request).
+ * Progress arrives as `quark://verification/state` events.
  */
 export async function startSasVerification(
   userId: string,
@@ -61,7 +77,10 @@ export async function acceptVerificationRequest(
   return invoke<void>("accept_verification_request", { userId, flowId });
 }
 
-/** Accept an incoming SAS verification request. */
+/**
+ * Accept a SAS the other side started. The backend does this on its own as
+ * soon as the start arrives; kept as an idempotent nudge. Never starts SAS.
+ */
 export async function acceptSasVerification(
   userId: string,
   flowId: string,
@@ -79,23 +98,46 @@ export async function confirmSasVerification(
   return invoke<void>("confirm_sas_verification", { userId, flowId });
 }
 
-/** Cancel / deny a SAS verification. */
+/**
+ * Cancel a verification flow — the request and/or the SAS, at any stage, so
+ * the other device is told. `mismatch` reports the emoji as not matching.
+ */
 export async function cancelSasVerification(
   userId: string,
   flowId: string,
+  mismatch = false,
 ): Promise<void> {
-  return invoke<void>("cancel_sas_verification", { userId, flowId });
+  return invoke<void>("cancel_sas_verification", { userId, flowId, mismatch });
 }
 
 /**
- * Poll for SAS emoji info for an active verification flow.
- * Returns null if the flow is not yet at the emoji comparison step.
+ * Legacy: SAS emoji info for a flow, null until a SAS exists. The UI uses
+ * getVerificationState / the state events instead.
  */
 export async function getSasInfo(
   userId: string,
   flowId: string,
 ): Promise<SasInfo | null> {
   return invoke<SasInfo | null>("get_sas_info", { userId, flowId });
+}
+
+/**
+ * Current state of a verification flow (same shape as the
+ * `quark://verification/state` event), or null if the backend doesn't know it.
+ */
+export async function getVerificationState(
+  userId: string,
+  flowId: string,
+): Promise<VerificationUpdate | null> {
+  return invoke<VerificationUpdate | null>("get_verification_state", { userId, flowId });
+}
+
+/**
+ * Incoming verification requests still awaiting an answer. Called once the
+ * event listeners are registered, to catch a request emitted before they were.
+ */
+export async function pendingVerificationRequests(): Promise<IncomingVerificationRequest[]> {
+  return invoke<IncomingVerificationRequest[]>("pending_verification_requests", {});
 }
 
 /**
