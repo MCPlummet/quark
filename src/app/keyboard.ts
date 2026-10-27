@@ -248,6 +248,10 @@ export function dispatchAction(action: string, components: AppComponents): void 
       break;
     }
 
+    case "close-thread":
+      closeThread();
+      break;
+
     case "react": {
       const msgId = selectedMessageId(components);
       if (msgId) openQuickReactPicker(msgId);
