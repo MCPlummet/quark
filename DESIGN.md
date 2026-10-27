@@ -366,14 +366,18 @@ overwhelmed its own homeserver with:
   `client::restart_sync` aborts the loop and spawns a fresh one — on Tauri's
   runtime, since the wake's JNI runtime dies when it returns — and the wake
   waits, within its budget, until the warm handlers report the pushed event
-  (`RESTART_SYNCS_WITHOUT_EVENT` completed syncs without it ends the wait
+  (two completed syncs without it, `RESTART_SYNCS_WITHOUT_EVENT`, end the wait
   early). The first completed sync is not enough: it re-sends the `since`
   token the stalled loop was polling with, and Synapse answers a repeated
   request from its response cache — the stalled loop's long-poll, completed
   while the process was frozen, from before the event existed. Ending the wake
   there stopped the foreground service, Doze cut the network, and the sync that
-  carried the event never ran (#123). A counts-only push still waits for one
-  completed sync. A restart never revives a loop
+  carried the event never ran (#123). A loop has one request in flight, so
+  there is at most one stale answer, and the sync after it carries the event
+  at once if it is coming at all. Without a stale answer, the second sync is a
+  30 s long-poll, so an event the timeline never carries holds the wake to its
+  budget. Completions are counted from after the restart, so a last sync from
+  the stalled loop can't use up the allowance. A restart never revives a loop
   that was stopped: the "is one running?" check, the abort and the spawn all
   happen under the `SyncState` lock logout also takes. Restarting stamps the
   liveness clock, so a burst restarts the loop once. A dismissal push needs no
