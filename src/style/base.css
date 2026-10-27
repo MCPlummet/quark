@@ -495,7 +495,7 @@ body.quark-mobile .room-list__header-btn {
   border: var(--border-width) solid color-mix(in srgb, var(--msg-thread-indicator) 55%, var(--border-color));
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  box-shadow: 0 -8px 24px var(--shadow-color);
+  box-shadow: 0 -6px 18px color-mix(in srgb, var(--shadow-color) 45%, transparent);
   animation: thread-view-rise 160ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
@@ -6868,6 +6868,13 @@ body.quark-mobile .thread-view__message:hover .message__actions {
 /* The key hint means nothing without a keyboard. */
 body.quark-mobile .thread-view__hint {
   display: none;
+}
+
+/* A finger-sized close target; the header row is otherwise compact. */
+body.quark-mobile .thread-view__close {
+  min-width: 44px;
+  min-height: 32px;
+  font-size: var(--font-size);
 }
 
 /* Member list becomes a right-edge slide-over on mobile (#8), mirroring the

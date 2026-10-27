@@ -203,6 +203,17 @@ describe("ThreadView", () => {
     expect(view.getElement().querySelectorAll(".thread-view__timeline [data-message-id]")).toHaveLength(1);
   });
 
+  it("replaces a row's reaction bar, and removes it when the last reaction goes", () => {
+    view.open(ROOT);
+    view.setReplies([msg({ id: "$a", reactions: [{ key: "👍", count: 1, own: false }] })]);
+    view.updateMessageReactions("$a", [{ key: "🎉", count: 2, own: true }]);
+    const bars = view.getMessageEl("$a")!.querySelectorAll(".reaction-bar");
+    expect(bars).toHaveLength(1);
+    expect(bars[0].textContent).toContain("🎉");
+    view.updateMessageReactions("$a", []);
+    expect(view.getMessageEl("$a")!.querySelector(".reaction-bar")).toBeNull();
+  });
+
   it("bubbles the timeline's reply event from a row's ↩ button", () => {
     const seen: string[] = [];
     const onReply = (e: Event) => seen.push((e as CustomEvent<{ eventId: string }>).detail.eventId);

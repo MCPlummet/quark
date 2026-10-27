@@ -21,6 +21,7 @@ import {
   prepareOutgoingBody,
   replyPreviewFor,
   _downloadInlineEmoji,
+  resolveDisplayName,
 } from "./context.js";
 import { sendThreadReply, closeThread, isInOpenThread } from "./threads.js";
 import {
@@ -322,7 +323,9 @@ export function startReply(eventId: string, senderName: string, snippet: string)
   if (AppState.get("threadRootEventId") && !isInOpenThread(eventId)) closeThread();
   // A reply and an edit are different messages; the newer intent wins.
   if (AppState.get("editingEventId")) cancelEdit();
-  armReply({ eventId, senderName, snippet });
+  // Callers pass the sender as they have it — often the bare MXID. The banner
+  // shows the display name when the member list knows one.
+  armReply({ eventId, senderName: resolveDisplayName(senderName), snippet });
 }
 
 /**

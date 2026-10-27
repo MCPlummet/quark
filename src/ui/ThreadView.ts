@@ -423,7 +423,7 @@ export class ThreadView {
     const el = this.getMessageEl(eventId);
     if (!msg || !el) return;
     msg.reactions = reactions;
-    el.querySelector(":scope > .reactions")?.remove();
+    el.querySelector(":scope > .reaction-bar")?.remove();
     if (reactions.length > 0) {
       const bar = createReactionBar(reactions);
       const actions = el.querySelector(":scope > .message__actions");
