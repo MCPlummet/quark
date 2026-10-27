@@ -69,7 +69,12 @@ pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("quark=debug".parse().unwrap()),
+                .add_directive("quark=debug".parse().unwrap())
+                // The SDK's own verification decisions (request dropped for an
+                // unknown device, "cancelling both requests", start-collision
+                // resolution) — silent otherwise, and only logged while a
+                // verification is running.
+                .add_directive("matrix_sdk_crypto::verification=info".parse().unwrap()),
         )
         .try_init();
 
