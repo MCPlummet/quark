@@ -235,11 +235,6 @@ export class ThreadView {
     return this._el;
   }
 
-  /** The element long-press is attached to (rows only — not the backdrop). */
-  getSheetElement(): HTMLElement {
-    return this._sheetEl;
-  }
-
   /** The reply list's scroll container. */
   getScrollElement(): HTMLElement {
     return this._scrollEl;
@@ -257,13 +252,9 @@ export class ThreadView {
     this._onFocus = cb;
   }
 
+  /** Right-click, long press or a row's ⋯ button. */
   onContextMenu(cb: (eventId: string, x: number, y: number) => void): void {
     this._onContextMenu = cb;
-  }
-
-  /** Fire the context-menu callback for a row (the ⋯ button, a long press). */
-  emitContextMenu(eventId: string, x: number, y: number): void {
-    this._onContextMenu?.(eventId, x, y);
   }
 
   onImageClick(cb: (src: string, alt: string, eventId: string) => void): void {
