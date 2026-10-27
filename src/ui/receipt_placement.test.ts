@@ -152,6 +152,18 @@ describe("ReceiptIndex", () => {
       expect(index.resolve("@carol:x", { eventId: "c", ts: null }, all)).toBe(-1);
     });
 
+    it("rebuilds when the same IDs come back as new objects with new timestamps", () => {
+      // b was a local echo stamped by a client clock running fast; a reload
+      // brings it back under the same ID with the server's time.
+      const index = new ReceiptIndex();
+      index.sync([m("a", "alice", 0), m("b", "bob", 20)]);
+      const reaction = { eventId: "$reaction", ts: at(15) };
+      expect(index.resolve("@carol:x", reaction, all)).toBe(0);
+
+      index.sync([m("a", "alice", 0), m("b", "bob", 10)]);
+      expect(index.resolve("@carol:x", reaction, all)).toBe(1);
+    });
+
     it("parses only new messages' timestamps on a tail append", () => {
       const msgs = Array.from({ length: 500 }, (_, i) => m(`e${i}`, "alice", i));
       const index = new ReceiptIndex();

@@ -600,6 +600,43 @@ describe("Timeline", () => {
       expect(card()?.style.display).toBe("block");
     });
 
+    // Touch: a tap opens the card and mouseleave may never come, so a scroll
+    // has to keep the card with its cluster rather than leave it floating.
+    describe("when the timeline scrolls with the card open", () => {
+      const rect = (top: number, bottom: number, right = 300): DOMRect =>
+        ({ top, bottom, left: right - 40, right, width: 40, height: bottom - top, x: right - 40, y: top, toJSON() {} }) as DOMRect;
+      const scroller = (): HTMLElement => timeline.getElement().querySelector<HTMLElement>(".timeline")!;
+      const scroll = (): void => {
+        scroller().dispatchEvent(new Event("scroll"));
+      };
+
+      it("moves the card with its cluster", () => {
+        const cluster = clusterOn("e1")!;
+        vi.spyOn(scroller(), "getBoundingClientRect").mockReturnValue(rect(0, 600));
+        const at = vi.spyOn(cluster, "getBoundingClientRect").mockReturnValue(rect(400, 414));
+        hover(cluster);
+        const before = card()!.style.top;
+
+        at.mockReturnValue(rect(300, 314));
+        scroll();
+
+        expect(card()?.style.display).toBe("block");
+        expect(card()!.style.top).not.toBe(before);
+      });
+
+      it("closes the card once its cluster scrolls out of view", () => {
+        const cluster = clusterOn("e1")!;
+        vi.spyOn(scroller(), "getBoundingClientRect").mockReturnValue(rect(0, 600));
+        const at = vi.spyOn(cluster, "getBoundingClientRect").mockReturnValue(rect(400, 414));
+        hover(cluster);
+
+        at.mockReturnValue(rect(700, 714));
+        scroll();
+
+        expect(card()?.style.display).toBe("none");
+      });
+    });
+
     it("refreshes the open card in place when the hovered cluster loses a reader", async () => {
       timeline.setReadReceipts([
         { userId: "@bob:x", eventId: "e1", ts: ms("12:00:30") },

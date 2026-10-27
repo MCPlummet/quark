@@ -70,10 +70,12 @@ function upperBound(arr: readonly TimeEntry[], ts: number): number {
 }
 
 export class ReceiptIndex {
-  /** Event IDs in buffer order as of the last sync. `sync` compares the buffer
-   *  against this to tell a tail append (cheap, incremental) from any other
-   *  change (rebuild). */
-  private _ids: string[] = [];
+  /** The buffer's message objects as of the last sync. `sync` compares the
+   *  buffer against this to tell a tail append (cheap, incremental) from any
+   *  other change (rebuild). By object, not by ID: a reload can bring the same
+   *  IDs back with different timestamps (server time replacing a local echo's
+   *  client clock), and the time index must not keep the old ones. */
+  private _msgs: PlacedMessage[] = [];
   /** Event ID → buffer position. */
   private _pos = new Map<string, number>();
   /** Sender → buffer position of their newest message. */
@@ -88,11 +90,12 @@ export class ReceiptIndex {
   /** Bring the index up to date with `msgs`, the whole buffer. If `msgs` only
    *  grew at the end since the last sync (the live tail, forward pagination),
    *  only the new messages are indexed. Anything else rebuilds the index:
-   *  a prepend, a removal, or a renamed ID (`confirmMessage`). No caller has to
-   *  say what changed, so none can say it wrong. */
+   *  a prepend, a removal, a renamed ID (`confirmMessage`), or a message
+   *  replaced by a new object. No caller has to say what changed, so none can
+   *  say it wrong. */
   sync(msgs: readonly PlacedMessage[]): void {
     if (!this._isPrefixOf(msgs)) {
-      this._ids = [];
+      this._msgs = [];
       this._pos.clear();
       this._newestOwn.clear();
       this._byTime = [];
@@ -100,7 +103,7 @@ export class ReceiptIndex {
       this._byTime.sort((a, b) => a.ts - b.ts || a.idx - b.idx);
       return;
     }
-    for (let i = this._ids.length; i < msgs.length; i++) this._add(msgs[i], i, true);
+    for (let i = this._msgs.length; i < msgs.length; i++) this._add(msgs[i], i, true);
   }
 
   /** Buffer position where `userId`'s avatar belongs, or -1 for nowhere.
@@ -135,14 +138,14 @@ export class ReceiptIndex {
   }
 
   private _isPrefixOf(msgs: readonly PlacedMessage[]): boolean {
-    const ids = this._ids;
-    if (ids.length > msgs.length) return false;
-    for (let i = 0; i < ids.length; i++) if (msgs[i].id !== ids[i]) return false;
+    const prev = this._msgs;
+    if (prev.length > msgs.length) return false;
+    for (let i = 0; i < prev.length; i++) if (msgs[i] !== prev[i]) return false;
     return true;
   }
 
   private _add(m: PlacedMessage, idx: number, keepSorted: boolean): void {
-    this._ids.push(m.id);
+    this._msgs.push(m);
     this._pos.set(m.id, idx);
     // Positions only grow, so the last write is the sender's newest message.
     if (m.senderId) this._newestOwn.set(m.senderId, idx);

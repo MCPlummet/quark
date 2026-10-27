@@ -1006,6 +1006,10 @@ export class Timeline {
     // window from the in-memory buffer happens first — only when the buffer
     // edge is reached does a server fetch get requested.
     this._el.addEventListener("scroll", () => {
+      // An open receipt card is position:fixed, so keep it on its cluster. On
+      // touch, where mouseleave may never come, it would otherwise float at
+      // its old place after a scroll.
+      if (this._receiptTooltipAnchor) this._followReceiptTooltip();
       const scrollTop = this._el.scrollTop;
       // column-reverse convention: scrollTop is 0 at the live tail and negative
       // scrolling up toward history. So distance-from-bottom is just -scrollTop,
@@ -2585,9 +2589,13 @@ export class Timeline {
       tip.appendChild(row);
     }
 
-    // Measure, then position above the cluster (flip below if it would clip),
-    // right-aligned to the anchor and clamped to the viewport.
     tip.style.display = "block";
+    this._positionReceiptTooltip(anchor, tip);
+  }
+
+  /** Measure, then position the card above the cluster (flip below if it would
+   *  clip), right-aligned to the anchor and clamped to the viewport. */
+  private _positionReceiptTooltip(anchor: HTMLElement, tip: HTMLElement): void {
     const a = anchor.getBoundingClientRect();
     const t = tip.getBoundingClientRect();
     let top = a.top - t.height - 6;
@@ -2597,6 +2605,23 @@ export class Timeline {
     // The rects are layout-viewport space; the tooltip is in the overlay layer,
     // which carries the viewport pan (#33).
     tip.style.top = `${top - viewportPan()}px`;
+  }
+
+  /** After a scroll: move the open card with its cluster, or close it once the
+   *  cluster has left the visible timeline. Not closed on every scroll — the
+   *  reconcile pass keeps an unchanged cluster (and its card) across appends,
+   *  and an append can scroll the timeline. */
+  private _followReceiptTooltip(): void {
+    const anchor = this._receiptTooltipAnchor;
+    const tip = this._receiptTooltipEl;
+    if (!anchor || !tip) return;
+    const a = anchor.getBoundingClientRect();
+    const view = this._el.getBoundingClientRect();
+    if (!anchor.isConnected || a.bottom <= view.top || a.top >= view.bottom) {
+      this._hideReceiptTooltip();
+      return;
+    }
+    this._positionReceiptTooltip(anchor, tip);
   }
 
   private _hideReceiptTooltip(): void {
