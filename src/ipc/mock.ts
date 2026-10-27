@@ -90,7 +90,48 @@ function mockEvent(sender: string, body: string, minutesAgo: number): TimelineEv
 const _aliceThemeEvent = mockEvent("@alice:matrix.org", "I just pushed the new theme system :partyblob:", 31);
 const _carolQuestionEvent = mockEvent("@carol:matrix.org", "Can we get a catppuccin variant too?", 20);
 
+// A thread long enough to scroll, rooted on a message from earlier in the room.
+// Its replies sit in the room timeline with `thread_root` set, as the backend
+// returns them; the main timeline filters them out and counts them on the root.
+// Two of them are replies *inside* the thread — one still carrying the legacy
+// `> <@user> quote` fallback in its body, one without (MSC2781) — which must
+// render identically (#131).
+const _threadRoot = mockEvent("@dave:matrix.org", "thread: which default keybindings should change before 1.0?", 50);
+const _threadReplies: TimelineEvent[] = (() => {
+  const lines: Array<[string, string]> = [
+    ["@alice:matrix.org", "gg/G feel right, leave those"],
+    ["@bob:matrix.org", "`t` for threads is hard to discover"],
+    ["@carol:matrix.org", "agree, nobody finds it"],
+    ["@dave:matrix.org", "the hover button helps, if you know to hover"],
+    ["@alice:matrix.org", "what about Esc closing the thread?"],
+    ["@bob:matrix.org", "Esc already closes things everywhere else"],
+    ["@carol:matrix.org", "+1 to Esc"],
+    ["@dave:matrix.org", "ok — Esc closes, t toggles"],
+    ["@alice:matrix.org", "and dd stays as redact"],
+    ["@bob:matrix.org", "yes, muscle memory"],
+  ];
+  return lines.map(([sender, body], i) => ({
+    ...mockEvent(sender, body, 49 - i),
+    thread_root: _threadRoot.event_id,
+  }));
+})();
+_threadReplies.push(
+  {
+    ...mockEvent("@carol:matrix.org", `> <@bob:matrix.org> \`t\` for threads is hard to discover\n\nthat's what the palette is for`, 38),
+    formatted_body: `<mx-reply><blockquote><a href="https://matrix.to/#/@bob:matrix.org">@bob:matrix.org</a><br>\`t\` for threads is hard to discover</blockquote></mx-reply>that's what the palette is for`,
+    thread_root: _threadRoot.event_id,
+    in_reply_to: _threadReplies[1].event_id,
+  },
+  {
+    ...mockEvent("@alice:matrix.org", "same — and the menu says 'Reply in thread' now", 37),
+    thread_root: _threadRoot.event_id,
+    in_reply_to: _threadReplies[1].event_id,
+  },
+);
+
 const MOCK_TIMELINE: TimelineEvent[] = [
+  _threadRoot,
+  ..._threadReplies,
   // Alice sends three messages in a row — middle one has reactions, tests inline reaction layout
   mockEvent("@alice:matrix.org", "hey everyone, check this out", 32),
   { ..._aliceThemeEvent,
@@ -274,7 +315,16 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       const body = args?.body as string ?? "";
       const ev = mockEvent("@you:matrix.org", body, 0);
       ev.thread_root = args?.threadRootEventId as string ?? null;
+      ev.in_reply_to = (args?.replyToEventId as string | null) ?? null;
+      MOCK_TIMELINE.push(ev);
       return ev.event_id;
+    }
+    case "get_thread_timeline": {
+      // Root plus replies, oldest first — the backend's shape.
+      const root = args?.threadRootEventId as string ?? "";
+      return MOCK_TIMELINE
+        .filter((e) => e.event_id === root || e.thread_root === root)
+        .sort((a, b) => a.timestamp - b.timestamp);
     }
     case "create_room": {
       const opts = args?.options as { name?: string; invite?: string[]; is_direct?: boolean } | undefined;
