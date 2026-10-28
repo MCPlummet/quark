@@ -187,7 +187,7 @@ export class ThreadView {
       }).observe(this._listEl);
     }
 
-    // Clicking in the sheet makes the thread the active panel (j/k, r, e …).
+    // Clicking in the panel makes the thread the active panel (j/k, r, e …).
     this._sheetEl.addEventListener("click", (e) => {
       this._onFocus?.();
       const target = e.target as HTMLElement;
@@ -259,7 +259,7 @@ export class ThreadView {
     this._onClose = cb;
   }
 
-  /** A click anywhere in the sheet. */
+  /** A click anywhere in the panel. */
   onFocus(cb: () => void): void {
     this._onFocus = cb;
   }
@@ -542,7 +542,7 @@ export class ThreadView {
 
   // ── Private ─────────────────────────────────────────────────────────────
 
-  /** Root first, then replies — the order the sheet shows them in. */
+  /** Root first, then replies — the order the panel shows them in. */
   private _items(): ThreadMessageData[] {
     return this._root ? [this._root, ...this._messages] : this._messages;
   }
@@ -559,7 +559,7 @@ export class ThreadView {
     if (opts.scroll !== false) this._scrollRowIntoView(el);
   }
 
-  /** Bring a row into the sheet's own viewport. Written against this scroller
+  /** Bring a row into the panel's own viewport. Written against this scroller
    *  alone — `scrollIntoView` would also scroll every scrollable ancestor. */
   private _scrollRowIntoView(el: HTMLElement): void {
     const box = this._scrollEl.getBoundingClientRect();

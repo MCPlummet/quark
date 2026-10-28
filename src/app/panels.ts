@@ -54,7 +54,7 @@ export function setupPanelNav(components: AppComponents): void {
     jumpTop: () => threadView.selectFirst(),
     jumpBottom: () => { threadView.selectLast(); },
     // Esc in Normal does what the banner's [x] does: drops an armed reply or
-    // edit first, else closes the thread outright — sheet, banner and routing.
+    // edit first, else closes the thread outright — panel, banner and routing.
     // (The Esc that leaves Insert doesn't get here; see escapeRunsPanelClose.)
     close: () => dismissComposeBanner(),
     selectedMessageId: () => threadView.selectedMessageId,

@@ -6,7 +6,7 @@ import type { SendKeyBehavior } from "../ipc/app_config.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-/** `"thread"` is the open thread's sheet. It is not in the h/l traversal
+/** `"thread"` is the open thread's panel. It is not in the h/l traversal
  *  order: while a thread is open it owns the keys, and closing it hands focus
  *  back to the timeline. */
 export type ActivePanel = "roomlist" | "timeline" | "spaces" | "members" | "home" | "thread";

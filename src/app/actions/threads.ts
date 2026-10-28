@@ -1,8 +1,8 @@
-// Thread actions: opening and closing the thread sheet, and sending into it.
+// Thread actions: opening and closing the thread panel, and sending into it.
 //
 // "Composing into thread X" is exactly one fact: `AppState.threadRootEventId`.
 // Every send path reads it; `openThread` and `closeThread` are the only writers
-// and they move the sheet, the dimmed layout, the active panel and the compose
+// and they move the panel, the dimmed layout, the active panel and the compose
 // banner with it. There is no second flag on the banner or the timeline to fall
 // out of step — the split that left #131's reporter posting into a thread they
 // believed they had left.
@@ -29,7 +29,7 @@ import {
 import { disarmReply, refreshComposeBanner, setThreadSnippet } from "./compose_target.js";
 
 /** Class on `.quark-layout` while a thread is open: dims everything but the
- *  thread sheet and the compose box, and freezes the room timeline. */
+ *  thread panel and the compose box, and freezes the room timeline. */
 export const THREAD_FOCUS_CLASS = "quark-layout--thread-focus";
 
 /**
@@ -65,7 +65,7 @@ export function isInOpenThread(eventId: string): boolean {
   if (eventId === root) return true;
   if (_threadEvents.some((e) => e.event_id === eventId)) return true;
   if (AppState.get("currentTimeline").some((e) => e.event_id === eventId && e.thread_root === root)) return true;
-  // Rows only the sheet knows about: our own reply between send and confirm.
+  // Rows only the panel knows about: our own reply between send and confirm.
   return getComponents().threadView?.hasMessage(eventId) ?? false;
 }
 
@@ -139,7 +139,7 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
   // Closed, switched or the room changed while loading.
   if (AppState.get("threadRootEventId") !== eventId || AppState.get("currentRoomId") !== roomId) return;
 
-  // The backend returns the root along with its replies; it is the sheet's
+  // The backend returns the root along with its replies; it is the panel's
   // header, not one of the replies (it used to be drawn twice and counted).
   let root = events.find((e) => e.event_id === eventId) ?? rootEvent;
   const replies = events.filter((e) => e.event_id !== eventId && !e.is_edit);
@@ -167,9 +167,9 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
 }
 
 /**
- * Close the open thread, completely: the sheet, the dimmed layout, the banner,
+ * Close the open thread, completely: the panel, the dimmed layout, the banner,
  * the routing of sends — and a reply armed inside it. Every close affordance
- * (the sheet's [x], the backdrop, the banner's [x], Esc, `t`, Android back,
+ * (the panel's [x], the backdrop, the banner's [x], Esc, `t`, Android back,
  * switching rooms, replying to a message outside the thread) lands here.
  */
 export function closeThread(): void {
@@ -228,7 +228,7 @@ export async function sendThreadReply(
 
   input.setValue("");
 
-  // Fly a text clone from the compose field to the new row in the sheet.
+  // Fly a text clone from the compose field to the new row in the panel.
   const textClone = document.createElement("div");
   textClone.textContent = body;
   Object.assign(textClone.style, {

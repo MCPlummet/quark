@@ -59,7 +59,7 @@ export async function sendReaction(eventId: string, key: string): Promise<void> 
 
     const groups = updated.map((r) => ({ key: r.key, count: r.count, own: r.own, imageUrl: _resolveReactionImage(r.key) }));
     timeline.updateMessageReactions(eventId, groups);
-    // …and in the thread sheet, if the message is one of its rows.
+    // …and in the thread panel, if the message is one of its rows.
     getComponents().threadView?.updateMessageReactions(eventId, groups);
   }
 
@@ -114,7 +114,7 @@ export function applyIncomingReaction(
  */
 export function openQuickReactPicker(eventId: string): void {
   const { timeline, threadView, quickReactPicker } = getComponents();
-  // A row of the open thread sheet is not in the timeline's list.
+  // A row of the open thread panel is not in the timeline's list.
   const anchor = timeline.getMessageElementById(eventId) ?? threadView?.getMessageEl(eventId) ?? null;
   quickReactPicker.show(eventId, anchor);
 

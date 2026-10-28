@@ -90,13 +90,13 @@ export function renderLiveEvent(event: TimelineEvent, timeline: Timeline, thread
       threadView.appendReply(
         timelineEventToThreadMessage(event, openThreadEvents(), AppState.get("currentTimeline")),
       );
-      // …and resolve its mxc:// media into the sheet, mirroring what
+      // …and resolve its mxc:// media into the panel, mirroring what
       // openThread() does for the replies it loads.
       downloadSyncMessageImage(event, {
         updateMessageMedia: (id, url) => threadView.updateMessageMedia(id, url),
       });
       // Inline custom emoji in the reply (or its caption) need the same
-      // treatment as the main-timeline append below; the sheet is its own
+      // treatment as the main-timeline append below; the panel is its own
       // emoji host.
       if (event.formatted_body || event.caption_formatted) {
         resolveInlineEmojiForTimeline(threadView);

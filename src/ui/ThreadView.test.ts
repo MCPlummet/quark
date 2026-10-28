@@ -14,7 +14,7 @@ function msg(over: Partial<ThreadMessageData> = {}): ThreadMessageData {
 
 const ROOT = msg({ id: "$root", senderName: "Alice", body: "the root" });
 
-/** Give the sheet's scroller a fake layout: `content` px of content in a
+/** Give the panel's scroller a fake layout: `content` px of content in a
  *  `viewport` px window. jsdom lays nothing out, but it does keep scrollTop. */
 function fakeLayout(view: ThreadView, content: number, viewport = 300): HTMLElement {
   const s = view.getScrollElement();
@@ -215,7 +215,7 @@ describe("ThreadView", () => {
   });
 
   // As an inline panel inside the timeline's list, a thread video was found by
-  // the timeline and played in place; the sheet keeps that rather than
+  // the timeline and played in place; the panel keeps that rather than
   // dropping to the external player.
   it("plays a video reply inline in its own row", () => {
     const play = HTMLMediaElement.prototype.play;

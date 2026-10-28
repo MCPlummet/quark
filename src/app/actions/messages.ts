@@ -391,8 +391,8 @@ export function finishEdit(): void {
 /**
  * The compose banner's [x]: cancel what the banner shows, one layer at a time.
  * An edit, else an armed reply (inside a thread that leaves you in the
- * thread), else the thread itself — fully closed, sheet and all. The banner
- * and the thread sheet are one state, so either close button ends it (#131).
+ * thread), else the thread itself — fully closed, panel and all. The banner
+ * and the thread panel are one state, so either close button ends it (#131).
  */
 export function dismissComposeBanner(): void {
   if (AppState.get("editingEventId")) cancelEdit();

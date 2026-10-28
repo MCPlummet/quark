@@ -303,7 +303,7 @@ const ACTION_LITERALS = [
     palette: false,
   },
   {
-    // Esc (`close`) and `t` close it from the keyboard; the sheet's [x], its
+    // Esc (`close`) and `t` close it from the keyboard; the panel's [x], its
     // dimmed backdrop and the compose banner's [x] by pointer and touch. In the
     // palette as well, so "how do I get out of this thread" has an answer that
     // needs none of those to be known (#131).

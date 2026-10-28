@@ -103,7 +103,7 @@ export type ModeRoute = "insert" | "command" | "vim";
 /**
  * Whether an Escape keypress also runs the active panel's `close`.
  *
- * Normally it does: Esc both resets to Normal and closes. The thread sheet is
+ * Normally it does: Esc both resets to Normal and closes. The thread panel is
  * the exception. Opening a thread lands in Insert, so if leaving Insert also
  * closed the thread, a vim user could never reach its rows (`k` from the
  * composer) — and a reflexive Esc mid-reply would quietly retarget the draft
@@ -142,7 +142,7 @@ export function resolveModeRoute(mode: Mode, vimMode: boolean): ModeRoute {
 
 /**
  * The message a message action (r, e, y, dd) targets: the active panel's
- * selection — the thread sheet's while a thread is open — else the timeline's.
+ * selection — the thread panel's while a thread is open — else the timeline's.
  */
 function selectedMessageId(components: AppComponents): string | null {
   const fromPanel = AppState.selectedMessageId();
@@ -150,7 +150,7 @@ function selectedMessageId(components: AppComponents): string | null {
 }
 
 /** Whether the room timeline's own selection is what the keys act on (the
- *  thread sheet is not open and focused over it). */
+ *  thread panel is not open and focused over it). */
 function timelineOwnsKeys(): boolean {
   return AppState.get("activePanel") !== "thread";
 }
@@ -647,7 +647,7 @@ function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents)
  */
 function exitComposeToTimeline(components: AppComponents): boolean {
   const { input, timeline, threadView } = components;
-  // The compose box sits under the thread sheet while one is open, so "up"
+  // The compose box sits under the thread panel while one is open, so "up"
   // is the thread's newest reply, not the dimmed room behind it.
   const inThread = AppState.get("threadRootEventId") !== null;
   const landed = inThread ? threadView.selectLast() : timeline.selectLast();
@@ -1099,7 +1099,7 @@ export function setupKeyboard(components: AppComponents): void {
     if (eventId) timeline.emitContextMenu(eventId, x, y);
   });
 
-  // The same menu for a message in the thread sheet, minus what doesn't apply
+  // The same menu for a message in the thread panel, minus what doesn't apply
   // there: opening a thread (it is one), editing (not supported in threads) and
   // the touch text-selection row (it targets the timeline's DOM).
   threadView.onContextMenu((eventId, x, y) => {
@@ -1403,10 +1403,10 @@ export function setupKeyboard(components: AppComponents): void {
   commandBar.onCancel(leaveCommandMode);
 
   // The compose banner's [x] cancels what it shows — and when it shows the
-  // thread, that closes the thread outright, sheet and all (#131).
+  // thread, that closes the thread outright, panel and all (#131).
   components.replyPreview.onDismiss(() => dismissComposeBanner());
 
-  // The thread sheet's [x], or a click on the dimmed room behind it.
+  // The thread panel's [x], or a click on the dimmed room behind it.
   threadView.onClose(() => closeThread());
   // A reply banner in the thread pointing outside it: leave, then jump.
   threadView.onJumpOutside((eventId) => {
@@ -1417,7 +1417,7 @@ export function setupKeyboard(components: AppComponents): void {
   threadView.onImageClick((src, alt, eventId) => {
     imageLightbox.show(src, alt, savableMediaForEvent(findLoadedEvent(eventId)));
   });
-  // The sheet names the key that closes it, as the user has it bound.
+  // The panel names the key that closes it, as the user has it bound.
   const refreshThreadCloseHint = (): void => {
     const seq = liveSequences("close")[0] ?? null;
     threadView.setCloseHint(seq === "Escape" ? "Esc" : seq);

@@ -500,7 +500,7 @@ export function setupMessageActionHandlers(): void {
   document.addEventListener("quark:msg-reply" as keyof DocumentEventMap, (e: Event) => {
     const { eventId } = (e as CustomEvent<{ eventId: string }>).detail;
     if (!eventId) return;
-    // The room buffer or the open thread — the thread sheet's rows bubble this
+    // The room buffer or the open thread — the thread panel's rows bubble this
     // event too, and their events were never in the buffer.
     const evt = findLoadedEvent(eventId);
     if (evt) {
@@ -552,7 +552,7 @@ export function setupMessageActionHandlers(): void {
       return;
     }
 
-    // A video in the open thread plays in the thread sheet's row.
+    // A video in the open thread plays in the thread panel's row.
     const { timeline, threadView } = getComponents();
     const host = threadView?.hasMessage(eventId) ? threadView : timeline;
 
