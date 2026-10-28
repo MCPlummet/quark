@@ -365,8 +365,19 @@ overwhelmed its own homeserver with:
   two concurrent E2EE outgoing-request flushes from one device (#52). Instead
   `client::restart_sync` aborts the loop and spawns a fresh one — on Tauri's
   runtime, since the wake's JNI runtime dies when it returns — and the wake
-  waits, within its budget, for the new loop's first completed sync, which
-  delivers the event through the warm handlers. A restart never revives a loop
+  waits, within its budget, until the warm handlers report the pushed event
+  (two completed syncs without it, `RESTART_SYNCS_WITHOUT_EVENT`, end the wait
+  early). The first completed sync is not enough: it re-sends the `since`
+  token the stalled loop was polling with, and Synapse answers a repeated
+  request from its response cache — the stalled loop's long-poll, completed
+  while the process was frozen, from before the event existed. Ending the wake
+  there stopped the foreground service, Doze cut the network, and the sync that
+  carried the event never ran (#123). A loop has one request in flight, so
+  there is at most one stale answer, and the sync after it carries the event
+  at once if it is coming at all. Without a stale answer, the second sync is a
+  30 s long-poll, so an event the timeline never carries holds the wake to its
+  budget. Completions are counted from after the restart, so a last sync from
+  the stalled loop can't use up the allowance. A restart never revives a loop
   that was stopped: the "is one running?" check, the abort and the spawn all
   happen under the `SyncState` lock logout also takes. Restarting stamps the
   liveness clock, so a burst restarts the loop once. A dismissal push needs no
@@ -1389,7 +1400,7 @@ alongside `openExternalUrl` opened every link twice.
   render as a bare filename line.
 - Hovering a message reveals the exact send time (HH:MM:SS) in the action bar;
   its tooltip (and the header timestamps') shows the full localized date
-- Inline video playback — `m.video` plays inline and seekable: a loopback HTTP server (Range requests) on Linux/WebKitGTK, the asset protocol on macOS/Windows/iOS; graceful fallback to the external player on decode failure
+- Inline video playback — `m.video` plays inline and seekable: a loopback HTTP server (Range requests, random path token) on Linux/WebKitGTK and Android, the asset protocol on macOS/Windows/iOS; graceful fallback to the external player on decode failure. Android can't use the asset protocol: its WebView serves only the first range of an intercepted response, so every follow-up range request fails and the player spins until it gives up (#130). Release builds refuse cleartext except to `127.0.0.1` (`res/xml/network_security_config.xml`); debug builds override that to keep `tauri android dev`'s LAN dev server reachable
 - Sticker rendering (larger than emoji, centered)
 - Image uploads with thumbnail generation
 - Blurhash placeholders during loading

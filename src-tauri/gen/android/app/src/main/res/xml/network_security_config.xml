@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext is refused everywhere except the loopback media server
+     (media_server.rs), which streams decrypted video to inline <video> with
+     Range support (#130). It binds 127.0.0.1 only and gates every request
+     behind a random path token. Declaring this file makes Android ignore the
+     manifest's usesCleartextTraffic, so debug builds override it in
+     src/debug/res/xml to keep `tauri android dev`'s LAN dev server working. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

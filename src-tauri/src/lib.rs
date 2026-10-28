@@ -98,10 +98,14 @@ pub fn run() {
 
     // Loopback HTTP server that streams decrypted media to inline <video> with
     // Range support (seekable, low memory), serving the temp dir that
-    // `write_media_to_temp` writes to. Only Linux/WebKitGTK needs it — other
-    // platforms stream video via the asset protocol — so we don't bind an unused
-    // socket elsewhere. If it can't bind, video falls back to the external player.
-    let media_server = if cfg!(target_os = "linux") {
+    // `write_media_to_temp` writes to. Linux/WebKitGTK can't feed the asset
+    // protocol to <video> at all, and Android's WebView only serves the first
+    // range of an asset-protocol response (#130); macOS/Windows/iOS stream via
+    // the asset protocol, so we don't bind an unused socket there. Every request
+    // must carry the server's random token, which matters on Android, where
+    // other apps share the loopback interface. If it can't bind, video falls
+    // back to the external player.
+    let media_server = if cfg!(any(target_os = "linux", target_os = "android")) {
         media_server::MediaServer::start(std::env::temp_dir())
             .map_err(|e| tracing::warn!("media server failed to start: {e}"))
             .ok()

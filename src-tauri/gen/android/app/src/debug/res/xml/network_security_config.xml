@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug override of src/main/res/xml/network_security_config.xml:
+     `tauri android dev` loads the frontend from the host's dev server over
+     plain HTTP on the LAN, which the release config would refuse. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

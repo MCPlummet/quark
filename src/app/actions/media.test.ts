@@ -78,7 +78,7 @@ vi.mock("./live.js", () => ({
   showSentEvent: (...args: Parameters<typeof showSentEvent>) => showSentEvent(...args),
 }));
 
-import { sendStagedAttachments, attachFiles, readCopiedFiles } from "./media.js";
+import { sendStagedAttachments, attachFiles, readCopiedFiles, inlineVideoTransport } from "./media.js";
 import { attachmentKind, type StagedAttachment } from "../../ui/AttachmentTray.js";
 import { showError } from "../../ui/NotificationToast.js";
 import { setComponents, _shortcodeToMxc } from "./context.js";
@@ -845,5 +845,18 @@ describe("readCopiedFiles", () => {
     expect(await readCopiedFiles()).toEqual({ files: [], listed: false });
     readClipboardFiles.mockRejectedValueOnce(new Error("boom"));
     expect(await readCopiedFiles()).toEqual({ files: [], listed: false });
+  });
+});
+
+describe("inlineVideoTransport", () => {
+  it("streams from the loopback server where the asset protocol can't feed <video>", () => {
+    // WebKitGTK can't read the asset protocol for <video>; Android's WebView
+    // serves only the first range of it (#130).
+    expect(inlineVideoTransport("linux")).toBe("loopback");
+    expect(inlineVideoTransport("android")).toBe("loopback");
+  });
+
+  it("uses the asset protocol where it works natively", () => {
+    for (const p of ["macos", "windows", "ios"]) expect(inlineVideoTransport(p)).toBe("asset");
   });
 });
