@@ -5,8 +5,9 @@ import { DialogBase } from "./DialogBase.js";
 
 export type VerificationState =
   | "incoming"   // Received a request from another device — show accept prompt
-  | "waiting"    // We sent a request; waiting for the other device to respond
+  | "waiting"    // Waiting on the other device / the key exchange
   | "comparing"  // Emoji are ready; user compares them
+  | "confirmed"  // We said they match; waiting for the other device to confirm
   | "verified"
   | "failed"
   | "cancelled";
@@ -24,6 +25,7 @@ const STATE_MESSAGES: Record<VerificationState, string> = {
   incoming: "Incoming verification request",
   waiting: "Waiting for other device…",
   comparing: "Compare these emoji with the other device:",
+  confirmed: "Waiting for the other device to confirm…",
   verified: "Verification successful!",
   failed: "Verification failed. The emoji did not match.",
   cancelled: "Verification was cancelled.",
@@ -49,6 +51,7 @@ export class Verification extends DialogBase {
 
   private _onConfirm: VerificationCallback | null = null;
   private _onDeny: VerificationCallback | null = null;
+  private _onCancel: VerificationCallback | null = null;
   private _onDismiss: VerificationCallback | null = null;
 
   constructor() {
@@ -66,11 +69,8 @@ export class Verification extends DialogBase {
     title.textContent = "verify device";
     header.appendChild(title);
 
-    // Match the Escape-key path: deny the verification and dismiss the dialog.
-    const closeBtn = this.makeCloseButton("Close verification", () => {
-      this._onDeny?.();
-      this.hide();
-    });
+    // Same as Escape: cancel the flow (never a mismatch) and close.
+    const closeBtn = this.makeCloseButton("Close verification", () => this._userClose());
     header.appendChild(closeBtn);
 
     // ── Body ──────────────────────────────────────────────────────────────
@@ -149,8 +149,18 @@ export class Verification extends DialogBase {
     this._onConfirm = cb;
   }
 
+  /** The deny button: Reject, Cancel, or "They Don't Match", by state. */
   onDeny(cb: VerificationCallback): void {
     this._onDeny = cb;
+  }
+
+  /**
+   * The user closed the dialog (Escape, the X, the backdrop, Android back).
+   * Kept apart from `onDeny` so backing out at the emoji step is a plain
+   * cancel, not a report that the emoji didn't match.
+   */
+  onCancel(cb: VerificationCallback): void {
+    this._onCancel = cb;
   }
 
   onDismiss(cb: VerificationCallback): void {
@@ -162,10 +172,18 @@ export class Verification extends DialogBase {
     this._updateFocus();
   }
 
-  // Clicking the backdrop denies the request, matching the close button and
-  // the Escape key.
+  // Clicking the backdrop cancels, matching the close button and Escape.
   protected override onBackdropClick(): void {
-    this._onDeny?.();
+    this._userClose();
+  }
+
+  /** Escape with focus outside the dialog, or Android back (`modalManager`). */
+  requestClose(): void {
+    this._userClose();
+  }
+
+  private _userClose(): void {
+    this._onCancel?.();
     this.hide();
   }
 
@@ -175,6 +193,11 @@ export class Verification extends DialogBase {
     return this._panelEl;
   }
 
+  /** Current state (as last set by `setState`). */
+  get state(): VerificationState {
+    return this._state;
+  }
+
   setState(state: VerificationState): void {
     this._state = state;
     this._statusEl.textContent = STATE_MESSAGES[state];
@@ -182,19 +205,24 @@ export class Verification extends DialogBase {
     const isTerminal = state === "verified" || state === "failed" || state === "cancelled";
     const isComparing = state === "comparing";
     const isIncoming = state === "incoming";
+    const isPending = state === "waiting" || state === "confirmed";
 
     // Entering a new flow ("incoming" popup or outbound "waiting") must not
-    // show emoji left over from a previous attempt — clear the grid.
-    if (isIncoming || state === "waiting") {
+    // show emoji left over from a previous attempt — clear the grid. Leaving
+    // the comparison clears it too, so stale emoji never sit under a result.
+    if (isIncoming || state === "waiting" || isTerminal) {
       this._sasEmoji = [];
       this._renderEmojiGrid();
     }
 
-    // Confirm/deny visible in "comparing" (emoji check) and "incoming" (accept/reject)
+    // Confirm visible for the two decisions: accept/reject an incoming request
+    // and match/mismatch the emoji. Deny doubles as a Cancel button while
+    // waiting — touch devices have no Esc key.
     const showActions = isComparing || isIncoming;
     this._confirmBtn.style.display = showActions ? "" : "none";
-    this._denyBtn.style.display = showActions ? "" : "none";
+    this._denyBtn.style.display = showActions || isPending ? "" : "none";
     this._dismissBtn.style.display = isTerminal ? "" : "none";
+    this.setBusy(false);
 
     // Relabel buttons for incoming vs comparing contexts
     if (isIncoming) {
@@ -202,6 +230,9 @@ export class Verification extends DialogBase {
       this._confirmBtn.setAttribute("aria-label", "Accept verification request");
       this._denyBtn.textContent = "[ Reject ]";
       this._denyBtn.setAttribute("aria-label", "Reject verification request");
+    } else if (isPending) {
+      this._denyBtn.textContent = "[ Cancel ]";
+      this._denyBtn.setAttribute("aria-label", "Cancel verification");
     } else {
       this._confirmBtn.textContent = "[ They Match ]";
       this._confirmBtn.setAttribute("aria-label", "Confirm — emoji match");
@@ -213,7 +244,7 @@ export class Verification extends DialogBase {
     this._incomingSubtitleEl.style.display = isIncoming ? "" : "none";
 
     // Add state class to panel for styling
-    const allStates: VerificationState[] = ["incoming", "waiting", "comparing", "verified", "failed", "cancelled"];
+    const allStates: VerificationState[] = ["incoming", "waiting", "comparing", "confirmed", "verified", "failed", "cancelled"];
     for (const s of allStates) {
       this._panelEl.classList.toggle(`verification-dialog__panel--${s}`, state === s);
     }
@@ -230,9 +261,27 @@ export class Verification extends DialogBase {
    * Populate the "incoming" subtitle with who is asking to verify.
    * Call this before setState("incoming").
    */
-  setIncomingRequest(fromUserId: string, fromDeviceId: string): void {
+  setIncomingRequest(fromUserId: string, fromDeviceId: string, fromDeviceName?: string | null): void {
+    const who = fromDeviceName ? `${fromDeviceName} (${fromDeviceId})` : fromDeviceId;
     this._incomingSubtitleEl.textContent =
-      `${fromDeviceId} from ${fromUserId} wants to verify this Quark session.`;
+      `${who} from ${fromUserId} wants to verify this Quark session.`;
+  }
+
+  /**
+   * Replace the status line's text (call after `setState`, which resets it to
+   * the state's default). `null` restores the default.
+   */
+  setMessage(text: string | null): void {
+    this._statusEl.textContent = text ?? STATE_MESSAGES[this._state];
+  }
+
+  /**
+   * While an action is in flight, disable the confirm button so a double click
+   * or key repeat can't fire it twice. Deny/cancel stay usable.
+   */
+  setBusy(busy: boolean): void {
+    this._confirmBtn.disabled = busy;
+    this._confirmBtn.setAttribute("aria-busy", busy ? "true" : "false");
   }
 
   /** Set the 7 SAS emoji to display for comparison. */
@@ -284,8 +333,7 @@ export class Verification extends DialogBase {
 
     if (this.isEscape(e)) {
       e.preventDefault();
-      this._onDeny?.();
-      this.hide();
+      this._userClose();
       return;
     }
 

@@ -69,7 +69,12 @@ pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("quark=debug".parse().unwrap()),
+                .add_directive("quark=debug".parse().unwrap())
+                // The SDK's own verification decisions (request dropped for an
+                // unknown device, "cancelling both requests", start-collision
+                // resolution) — silent otherwise, and only logged while a
+                // verification is running.
+                .add_directive("matrix_sdk_crypto::verification=info".parse().unwrap()),
         )
         .try_init();
 
@@ -149,6 +154,7 @@ pub fn run() {
         .manage(Mutex::new(config::app_config::AppConfig::default()))
         .manage(Mutex::new(notifications::NotificationConfig::default()))
         .manage(matrix::rooms::RecencyState::default())
+        .manage(matrix::verification::VerificationFlows::default())
         .manage(matrix::rooms::LastEventCache::default())
         .manage(notify::NotificationRegistry::default())
         .manage(updater::UpdaterState::default())
@@ -253,6 +259,8 @@ pub fn run() {
             commands::confirm_sas_verification,
             commands::cancel_sas_verification,
             commands::get_sas_info,
+            commands::get_verification_state,
+            commands::pending_verification_requests,
             // Spaces
             commands::get_space_hierarchy,
             commands::get_user_spaces,

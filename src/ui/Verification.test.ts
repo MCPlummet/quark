@@ -45,6 +45,45 @@ describe("Verification", () => {
     expect(emojiCells()).toHaveLength(0);
   });
 
+  const button = (mod: string): HTMLButtonElement =>
+    verification.getElement().querySelector(`.verification-dialog__btn--${mod}`) as HTMLButtonElement;
+
+  it("offers Cancel (no Esc on touch devices) while waiting and after confirming", () => {
+    verification.show();
+    for (const state of ["waiting", "confirmed"] as const) {
+      verification.setState(state);
+      expect(button("deny").style.display).toBe("");
+      expect(button("deny").textContent).toBe("[ Cancel ]");
+      expect(button("confirm").style.display).toBe("none");
+    }
+  });
+
+  it("drops the emoji when the flow ends", () => {
+    verification.show();
+    verification.setSasEmoji(EMOJI);
+    verification.setState("comparing");
+    verification.setState("cancelled");
+    expect(emojiCells()).toHaveLength(0);
+  });
+
+  it("setMessage overrides the status line until the next state", () => {
+    verification.setState("cancelled");
+    verification.setMessage("Verification was cancelled on the other device.");
+    const status = verification.getElement().querySelector(".verification-dialog__status");
+    expect(status?.textContent).toBe("Verification was cancelled on the other device.");
+    verification.setState("waiting");
+    expect(status?.textContent).toBe("Waiting for other device…");
+  });
+
+  it("setBusy disables only the confirm button", () => {
+    verification.setState("incoming");
+    verification.setBusy(true);
+    expect(button("confirm").disabled).toBe(true);
+    expect(button("deny").disabled).toBe(false);
+    verification.setBusy(false);
+    expect(button("confirm").disabled).toBe(false);
+  });
+
   it("clears stale emoji when starting a new outbound flow", () => {
     verification.show();
     verification.setSasEmoji(EMOJI);

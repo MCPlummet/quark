@@ -54,7 +54,8 @@ import {
   openDebugViewer,
   openDebugViewerForEvent,
 } from "./dialogs.js";
-import { startVerification, setupCrossSigning } from "./crypto.js";
+import { setupCrossSigning } from "./crypto.js";
+import { startVerification } from "./verification.js";
 import { openEmojiPicker, openStickerPicker, openGifPicker } from "./gif.js";
 import { runUpdateCheck } from "../update_check.js";
 

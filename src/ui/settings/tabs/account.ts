@@ -23,7 +23,7 @@ import { askConfirm } from "../../ConfirmDialog.js";
 import { PasswordPromptDialog } from "../../PasswordPromptDialog.js";
 import { mountOverlay } from "../../overlay.js";
 import { showSuccess, showError } from "../../NotificationToast.js";
-import { startVerification } from "../../../app/actions/crypto.js";
+import { startVerification } from "../../../app/actions/verification.js";
 import type { SettingsTab } from "../types.js";
 
 function msgOf(e: unknown): string {

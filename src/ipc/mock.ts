@@ -171,6 +171,13 @@ function mockEmit(event: string, payload: unknown): void {
   for (const cb of [...set]) cb(payload);
 }
 
+// Mock SAS verification flows, by flow ID (see `get_verification_state`).
+const _mockFlows = new Map<string, { startedAt: number; confirmed: boolean; cancelled: boolean }>();
+const MOCK_SAS_EMOJI: [string, string][] = [
+  ["🐶", "Dog"], ["🌙", "Moon"], ["🎩", "Hat"],
+  ["🌹", "Rose"], ["🏠", "House"], ["🐧", "Penguin"], ["🎉", "Party"],
+];
+
 // Mock invoke that returns fake data
 export async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   // Simulate a small network delay
@@ -597,27 +604,59 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       // Simulate UIAA: throw sentinel when no password supplied, succeed when password provided.
       if (args?.password) return null;
       throw "UIAA_REQUIRED";
-    case "start_sas_verification":
-      return "mock-flow-id-" + Date.now();
+    case "start_sas_verification": {
+      const flowId = "mock-flow-id-" + Date.now();
+      _mockFlows.set(flowId, { startedAt: Date.now(), confirmed: false, cancelled: false });
+      return flowId;
+    }
+    case "confirm_sas_verification": {
+      const f = _mockFlows.get(args?.flowId as string);
+      if (f) f.confirmed = true;
+      return null;
+    }
+    case "cancel_sas_verification": {
+      const f = _mockFlows.get(args?.flowId as string);
+      if (f) f.cancelled = true;
+      return null;
+    }
     case "accept_verification_request":
     case "accept_sas_verification":
-    case "confirm_sas_verification":
-    case "cancel_sas_verification":
       return null;
-    case "get_sas_info": {
-      // Simulate emojis becoming available after a short delay
-      const MOCK_EMOJIS: [string, string][] = [
-        ["🐶", "Dog"], ["🌙", "Moon"], ["🎩", "Hat"],
-        ["🌹", "Rose"], ["🏠", "House"], ["🐧", "Penguin"], ["🎉", "Party"],
-      ];
+    case "pending_verification_requests":
+      return [];
+    case "get_verification_state": {
+      // Time-driven stand-in for the backend watcher's events: the UI's
+      // backstop poll walks the flow requested → started → emoji → done.
+      const flowId = args?.flowId as string;
+      const f = _mockFlows.get(flowId);
+      if (!f) return null;
+      const elapsed = Date.now() - f.startedAt;
+      const phase = f.cancelled ? "cancelled"
+        : f.confirmed ? "done"
+        : elapsed < 3000 ? "requested"
+        : elapsed < 6000 ? "started"
+        : "keys_exchanged";
+      return {
+        flow_id: flowId,
+        user_id: args?.userId as string ?? "@you:matrix.org",
+        other_device_id: "ALICEPHONE",
+        we_started: true,
+        phase,
+        emoji: phase === "keys_exchanged" ? MOCK_SAS_EMOJI : [],
+        decimals: null,
+        cancel_code: f.cancelled ? "m.user" : null,
+        cancel_reason: f.cancelled ? "The user cancelled the verification." : null,
+        cancelled_by_us: f.cancelled ? true : null,
+      };
+    }
+    case "get_sas_info":
       return {
         flow_id: args?.flowId as string ?? "mock-flow-id",
         other_user_id: args?.userId as string ?? "@alice:matrix.org",
         other_device_id: "ALICEPHONE",
-        emoji: MOCK_EMOJIS,
+        emoji: MOCK_SAS_EMOJI,
         decimals: null,
       };
-    }
 
     case "reset_cross_signing":
       if (args?.password) return null;

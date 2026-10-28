@@ -51,7 +51,7 @@ The backend handles all Matrix protocol interaction and exposes commands to the 
 - Login (OIDC via MAS + legacy password fallback)
 - Sync loop, room list management & subscriptions — classic v3 `/sync` (see *Core Protocol* below)
 - Sending/receiving messages, reactions, edits, redactions
-- E2EE: device verification (SAS emoji, QR), key backup, cross-signing
+- E2EE: device verification (SAS emoji), key backup, cross-signing
 - Media download/upload with authenticated media (MSC3916)
 - Custom emoji/sticker pack resolution (MSC2545)
 - Theme file loading and validation
@@ -1037,7 +1037,31 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       builds on the current API. The upgrade does not itself require sliding sync — 0.18 still exposes `sync`,
       `sync_once` and `sync_with_callback`, so the v3 loop survives it and the two are separable pieces of work.
 - [x] E2EE: Megolm via Vodozemac, cross-signing, key backup (SSSS)
-- [x] Device verification: SAS emoji, QR code
+- [x] Device verification: SAS emoji (to-device; QR is not built — matrix-sdk's `qrcode` feature is off,
+      so requests are accepted advertising `m.sas.v1` only)
+  - Each flow is driven by a backend watcher (`matrix/verification.rs`) on the SDK's request/SAS state
+    observables; it emits `quark://verification/state` (`VerificationUpdate`: flow ID, role, phase
+    requested → ready → started → accepted → keys_exchanged → confirmed → done | cancelled, emoji, cancel
+    code/reason) and logs every transition at INFO. The UI (`app/actions/verification.ts`) shows one flow,
+    keyed by flow ID, merges updates monotonically, and has no client-side timeout (the SDK's apply:
+    10 min per request, 1 min per SAS step).
+  - The responder starts SAS right after accepting; the initiator accepts the other side's start
+    automatically and only starts SAS itself if none arrived 5 s after the request turned ready.
+  - The SDK allows one flow per user and cancels old *and* new when a second appears, so every abandoned
+    flow is cancelled for real (request and SAS), a new request first cancels earlier live flows with that
+    user, and picking a device that already sent us a request accepts that request instead. A failed
+    send (`ready`, SAS start, MAC) cancels the flow too, and so does any accept/confirm the UI reports
+    as failed.
+  - Closing the dialog (Esc, `[x]`, backdrop, Android back) cancels a live flow with `m.user`. Only
+    "They Don't Match" at the emoji step sends `m.mismatched_sas`.
+  - `quark://sync/verification_request` fires only for requests the SDK holds in an answerable state.
+    A request the SDK dropped because this session didn't have the sender's device keys yet is cancelled
+    back to the sender (`tel.quark.unknown_device`) and the keys are re-queried so a retry works; one
+    dropped for any other reason is cancelled with `tel.quark.request_dropped`.
+  - A request from a *different* user while a flow is live never replaces it (anyone can send one): a
+    toast names the requester, and the request opens when the dialog closes, if it is still waiting.
+  - An incoming request dismisses the startup "verify this session" prompt and the device picker; the
+    prompt is not shown while a flow is live.
 - [x] Room creation, join, leave, invite, kick, ban
 - [x] Room directory & federated room search
 - [x] In-room message search — header search box (`:search`) with four tiers: loaded window (instant) · local cache (matrix-sdk event cache, offline) · back-to-date · entire history. Server tiers stream results one page at a time (bounded memory) and are cancelable.
@@ -1641,7 +1665,8 @@ quark/
 │   │   │   ├── emoji.rs      # MSC2545 pack resolution
 │   │   │   ├── stickers.rs   # Sticker pack handling & sending
 │   │   │   ├── media.rs      # Authenticated media, cache
-│   │   │   ├── crypto.rs     # E2EE, verification, key backup
+│   │   │   ├── crypto.rs     # E2EE status, cross-signing, key backup
+│   │   │   ├── verification.rs # SAS verification flow lifecycle (watchers, registry)
 │   │   │   └── spaces.rs     # Space hierarchy
 │   │   ├── gif/              # GIF search integration
 │   │   │   ├── mod.rs
@@ -1674,7 +1699,7 @@ quark/
 │   │   ├── GifPicker.ts      # GIF search overlay
 │   │   ├── ShortcodePreview.ts # Inline emoji preview popup
 │   │   ├── MemberList.ts     # Room member sidebar
-│   │   └── Verification.ts   # SAS/QR verification UI
+│   │   └── Verification.ts   # SAS verification dialog
 │   ├── vim/
 │   │   ├── mode.ts           # Mode state machine
 │   │   ├── keybindings.ts    # Keymap resolution
