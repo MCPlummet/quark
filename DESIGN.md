@@ -1151,9 +1151,11 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       converted by the same code path as the main timeline. Replies *inside* a
       thread are sent as MSC3440 threaded replies (`m.thread` carrying a real
       `m.in_reply_to`, `is_falling_back: false`) and rendered with the reply
-      banner, fallback stripped. The thread timeline is fetched from the last
-      100 room events, so a reply older than that is not shown (see *Threads*
-      under UI Design for the interaction model)
+      banner, fallback stripped. The thread timeline is the root plus its
+      `m.thread` relations (`/relations`, paged to the end), in server order,
+      undecryptable replies kept as such. It used to be the last 100 room
+      events filtered to the thread, which lost every reply further back (see
+      *Threads* under UI Design for the interaction model)
 - [x] Rich replies (m.in_reply_to) — every reply gets its banner, even when the
       original is outside the loaded window: the preview is looked up in the
       page, then the whole buffer, then a cache of fetched originals, and

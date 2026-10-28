@@ -144,7 +144,7 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
   let root = events.find((e) => e.event_id === eventId) ?? rootEvent;
   const replies = events.filter((e) => e.event_id !== eventId && !e.is_edit);
   if (!root) {
-    // Older than the window the backend scans for the thread: fetch it alone.
+    // The backend could not read it with the replies: try once more alone.
     root = (await getEvent(roomId, eventId).catch(() => null)) ?? undefined;
     if (AppState.get("threadRootEventId") !== eventId) return;
   }
