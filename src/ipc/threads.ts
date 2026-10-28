@@ -1,6 +1,7 @@
 // Thread IPC calls
 
 import { invoke } from "./invoke.js";
+import { inSendOrder } from "./send_order.js";
 import type { TimelineEvent, ThreadRoot } from "./types.js";
 
 export type { ThreadRoot };
@@ -43,11 +44,11 @@ export async function sendThreadReplyIpc(
   formattedBody?: string,
   replyToEventId?: string,
 ): Promise<string> {
-  return invoke<string>("send_thread_reply", {
+  return inSendOrder(roomId, () => invoke<string>("send_thread_reply", {
     roomId,
     threadRootEventId,
     body,
     formattedBody,
     replyToEventId: replyToEventId ?? null,
-  });
+  }));
 }

@@ -1,6 +1,7 @@
 // Emoji and sticker IPC calls
 
 import { invoke } from "./invoke.js";
+import { inSendOrder } from "./send_order.js";
 import type { EmojiPack, EmojiEntry } from "./types.js";
 import type { MessageTarget } from "./types.js";
 
@@ -51,7 +52,7 @@ export async function sendSticker(
   packName: string | null,
   target: MessageTarget = {},
 ): Promise<string> {
-  return invoke<string>("send_sticker", {
+  return inSendOrder(roomId, () => invoke<string>("send_sticker", {
     roomId,
     shortcode,
     url,
@@ -60,5 +61,5 @@ export async function sendSticker(
     packName,
     replyToEventId: target.replyToEventId ?? null,
     threadRootEventId: target.threadRootEventId ?? null,
-  });
+  }));
 }
