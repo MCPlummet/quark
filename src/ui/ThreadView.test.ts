@@ -254,12 +254,12 @@ describe("ThreadView", () => {
 // `[data-message-id]` elements in the list the windowed renderer pivots on, and
 // a cull that pivoted on one re-centred the window on older history — dropping
 // the live tail the moment a new message arrived. Mounted as App mounts it, the
-// sheet sits beside the scroller, never in it.
+// panel sits beside the scroller, never in it — the split around it is paint.
 describe("ThreadView mounted over the timeline", () => {
   it("keeps its rows out of the timeline's scroller", () => {
     const timeline = new Timeline();
     const view = new ThreadView();
-    timeline.getElement().appendChild(view.getElement());
+    view.embedIn(timeline);
     document.body.appendChild(timeline.getElement());
     try {
       timeline.setMessages([
@@ -276,6 +276,7 @@ describe("ThreadView mounted over the timeline", () => {
       expect(timeline.selectedMessageId).toBe("$m2");
       expect(view.selectedMessageId).toBeNull();
     } finally {
+      view.close();
       timeline.getElement().remove();
     }
   });

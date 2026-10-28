@@ -1015,6 +1015,7 @@ export class Timeline {
 
     // The scroller's only in-flow child — keeps column-reverse anchoring clean.
     this._listEl = document.createElement("div");
+    this._listEl.className = "timeline__list";
     this._listEl.setAttribute("role", "list");
     this._listEl.setAttribute("aria-label", "Message timeline");
     this._el.appendChild(this._listEl);
@@ -1229,6 +1230,12 @@ export class Timeline {
    *  measure the scrollbar gutter or observe scroll-area size use this. */
   getScrollElement(): HTMLElement {
     return this._el;
+  }
+
+  /** The message list inside the scroller — every rendered row's parent (or
+   *  grandparent, inside a group). The thread split paints over it. */
+  getListElement(): HTMLElement {
+    return this._listEl;
   }
 
   /**

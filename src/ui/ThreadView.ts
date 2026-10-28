@@ -1,4 +1,4 @@
-// Thread sheet — the open thread, layered over the room timeline.
+// Thread panel — the open thread, drawn in the room timeline at its root.
 //
 // The thread used to be an inline panel spliced into the timeline's own message
 // list, under its root. Living inside the main scroller is what made it fragile:
@@ -9,17 +9,20 @@
 // ended up scrolling the room to the thread; and every re-open rebuilt the panel
 // scrolled to its oldest reply (#131).
 //
-// It is now its own component. App mounts it inside the timeline's
+// It is now its own component, mounted (`embedIn`) inside the timeline's
 // non-scrolling wrapper, so it covers exactly the timeline region: a backdrop
-// dims (and blocks pointer access to) the room timeline, and the sheet sits on
-// the compose box, which stays live and sends into the thread. The timeline
-// keeps rendering underneath, untouched — nothing here can move its scroll.
+// dims (and blocks pointer access to) the room timeline, and the panel opens
+// where the thread's root is, the room parting around it (`TimelineSplit`).
+// That parting is paint only — the timeline keeps rendering underneath,
+// untouched, and nothing here can move its scroll. The compose box below stays
+// live and sends into the thread.
 
 import { createReactionBar, type ReactionGroup } from "./Reactions.js";
 import { appendLinkifiedText } from "../app/links.js";
 import { attachLongPress } from "../app/long_press.js";
 import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
 import { buildReplyPreview, buildVideoAffordance, playVideoInline, type ReplyPreviewData } from "./Timeline.js";
+import { TimelineSplit, type SplitHost } from "./thread_split.js";
 
 export interface ThreadMessageData {
   id: string;
@@ -89,6 +92,8 @@ export class ThreadView {
   private _stickToBottom = true;
   /** Between open() and the replies arriving. */
   private _loading = false;
+  /** Parts the room around the panel; null until embedded in a timeline. */
+  private _split: TimelineSplit | null = null;
 
   private _onClose: (() => void) | null = null;
   private _onFocus: (() => void) | null = null;
@@ -235,6 +240,13 @@ export class ThreadView {
     return this._el;
   }
 
+  /** Mount over `host`'s timeline region and open threads in it, at their
+   *  root. Without this the panel has no room to part and simply appears. */
+  embedIn(host: SplitHost): void {
+    host.getElement().appendChild(this._el);
+    this._split = new TimelineSplit(host, this._sheetEl, () => this._scrollEl.offsetTop);
+  }
+
   /** The reply list's scroll container. */
   getScrollElement(): HTMLElement {
     return this._scrollEl;
@@ -283,11 +295,13 @@ export class ThreadView {
   }
 
   /**
-   * Show the sheet for `root`. Replies arrive separately ({@link setReplies});
-   * until then the sheet says it is loading, so the user sees the thread open
+   * Show the panel for `root`. Replies arrive separately ({@link setReplies});
+   * until then the panel says it is loading, so the user sees the thread open
    * at once and knows where the compose box now sends.
    */
   open(root: ThreadRootData): void {
+    // A thread still folding away is finished first; this one reuses its rows.
+    this._split?.settle();
     this._root = root;
     this._messages = [];
     this._selectedIndex = -1;
@@ -297,6 +311,7 @@ export class ThreadView {
     this._loading = true;
     this._renderChrome();
     this._el.style.display = "";
+    this._split?.open(root.id);
   }
 
   /** Replace the replies (the thread's own events, root excluded). Scrolls to
@@ -372,16 +387,28 @@ export class ThreadView {
     this._renderChrome();
   }
 
-  /** Hide the sheet and forget the thread. */
+  /** Forget the thread now and fold the panel away. The rows stay drawn
+   *  until the fold ends, but the thread is closed at once: nothing selects,
+   *  counts or receives into it from here on. */
   close(): void {
     this._root = null;
     this._messages = [];
     this._selectedIndex = -1;
-    this._rootEl.replaceChildren();
-    this._listEl.replaceChildren();
     this._loading = false;
-    this._renderChrome();
-    this._el.style.display = "none";
+    const hide = () => {
+      this._el.classList.remove("thread-view--closing");
+      this._rootEl.replaceChildren();
+      this._listEl.replaceChildren();
+      this._renderChrome();
+      this._el.style.display = "none";
+    };
+    if (this._el.classList.contains("thread-view--closing")) return;
+    if (!this._split || this._el.style.display === "none") {
+      hide();
+      return;
+    }
+    this._el.classList.add("thread-view--closing");
+    this._split.close(hide);
   }
 
   /** The key that closes the thread, as the user has it bound (e.g. "Esc"). */

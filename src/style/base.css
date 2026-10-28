@@ -451,15 +451,16 @@ body.quark-mobile .room-list__header-btn {
   background-color: var(--presence-offline, #555);
 }
 
-/* ── Thread sheet ───────────────────────────────────────────────────────────
+/* ── Thread panel ───────────────────────────────────────────────────────────
  *
- * The open thread, layered over the timeline region. ThreadView is mounted in
+ * The open thread, drawn in the timeline at its root: the room parts there and
+ * the panel opens in the gap (src/ui/thread_split.ts places it and moves the
+ * two halves of the room, with transforms only). ThreadView is mounted in
  * .timeline-wrap beside the scroller — never inside it, where its rows used to
  * confuse the windowed renderer (#132). The backdrop greys out the room
  * timeline and takes its pointer events, so nothing behind the thread can be
- * scrolled or clicked; clicking it closes the thread. The sheet sits on the
- * compose box, aligned with the banner and the box below it, which stay live
- * and send into the thread. The rest of the layout is dimmed by
+ * scrolled or clicked; clicking it closes the thread. The compose box below
+ * stays live and sends into the thread. The rest of the layout is dimmed by
  * .quark-layout--thread-focus (below).
  */
 .thread-view {
@@ -467,9 +468,6 @@ body.quark-mobile .room-list__header-btn {
   inset: 0;
   /* Above the timeline's own overlays: loading indicator (1), jump button (10). */
   z-index: 15;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
 }
 
 .thread-view__backdrop {
@@ -480,36 +478,48 @@ body.quark-mobile .room-list__header-btn {
   animation: thread-view-fade var(--transition-speed) ease-out;
 }
 
+/* Folding away: the thread is already closed, only the animation is left. */
+.thread-view--closing {
+  pointer-events: none;
+}
+
+.thread-view--closing .thread-view__backdrop {
+  opacity: 0;
+  transition: opacity 240ms ease-out;
+}
+
 .thread-view__sheet {
-  position: relative;
+  /* Placed by TimelineSplit (transform, clip-path, and left/width from the
+     root's message box); these are the fallbacks, aligned with the timeline's
+     boxes past the avatar column. */
+  position: absolute;
+  top: 0;
+  left: 52px;
+  right: 22px;
   display: flex;
   flex-direction: column;
   min-height: 0;
-  /* Leave some of the dimmed room in view above a long thread: it is context,
-     and the click target that closes the thread. */
+  /* Leave some of the dimmed room in view around a long thread: it is
+     context, and the click target that closes the thread. */
   max-height: max(60%, calc(100% - 96px));
-  /* Same insets as .reply-preview-bar and the compose box, so the three read
-     as one column: thread → "replying in thread" → where you type. */
-  margin: 0 20px 0 44px;
   background-color: var(--bg);
   border: var(--border-width) solid color-mix(in srgb, var(--msg-thread-indicator) 55%, var(--border-color));
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  box-shadow: 0 -6px 18px color-mix(in srgb, var(--shadow-color) 45%, transparent);
-  animation: thread-view-rise 160ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  border-radius: 8px;
+  box-shadow: 0 6px 22px color-mix(in srgb, var(--shadow-color) 40%, transparent);
+}
+
+/* The frame a split comes off (thread_split.ts): the root's box is about to
+   get its border back, and must not fade it in from transparent. */
+.timeline-wrap--thread-settling .message-group {
+  transition: none;
 }
 
 @keyframes thread-view-fade {
   from { opacity: 0; }
 }
 
-@keyframes thread-view-rise {
-  from { opacity: 0; transform: translateY(12px); }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .thread-view__backdrop,
-  .thread-view__sheet {
+  .thread-view__backdrop {
     animation: none;
   }
 }
@@ -6845,15 +6855,11 @@ body.quark-mobile .input-bar__action-btn {
   padding: 0 4px;
 }
 
-/* The thread sheet on mobile: full width, near full height, a bottom sheet
- * over the timeline with a strip of the dimmed room left above it to tap
- * closed. The composer below is the main one, so its pan guard covers it. */
+/* The thread panel on mobile: the width of the root's box, and tall enough to
+ * be worth it, with a strip of the dimmed room kept in view to tap closed.
+ * The composer below is the main one, so its pan guard covers it. */
 body.quark-mobile .thread-view__sheet {
-  margin: 0;
-  max-height: calc(100% - 40px);
-  border-left: none;
-  border-right: none;
-  border-radius: 10px 10px 0 0;
+  max-height: calc(100% - 56px);
 }
 
 body.quark-mobile .thread-view__scroll {

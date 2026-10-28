@@ -60,7 +60,7 @@ export interface AppComponents {
   replyPreview: ReplyPreview;
   input: Input;
 
-  // The open thread — a sheet layered over the timeline region
+  // The open thread — a panel opened in the timeline region, at its root
   threadView: ThreadView;
 
   // Sidebars
@@ -180,11 +180,12 @@ export function mountApp(container: HTMLElement): AppComponents {
 
   contentArea.appendChild(roomHeader.getElement());
   contentArea.appendChild(timeline.getElement());
-  // The thread sheet lives in the timeline's non-scrolling wrapper — the host
+  // The thread panel lives in the timeline's non-scrolling wrapper — the host
   // for its viewport-pinned overlays — so it covers exactly the timeline region
   // and leaves the compose box below it live. It is deliberately NOT inside the
-  // scroller: rows in there are the windowed renderer's business (#132).
-  timeline.getElement().appendChild(threadView.getElement());
+  // scroller: rows in there are the windowed renderer's business (#132). It
+  // opens at the thread's root by parting the room around it, in paint only.
+  threadView.embedIn(timeline);
   contentArea.appendChild(replyPreview.getElement());
 
   // Shortcode / mention previews sit above input bar
