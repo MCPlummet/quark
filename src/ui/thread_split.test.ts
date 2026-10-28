@@ -31,6 +31,19 @@ describe("computeSplit", () => {
     expect(computeSplit({ ...base, panelHeight: 900, seamTop: 300, seamBottom: 340, anchor: 300 }).panelTop).toBe(12);
   });
 
+  it("keeps a placed panel where it is when the root moves, the halves following it", () => {
+    // A message landed at the tail and pushed the root up 60px.
+    const l = computeSplit({ ...base, seamTop: 140, seamBottom: 180, anchor: 140, pinnedTop: 170 });
+    expect(l.panelTop).toBe(170);
+    expect(140 + l.before).toBe(170 - 8);
+    expect(180 + l.after).toBe(370 + 8);
+  });
+
+  it("still keeps a pinned panel inside the region as it grows", () => {
+    expect(computeSplit({ ...base, panelHeight: 500, seamTop: 200, seamBottom: 240, anchor: 200, pinnedTop: 170 }).panelTop)
+      .toBe(600 - 12 - 500);
+  });
+
   it("folds into the nearest edge when the root is off-screen", () => {
     const l = computeSplit({ ...base, seamTop: -500, seamBottom: -460, anchor: -500 });
     expect(l.panelTop).toBe(12);

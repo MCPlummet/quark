@@ -35,6 +35,8 @@ const GAP_PX = 8;
 const SHADOW_PX = 32;
 /** Corner radius of the panel — and of a group box's halves — in px. */
 const RADIUS_PX = 8;
+/** The most the room's scroll position is put back by (see `_holdScroll`). */
+const NUDGE_PX = 2;
 
 export interface SplitInput {
   /** Height of the timeline region. */
@@ -50,6 +52,10 @@ export interface SplitInput {
   panelHeight: number;
   /** Offset of the panel's root row from the panel's top (its header). */
   rootOffset: number;
+  /** Where the panel already is. Once open it stays put: the room moving
+   *  underneath (a message landing at the tail pushes the root up) moves the
+   *  halves to stay flush with it instead, so nothing on screen shifts. */
+  pinnedTop?: number;
 }
 
 export interface SplitLayout {
@@ -70,7 +76,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), h
  *  in, and the halves move further to stay flush with it. */
 export function computeSplit(i: SplitInput): SplitLayout {
   const maxTop = Math.max(EDGE_PX, i.viewport - EDGE_PX - i.panelHeight);
-  const panelTop = clamp(i.anchor - i.rootOffset, EDGE_PX, maxTop);
+  const panelTop = clamp(i.pinnedTop ?? i.anchor - i.rootOffset, EDGE_PX, maxTop);
   const panelBottom = panelTop + i.panelHeight;
   const clipTop = clamp(i.seamTop - panelTop, 0, i.panelHeight);
   return {
@@ -127,7 +133,13 @@ export class TimelineSplit {
   } | null = null;
   /** The unfold waits a frame (see open); this is that frame. */
   private _pendingOpen: number | null = null;
-  private readonly _onScroll = () => this._relayout(false);
+  /** Where the panel was placed, once unfolded (see SplitInput.pinnedTop). */
+  private _panelTop: number | null = null;
+  /** The room's scrollTop as the split found it (see `_holdScroll`). */
+  private _scrollTop: number | null = null;
+  private readonly _onScroll = () => {
+    if (!this._holdScroll()) this._relayout(false);
+  };
 
   constructor(
     private readonly _host: SplitHost,
@@ -146,6 +158,7 @@ export class TimelineSplit {
   open(rootId: string): void {
     this.settle();
     this._cancelPendingOpen();
+    this._unobserve();
     this._rootId = rootId;
     this._host.getElement().classList.add(SPLIT_CLASS);
     // Out of sight until placed — no frame may show it at its CSS default.
@@ -170,6 +183,8 @@ export class TimelineSplit {
     // the rules create) exist at rest too. Commit it: a transition needs a
     // style to start from, and an element that only just appeared has none.
     this._placePanel(seam, layout, { folded: true, animate: false });
+    this._scrollTop = this._host.getScrollElement().scrollTop;
+    this._host.getScrollElement().addEventListener("scroll", this._onScroll, { passive: true });
     this._writeRules(seam, { ...layout, before: 0, after: 0 }, false);
     void this._panel.offsetHeight;
     const animate = !prefersReducedMotion();
@@ -199,7 +214,7 @@ export class TimelineSplit {
     // rows being animated are not the ones the split was measured on: finish
     // at once rather than slide the new room's rows into place.
     const mutations = typeof MutationObserver !== "undefined"
-      ? new MutationObserver(() => this.settle())
+      ? new MutationObserver(() => this.settle({ holdScroll: false }))
       : null;
     mutations?.observe(this._host.getListElement(), { childList: true });
     // The fold ends with the panel's clip; the timer is for a transition that
@@ -211,15 +226,16 @@ export class TimelineSplit {
     this._closing = { timer: setTimeout(() => this.settle(), DURATION_MS * 4), mutations, onEnd, done };
   }
 
-  /** Finish a running fold now. */
-  settle(): void {
+  /** Finish a running fold now. `holdScroll: false` when the room has been
+   *  re-rendered — its scroll position is no longer the one the split found. */
+  settle(opts: { holdScroll?: boolean } = {}): void {
     const closing = this._closing;
     if (!closing) return;
     this._closing = null;
     clearTimeout(closing.timer);
     closing.mutations?.disconnect();
     this._panel.removeEventListener("transitionend", closing.onEnd);
-    this._teardown();
+    this._teardown(opts.holdScroll ?? true);
     closing.done();
   }
 
@@ -234,6 +250,25 @@ export class TimelineSplit {
   /** Re-measure and re-place after the room or the panel changed size.
    *  `animate` for the panel's own growth (replies arriving); the room's
    *  changes snap, so a message landing underneath never shows as a wobble. */
+  /**
+   * Put back a nudge of the room's scroll position. The halves' transforms
+   * count toward the scroller's scrollable overflow, and WebKit re-anchors a
+   * `column-reverse` scroller by a rounding pixel when that overflow changes
+   * (any upward transform of the list will do it) — a scroll the split must
+   * not cause. A larger move is real (the timeline re-pinning to its tail)
+   * and becomes the position to hold. True when it wrote.
+   */
+  private _holdScroll(): boolean {
+    const scroll = this._host.getScrollElement();
+    if (this._scrollTop === null || scroll.scrollTop === this._scrollTop) return false;
+    if (Math.abs(scroll.scrollTop - this._scrollTop) > NUDGE_PX) {
+      this._scrollTop = scroll.scrollTop;
+      return false;
+    }
+    scroll.scrollTop = this._scrollTop;
+    return true;
+  }
+
   private _relayout(animate: boolean): void {
     if (!this._rootId || this._closing) return;
     const seam = this._measure();
@@ -244,14 +279,17 @@ export class TimelineSplit {
   }
 
   private _layoutFor(seam: Seam): SplitLayout {
-    return computeSplit({
+    const layout = computeSplit({
       viewport: this._host.getElement().clientHeight,
       seamTop: seam.top,
       seamBottom: seam.bottom,
       anchor: seam.anchor,
       panelHeight: this._panel.offsetHeight,
       rootOffset: this._rootOffset(),
+      pinnedTop: this._panelTop ?? undefined,
     });
+    this._panelTop = layout.panelTop;
+    return layout;
   }
 
   private _measure(): Seam {
@@ -364,7 +402,7 @@ export class TimelineSplit {
     this._style.textContent = rules.join("\n");
   }
 
-  private _teardown(): void {
+  private _teardown(holdScroll = true): void {
     const wrap = this._host.getElement();
     if (this._style && typeof requestAnimationFrame !== "undefined") {
       wrap.classList.add(SETTLING_CLASS);
@@ -373,7 +411,12 @@ export class TimelineSplit {
     this._style?.remove();
     this._style = null;
     this._rootId = null;
+    this._panelTop = null;
     wrap.classList.remove(SPLIT_CLASS);
+    // The overflow just shrank back: a last nudge to put back.
+    if (holdScroll) this._holdScroll();
+    this._scrollTop = null;
+    this._host.getScrollElement().removeEventListener("scroll", this._onScroll);
     const s = this._panel.style;
     s.transition = s.transform = s.clipPath = s.left = s.width = s.right = s.visibility = "";
   }
@@ -381,10 +424,8 @@ export class TimelineSplit {
   // ── Observation ─────────────────────────────────────────────────────────
 
   private _observe(): void {
-    const scroll = this._host.getScrollElement();
-    scroll.addEventListener("scroll", this._onScroll, { passive: true });
     if (typeof ResizeObserver === "undefined") return;
-    const targets = [this._host.getListElement(), scroll, this._panel];
+    const targets = [this._host.getListElement(), this._host.getScrollElement(), this._panel];
     const size = (el: Element) => `${(el as HTMLElement).offsetWidth}x${(el as HTMLElement).offsetHeight}`;
     for (const el of targets) this._sizes.set(el, size(el));
     // Callbacks land after layout and before paint, so a re-place made here is
@@ -402,8 +443,9 @@ export class TimelineSplit {
     for (const el of targets) this._resize.observe(el);
   }
 
+  /** Stop following the room's changes. The scroll hold stays on until the
+   *  split is fully off (`_teardown`): the fold changes the overflow too. */
   private _unobserve(): void {
-    this._host.getScrollElement().removeEventListener("scroll", this._onScroll);
     this._resize?.disconnect();
     this._resize = null;
     this._sizes.clear();

@@ -508,6 +508,13 @@ body.quark-mobile .room-list__header-btn {
   box-shadow: 0 6px 22px color-mix(in srgb, var(--shadow-color) 40%, transparent);
 }
 
+/* The room stays frozen until the split is fully off, not just while the
+   thread is open: closing restores the overflow at once, but the room's rows
+   are still sliding home for the length of the fold. */
+.timeline-wrap--thread-split .timeline {
+  overflow: hidden;
+}
+
 /* The frame a split comes off (thread_split.ts): the root's box is about to
    get its border back, and must not fade it in from transparent. */
 .timeline-wrap--thread-settling .message-group {
@@ -691,7 +698,7 @@ body.quark-mobile .room-list__header-btn {
   cursor: zoom-in;
 }
 
-/* While a thread is open everything but the sheet, its banner and the
+/* While a thread is open everything but the panel, its banner and the
  * composer is greyed back, and the room timeline is frozen: the backdrop
  * already blocks the pointer, and with no overflow there is nothing for a key
  * or a stray gesture to scroll. Programmatic writes still apply, so new
