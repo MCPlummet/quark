@@ -760,6 +760,18 @@ unfolds in the gap, with everything else greyed back:
   body, so a reply from a client that still sends the `> <@user>` fallback and
   one that doesn't (MSC2781) look the same; a plain thread message's
   `is_falling_back` pointer is not a reply and gets no banner.
+- **Counting.** A root's `⌥ n replies` starts as the higher of the replies
+  loaded with the room and the server's bundled `m.thread` count on the root
+  (`thread_reply_count`), then goes up once per reply *by event ID*: a reply
+  reported twice — our send returning, then its sync echo — counts once, and a
+  send that fails never counts. It is kept on the root's `MessageData`, so a
+  windowed re-render does not put it back. Opening the thread sets it to the
+  replies the thread loaded, so the room and the panel agree. The panel's
+  header counts replies that have landed; our own still being sent are drawn
+  but listed apart ("12 replies · 3 sending"). Those are held outside the
+  panel (`_sendingReplies` in `threads.ts`), so a thread closed and reopened
+  while they queue behind a rate limit still shows them, and one that lands
+  meanwhile appears — its sync echo, being our own, is suppressed.
 - **Modal-ish, not a modal.** The panel is not a `DialogBase`: the composer has
   to stay live. It is a panel (`activePanel === "thread"`) with its own
   registered nav — `j`/`k`/`gg`/`G` move within it, `k` from the top of the

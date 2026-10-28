@@ -77,14 +77,14 @@ const THREAD = "$root:example.com";
 
 const appendMessage = vi.fn();
 const appendReply = vi.fn();
-const incrementThreadReplyCount = vi.fn();
+const countThreadReply = vi.fn();
 
 function makeComponents(): AppComponents {
   return {
     timeline: {
       appendMessage,
       getMessageElementById: () => null,
-      incrementThreadReplyCount,
+      countThreadReply,
       updateMessageBody: vi.fn(),
       updateMessageMedia: vi.fn(),
     },
@@ -132,7 +132,7 @@ describe("sync tells the toast layer whether the message was actually drawn", ()
     handlers.clear();
     appendMessage.mockClear();
     appendReply.mockClear();
-    incrementThreadReplyCount.mockClear();
+    countThreadReply.mockClear();
     handleIncomingMessage.mockClear();
     vi.mocked(isInContextView).mockReturnValue(false);
     _ownSentEventIds.clear();
@@ -168,7 +168,7 @@ describe("sync tells the toast layer whether the message was actually drawn", ()
 
     expect(appendMessage).not.toHaveBeenCalled();
     expect(appendReply).not.toHaveBeenCalled();
-    expect(incrementThreadReplyCount).toHaveBeenCalledWith(THREAD);
+    expect(countThreadReply).toHaveBeenCalledWith(THREAD, expect.any(String));
     expect(reportedAsRendered()).toBe(false);
   });
 

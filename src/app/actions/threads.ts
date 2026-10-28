@@ -12,7 +12,7 @@ import { isMobile, closeDrawer } from "../mobile.js";
 
 import { getEvent, getThreadTimeline, sendThreadReplyIpc } from "../../ipc/index.js";
 import type { TimelineEvent } from "../../ipc/types.js";
-import type { ThreadRootData } from "../../ui/ThreadView.js";
+import type { ThreadMessageData, ThreadRootData } from "../../ui/ThreadView.js";
 
 import { showError } from "../../ui/NotificationToast.js";
 
@@ -40,6 +40,17 @@ export const THREAD_FOCUS_CLASS = "quark-layout--thread-focus";
  * nothing and silently did nothing.
  */
 let _threadEvents: TimelineEvent[] = [];
+
+/**
+ * Our own thread replies still being sent, by provisional row ID. Kept here
+ * because the panel forgets its rows when it closes: behind a homeserver rate
+ * limit a send can take seconds, and a thread closed and reopened meanwhile
+ * lost the reply — its row went with the panel, and its sync echo, being our
+ * own, is suppressed.
+ */
+const _sendingReplies = new Map<string, { rootId: string; msg: ThreadMessageData }>();
+/** Keeps provisional IDs apart when two sends share a millisecond. */
+let _sendSeq = 0;
 
 /** The open thread's own events, root first. Empty when no thread is open. */
 export function openThreadEvents(): readonly TimelineEvent[] {
@@ -99,7 +110,7 @@ function setThreadFocus(on: boolean): void {
 export async function openThread(eventId: string, opts: { focusEventId?: string } = {}): Promise<void> {
   const roomId = AppState.get("currentRoomId");
   if (!roomId) return;
-  const { threadView } = getComponents();
+  const { timeline, threadView } = getComponents();
 
   if (AppState.get("threadRootEventId") === eventId && threadView.rootId === eventId) {
     AppState.set("activePanel", "thread");
@@ -158,6 +169,13 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
   threadView.setReplies(
     replies.map((e) => timelineEventToThreadMessage(e, _threadEvents, AppState.get("currentTimeline"))),
   );
+  // Ours still on their way, after the ones that have landed.
+  for (const sending of _sendingReplies.values()) {
+    if (sending.rootId === eventId) threadView.appendReply(sending.msg);
+  }
+  // The whole thread is here now; the room only ever counted the replies in
+  // its loaded window.
+  timeline.setThreadReplies(eventId, replies.map((e) => e.event_id));
   _downloadMessageImages(events, {
     updateMessageMedia: (id: string, url: string) => threadView.updateMessageMedia(id, url),
   });
@@ -204,8 +222,8 @@ export async function sendThreadReply(
   const prepared = prepareOutgoingBody(body);
   body = prepared.body;
 
-  const optimisticId = `local-thread-${Date.now()}`;
-  threadView.appendReply({
+  const optimisticId = `local-thread-${Date.now()}-${++_sendSeq}`;
+  const optimistic: ThreadMessageData = {
     id: optimisticId,
     senderName: ownName,
     isOwn: true,
@@ -215,9 +233,10 @@ export async function sendThreadReply(
     replyTo: replyToEventId
       ? replyPreviewFor(replyToEventId, _threadEvents, AppState.get("currentTimeline"))
       : undefined,
-  });
-  // Optimistically update the reply count indicator on the thread root.
-  timeline.incrementThreadReplyCount(threadRootId);
+    pending: true,
+  };
+  threadView.appendReply(optimistic);
+  _sendingReplies.set(optimisticId, { rootId: threadRootId, msg: optimistic });
   // The quoted message is consumed by this send, as a main-timeline reply is.
   if (replyToEventId) disarmReply();
 
@@ -271,10 +290,18 @@ export async function sendThreadReply(
   try {
     const eventId = await sendThreadReplyIpc(roomId, threadRootId, body, prepared.formattedBody, replyToEventId);
     _ownSentEventIds.add(eventId);
-    threadView.confirmMessage(optimisticId, eventId);
+    _sendingReplies.delete(optimisticId);
+    // Counted now it exists, and by ID: its sync echo may already have
+    // counted it. Counting it on send as well went up by two whenever the
+    // echo beat the send back, and never came down for a send that failed.
+    timeline.countThreadReply(threadRootId, eventId);
+    const showing = AppState.get("threadRootEventId") === threadRootId;
+    if (threadView.hasMessage(optimisticId)) threadView.confirmMessage(optimisticId, eventId);
+    // Its row went with a panel closed since; the thread is open again.
+    else if (showing) threadView.appendReply({ ...optimistic, id: eventId, pending: false });
     // Make our own reply findable (to quote it, react to it) before its sync
     // echo — which is suppressed — would have put it anywhere.
-    if (AppState.get("threadRootEventId") === threadRootId && ownUserId) {
+    if (showing && ownUserId) {
       _threadEvents.push({
         event_id: eventId,
         sender: ownUserId,
@@ -293,6 +320,7 @@ export async function sendThreadReply(
       });
     }
   } catch (err) {
+    _sendingReplies.delete(optimisticId);
     threadView.removeMessage(optimisticId);
     // Hand the text back rather than lose it, unless something new was typed.
     if (input.getValue().trim().length === 0) input.setValue(body);

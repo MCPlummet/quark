@@ -51,7 +51,7 @@ function makeComponents(): AppComponents {
     timeline: {
       appendMessage: vi.fn(),
       getMessageElementById: () => null,
-      incrementThreadReplyCount: vi.fn(),
+      countThreadReply: vi.fn(),
       updateMessageBody: vi.fn(),
       updateMessageMedia: vi.fn(),
     },

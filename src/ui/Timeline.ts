@@ -529,6 +529,25 @@ export function buildReplyPreview(replyTo: ReplyPreviewData): HTMLElement {
  * Build the inner content of a single message (body, media, reactions) —
  * does NOT include the sender/timestamp header (that lives on the group).
  */
+/** The "⌥ n replies" button on a thread root's row; opens its thread. */
+function buildThreadIndicator(row: HTMLElement, rootId: string, count: number): HTMLButtonElement {
+  const indicator = document.createElement("button");
+  indicator.className = "message__thread-indicator";
+  indicator.setAttribute("tabindex", "0");
+  indicator.textContent = count > 0 ? `⌥ ${count} repl${count === 1 ? "y" : "ies"}` : "⌥ thread";
+  indicator.title = "Open thread (t)";
+  indicator.addEventListener("click", (e) => {
+    e.stopPropagation();
+    row.dispatchEvent(
+      new CustomEvent("quark:open-thread", {
+        bubbles: true,
+        detail: { eventId: rootId },
+      })
+    );
+  });
+  return indicator;
+}
+
 function buildMessageElement(msg: MessageData): HTMLElement {
   const row = document.createElement("div");
   row.className = "message";
@@ -652,24 +671,7 @@ function buildMessageElement(msg: MessageData): HTMLElement {
   }
 
   // ── Thread indicator ───────────────────────────────────────────────────
-  if (msg.isThreadRoot) {
-    const indicator = document.createElement("button");
-    indicator.className = "message__thread-indicator";
-    indicator.setAttribute("tabindex", "0");
-    const count = msg.threadReplyCount ?? 0;
-    indicator.textContent = count > 0 ? `⌥ ${count} repl${count === 1 ? "y" : "ies"}` : "⌥ thread";
-    indicator.title = "Open thread (t)";
-    indicator.addEventListener("click", (e) => {
-      e.stopPropagation();
-      row.dispatchEvent(
-        new CustomEvent("quark:open-thread", {
-          bubbles: true,
-          detail: { eventId: msg.id },
-        })
-      );
-    });
-    row.appendChild(indicator);
-  }
+  if (msg.isThreadRoot) row.appendChild(buildThreadIndicator(row, msg.id, msg.threadReplyCount ?? 0));
 
   // ── Hover action bar ───────────────────────────────────────────────────
   if (msg.type !== "system") {
@@ -919,6 +921,8 @@ export class Timeline {
    *  Extending the rendered window from the buffer is cheap; reaching the
    *  buffer edges fires server-fetch callbacks. */
   private _messages: MessageData[] = [];
+  /** Thread replies counted onto their roots since the last `setMessages`. */
+  private _countedThreadReplies = new Set<string>();
   /** Inclusive start of the rendered window into `_messages`. */
   private _renderStart = 0;
   /** Exclusive end of the rendered window into `_messages`. */
@@ -1676,6 +1680,8 @@ export class Timeline {
     const savedScrollTop = this._el.scrollTop;
 
     this._messages = [...msgs];
+    // The new list's counts were built from its own events.
+    this._countedThreadReplies.clear();
     this._announceUnresolvedReplies(msgs);
     // Render only the most recent window. Older messages remain in the buffer
     // and become visible when the user scrolls up.
@@ -2600,41 +2606,39 @@ export class Timeline {
   }
 
   /**
-   * Increment (or create) the thread reply count indicator on a thread root
-   * message. Called when a thread reply arrives via sync or optimistic send.
+   * Count `replyId` as one more reply in the thread rooted at `rootId` — once:
+   * a reply reported again (our own send returning, then its sync echo) is not
+   * counted twice. Kept on the root's `MessageData`, not only its row, so a
+   * windowed re-render does not put the count back (the #55 class of bug).
    */
-  incrementThreadReplyCount(threadRootEventId: string): void {
-    const el = this.getMessageElementById(threadRootEventId);
-    if (!el) return;
+  countThreadReply(rootId: string, replyId: string): void {
+    if (this._countedThreadReplies.has(replyId)) return;
+    const idx = this._messages.findIndex((m) => m.id === rootId);
+    if (idx < 0) return;
+    this._countedThreadReplies.add(replyId);
+    this._setThreadReplyCount(idx, (this._messages[idx].threadReplyCount ?? 0) + 1);
+  }
 
-    let indicator = el.querySelector<HTMLButtonElement>(".message__thread-indicator");
-    if (indicator) {
-      const match = indicator.textContent?.match(/(\d+)/);
-      const count = match ? parseInt(match[1], 10) + 1 : 1;
-      indicator.textContent = `⌥ ${count} repl${count === 1 ? "y" : "ies"}`;
-    } else {
-      // First reply to this message — create the indicator
-      indicator = document.createElement("button");
-      indicator.className = "message__thread-indicator";
-      indicator.setAttribute("tabindex", "0");
-      indicator.title = "Open thread (t)";
-      indicator.textContent = "⌥ 1 reply";
-      indicator.addEventListener("click", (e) => {
-        e.stopPropagation();
-        el.dispatchEvent(
-          new CustomEvent("quark:open-thread", {
-            bubbles: true,
-            detail: { eventId: threadRootEventId },
-          })
-        );
-      });
-      const actionsDiv = el.querySelector<HTMLElement>(".message__actions");
-      if (actionsDiv) {
-        el.insertBefore(indicator, actionsDiv);
-      } else {
-        el.appendChild(indicator);
-      }
-    }
+  /**
+   * The thread rooted at `rootId` has exactly these replies, as just loaded
+   * with it — the whole thread, where the room only ever had the replies
+   * inside its loaded window. None of them is counted again.
+   */
+  setThreadReplies(rootId: string, replyIds: readonly string[]): void {
+    for (const id of replyIds) this._countedThreadReplies.add(id);
+    const idx = this._messages.findIndex((m) => m.id === rootId);
+    if (idx < 0 || (replyIds.length === 0 && !this._messages[idx].isThreadRoot)) return;
+    this._setThreadReplyCount(idx, replyIds.length);
+  }
+
+  private _setThreadReplyCount(idx: number, count: number): void {
+    const msg = (this._messages[idx] = { ...this._messages[idx], isThreadRoot: true, threadReplyCount: count });
+    const el = this.getMessageElementById(msg.id);
+    if (!el) return;
+    const indicator = buildThreadIndicator(el, msg.id, count);
+    const existing = el.querySelector(".message__thread-indicator");
+    if (existing) existing.replaceWith(indicator);
+    else el.insertBefore(indicator, el.querySelector(".message__actions"));
   }
 
   /** Returns the last message-group-wrapper element, or null. */

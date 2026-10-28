@@ -38,6 +38,7 @@ vi.mock("../mobile.js", async (importActual) => ({
 import { openThread, closeThread, isInOpenThread, THREAD_FOCUS_CLASS } from "./threads.js";
 import { sendMessage, startReply, startEdit, dismissComposeBanner } from "./messages.js";
 import { setComponents, _ownSentEventIds } from "./context.js";
+import { renderLiveEvent } from "./live.js";
 import { AppState } from "../state.js";
 import { Timeline } from "../../ui/Timeline.js";
 import { ThreadView } from "../../ui/ThreadView.js";
@@ -346,4 +347,101 @@ it("resolves inline custom emoji in the replies it loads", async () => {
   ]);
   await openThread("$root");
   expect(getThumbnail).toHaveBeenCalledWith("mxc://e/1", expect.any(Number), expect.any(Number));
+});
+
+// Counting replies, and replies still on their way. Typing past a homeserver
+// rate limit leaves sends queued for seconds each: the count used to go up when
+// a reply was sent *and* when its echo beat the send back, never came down for
+// one that failed, and a reply still queued when the thread was closed and
+// reopened was gone from it — its echo, our own, suppressed.
+describe("reply counts and replies still sending", () => {
+  const roomCount = () =>
+    timeline.getMessageElementById("$root")?.querySelector(".message__thread-indicator")?.textContent ?? null;
+  const panelCount = () => threadView.getElement().querySelector(".thread-view__count")!.textContent;
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  function deferredSend(): { resolve: (id: string) => void; reject: (e: unknown) => void } {
+    let resolve!: (id: string) => void;
+    let reject!: (e: unknown) => void;
+    sendThreadReplyIpc.mockReturnValueOnce(new Promise<string>((res, rej) => { resolve = res; reject = rej; }));
+    return { resolve, reject };
+  }
+
+  beforeEach(async () => {
+    timeline.setMessages([
+      { id: "$root", senderName: "Alice", timestamp: "2024-01-01T12:00:00Z", body: "the root", isThreadRoot: true, threadReplyCount: 7 },
+    ]);
+    await openThread("$root");
+  });
+
+  it("opening a thread sets the room's count to the replies it loaded", () => {
+    expect(roomCount()).toBe("⌥ 2 replies");
+    expect(panelCount()).toBe("2 replies");
+  });
+
+  it("counts our reply once when its echo beats the send back", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("hi");
+    renderLiveEvent(ev("$hi", { sender: "@me:x", body: "hi", thread_root: "$root" }), timeline, threadView);
+    send.resolve("$hi");
+    await sent;
+    expect(roomCount()).toBe("⌥ 3 replies");
+    expect(panelCount()).toBe("3 replies");
+    expect(threadRowIds().filter((id) => id === "$hi")).toHaveLength(1);
+  });
+
+  it("counts our reply once when the send comes back first", async () => {
+    await sendMessage("hi");
+    renderLiveEvent(ev("$sent-in-thread", { sender: "@me:x", body: "hi", thread_root: "$root" }), timeline, threadView);
+    expect(roomCount()).toBe("⌥ 3 replies");
+    expect(panelCount()).toBe("3 replies");
+  });
+
+  it("does not count a reply that failed to send", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("hi");
+    send.reject(new Error("offline"));
+    await sent;
+    expect(roomCount()).toBe("⌥ 2 replies");
+    expect(panelCount()).toBe("2 replies");
+  });
+
+  it("counts sent replies, and says how many are still sending", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("queued");
+    await flush();
+    expect(panelCount()).toBe("2 replies · 1 sending");
+    expect(roomCount()).toBe("⌥ 2 replies");
+    send.resolve("$queued");
+    await sent;
+  });
+
+  it("shows a reply still sending when the thread is reopened, and lands it", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("queued");
+    closeThread();
+    await openThread("$root");
+    const rows = () => [...threadView.getElement().querySelectorAll(".thread-view__timeline [data-message-id]")];
+    expect(rows().map((r) => r.textContent).join()).toContain("queued");
+    expect(panelCount()).toBe("2 replies · 1 sending");
+
+    send.resolve("$queued");
+    await sent;
+    expect(threadView.getMessageEl("$queued")).not.toBeNull();
+    expect(rows()).toHaveLength(3);
+    expect(panelCount()).toBe("3 replies");
+    expect(roomCount()).toBe("⌥ 3 replies");
+  });
+
+  it("shows a reply that landed while its thread was closed in no other thread", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("queued");
+    closeThread();
+    getThreadTimeline.mockResolvedValue([MAIN_EV]);
+    await openThread("$m1");
+    send.resolve("$queued");
+    await sent;
+    expect(threadView.getMessageEl("$queued")).toBeNull();
+    expect(threadRowIds()).toEqual([]);
+  });
 });

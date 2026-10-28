@@ -27,7 +27,7 @@ import { AppState } from "../state.js";
 const ROOM = "!room:x";
 const appendMessage = vi.fn();
 const appendReply = vi.fn();
-const incrementThreadReplyCount = vi.fn();
+const countThreadReply = vi.fn();
 // The DOM as the timeline would report it: whatever has been appended.
 const rendered = new Set<string>();
 
@@ -38,7 +38,7 @@ function makeTimeline() {
       appendMessage(msg);
     },
     getMessageElementById: (id: string) => (rendered.has(id) ? ({} as HTMLElement) : null),
-    incrementThreadReplyCount,
+    countThreadReply,
     updateMessageBody: vi.fn(),
     updateMessageMedia: vi.fn(),
   };
@@ -128,6 +128,6 @@ describe("showSentEvent (#112)", () => {
 
     expect(appendMessage).not.toHaveBeenCalled();
     expect(appendReply).toHaveBeenCalledTimes(1);
-    expect(incrementThreadReplyCount).toHaveBeenCalledWith("$root:x");
+    expect(countThreadReply).toHaveBeenCalledWith("$root:x", "$img:x");
   });
 });

@@ -106,8 +106,9 @@ export function renderLiveEvent(event: TimelineEvent, timeline: Timeline, thread
     // Otherwise the panel is closed, or showing a different thread. The reply
     // lands in neither the main timeline nor the panel, so the toast is the
     // only signal that it arrived — the reply-count bump below is a number on
-    // an existing message, easily missed.
-    timeline.incrementThreadReplyCount(event.thread_root);
+    // an existing message, easily missed. Counted by event ID, so a reply that
+    // also reaches the count another way (our own send returning) counts once.
+    timeline.countThreadReply(event.thread_root, event.event_id);
     return rendered;
   }
 

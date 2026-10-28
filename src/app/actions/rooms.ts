@@ -580,7 +580,9 @@ async function loadMoreMessages(): Promise<void> {
       const existingEvents = AppState.get("currentTimeline");
       AppState.set("currentTimeline", [...events, ...existingEvents]);
 
-      const threadRootCounts = _buildThreadRootCounts(events);
+      // Over everything loaded: a root in this older page has its replies in
+      // the newer events already loaded, which counting the page alone missed.
+      const threadRootCounts = _buildThreadRootCounts(AppState.get("currentTimeline"));
       const mainEvents = _applyEdits(events).filter((e) => !e.thread_root);
       const messages = mainEvents.map((e) => timelineEventToMessage(e, events, threadRootCounts));
       timeline.prependMessages(messages);
@@ -640,7 +642,7 @@ async function loadMoreMessagesForward(): Promise<void> {
       const existingEvents = AppState.get("currentTimeline");
       AppState.set("currentTimeline", [...existingEvents, ...page.events]);
 
-      const threadRootCounts = _buildThreadRootCounts(page.events);
+      const threadRootCounts = _buildThreadRootCounts(AppState.get("currentTimeline"));
       const mainEvents = _applyEdits(page.events).filter((e) => !e.thread_root);
       const messages = mainEvents.map((e) => timelineEventToMessage(e, page.events, threadRootCounts));
       timeline.appendMessages(messages);

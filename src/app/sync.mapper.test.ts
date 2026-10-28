@@ -74,14 +74,14 @@ const ME = "@me:example.com";
 
 const appendMessage = vi.fn();
 const appendReply = vi.fn();
-const incrementThreadReplyCount = vi.fn();
+const countThreadReply = vi.fn();
 
 function makeComponents(): AppComponents {
   return {
     timeline: {
       appendMessage,
       getMessageElementById: () => null,
-      incrementThreadReplyCount,
+      countThreadReply,
       updateMessageBody: vi.fn(),
       updateMessageMedia: vi.fn(),
     },
@@ -146,7 +146,7 @@ describe("sync live-tail messages use the shared mapper", () => {
     handlers.clear();
     appendMessage.mockClear();
     appendReply.mockClear();
-    incrementThreadReplyCount.mockClear();
+    countThreadReply.mockClear();
     _ownSentEventIds.clear();
     AppState.set("currentRoomId", ROOM);
     AppState.set("currentTimeline", []);
@@ -259,7 +259,7 @@ describe("sync live-tail thread replies", () => {
     handlers.clear();
     appendMessage.mockClear();
     appendReply.mockClear();
-    incrementThreadReplyCount.mockClear();
+    countThreadReply.mockClear();
     _ownSentEventIds.clear();
     AppState.set("currentRoomId", ROOM);
     AppState.set("currentTimeline", []);
@@ -290,7 +290,7 @@ describe("sync live-tail thread replies", () => {
       mediaEncryptionInfo: '{"key":"k"}',
       isOwn: true,
     });
-    expect(incrementThreadReplyCount).toHaveBeenCalledWith(THREAD_ROOT);
+    expect(countThreadReply).toHaveBeenCalledWith(THREAD_ROOT, "$img:example.com");
   });
 
   it("forwards the thumbnail for a video sent into the open thread", () => {
@@ -316,6 +316,6 @@ describe("sync live-tail thread replies", () => {
   it("only counts a reply belonging to another thread", () => {
     deliver(makeEvent({ event_id: "$other:example.com", thread_root: "$another:example.com" }));
     expect(appendReply).not.toHaveBeenCalled();
-    expect(incrementThreadReplyCount).toHaveBeenCalledWith("$another:example.com");
+    expect(countThreadReply).toHaveBeenCalledWith("$another:example.com", "$other:example.com");
   });
 });

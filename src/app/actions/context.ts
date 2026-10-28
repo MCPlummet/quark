@@ -344,12 +344,23 @@ export function _applyEdits(events: TimelineEvent[]): TimelineEvent[] {
     });
 }
 
-/** Build a map of thread root event IDs → reply count from a batch of events. */
+/**
+ * Build a map of thread root event IDs → reply count from the loaded events.
+ *
+ * Counting the loaded replies alone undercounts any thread that reaches past
+ * them; the server's bundled count on the root covers those, but is as old as
+ * the fetch that brought it. Each is a floor, so the higher wins.
+ */
 export function _buildThreadRootCounts(events: TimelineEvent[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const e of events) {
     if (e.thread_root) {
       counts.set(e.thread_root, (counts.get(e.thread_root) ?? 0) + 1);
+    }
+  }
+  for (const e of events) {
+    if (e.thread_reply_count) {
+      counts.set(e.event_id, Math.max(counts.get(e.event_id) ?? 0, e.thread_reply_count));
     }
   }
   return counts;

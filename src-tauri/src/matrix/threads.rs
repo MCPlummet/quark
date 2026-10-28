@@ -355,6 +355,51 @@ mod tests {
         assert_eq!(te.thread_root.as_deref(), Some(root));
     }
 
+    // The room's count on a root is the server's bundled summary — encrypted
+    // roots included, since decryption keeps the envelope's `unsigned`.
+    #[test]
+    fn a_root_carries_the_servers_reply_count() {
+        let unsigned = serde_json::json!({ "m.relations": { "m.thread": {
+            "latest_event": {
+                "type": "m.room.message",
+                "event_id": "$latest:example.com",
+                "sender": "@bob:example.com",
+                "origin_server_ts": 5,
+                "room_id": "!room:example.com",
+                "content": { "msgtype": "m.text", "body": "latest" },
+            },
+            "count": 42,
+            "current_user_participated": true,
+        } } });
+        let plain = raw(serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$root:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1,
+            "content": { "msgtype": "m.text", "body": "the root" },
+            "unsigned": unsigned.clone(),
+        }));
+        let encrypted = raw(serde_json::json!({
+            "type": "m.room.encrypted",
+            "event_id": "$root:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1,
+            "content": {
+                "algorithm": "m.megolm.v1.aes-sha2",
+                "ciphertext": "AwgA",
+                "sender_key": "key",
+                "device_id": "DEVICE",
+                "session_id": "session",
+            },
+            "unsigned": unsigned,
+        }));
+        for root in [plain, encrypted] {
+            assert_eq!(convert_raw_message_like(&root).unwrap().thread_reply_count, Some(42));
+        }
+        let no_thread = text("$x:example.com", "no replies", 1, None);
+        assert_eq!(convert_raw_message_like(&no_thread).unwrap().thread_reply_count, None);
+    }
+
     // A sticker sent into a thread is an `m.sticker`, not an `m.room.message`,
     // so matching only the latter left it invisible in the panel — on the live
     // echo *and* on every reload afterwards (#78).

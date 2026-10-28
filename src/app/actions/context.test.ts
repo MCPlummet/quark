@@ -143,6 +143,23 @@ describe("_buildThreadRootCounts", () => {
     expect(counts.get("$other")).toBe(1);
     expect(counts.has("$4")).toBe(false);
   });
+
+  // The loaded events hold only the replies inside the window; the server's
+  // bundled summary counts them all. Replies that came after the summary was
+  // taken are among the loaded ones, so neither number alone is the floor.
+  it("takes the server's count where it is higher than the loaded replies", () => {
+    const counts = _buildThreadRootCounts([
+      makeEvent({ event_id: "$root", thread_reply_count: 40 }),
+      makeEvent({ event_id: "$1", thread_root: "$root" }),
+      makeEvent({ event_id: "$old", thread_reply_count: 3 }),
+      makeEvent({ event_id: "$stale", thread_reply_count: 1 }),
+      makeEvent({ event_id: "$2", thread_root: "$stale" }),
+      makeEvent({ event_id: "$3", thread_root: "$stale" }),
+    ]);
+    expect(counts.get("$root")).toBe(40);
+    expect(counts.get("$old")).toBe(3);
+    expect(counts.get("$stale")).toBe(2);
+  });
 });
 
 describe("_resolveReactionImage", () => {

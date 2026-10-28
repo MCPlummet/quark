@@ -49,6 +49,9 @@ export interface ThreadMessageData {
    *  a plain thread message: a thread's `is_falling_back` pointer is not a
    *  reply, and the backend reports it as none. */
   replyTo?: ReplyPreviewData;
+  /** Our own reply, still being sent: drawn, but not yet counted as a reply.
+   *  Behind a homeserver rate limit that can be seconds per message. */
+  pending?: boolean;
 }
 
 /** The root renders through the same row builder as the replies. */
@@ -370,9 +373,10 @@ export class ThreadView {
       this.removeMessage(provisionalId);
       return;
     }
-    const msg = { ...this._messages[idx], id: eventId };
+    const msg = { ...this._messages[idx], id: eventId, pending: false };
     this._messages[idx] = msg;
     this.getMessageEl(provisionalId)?.replaceWith(this._buildRow(msg, false));
+    this._renderChrome();
   }
 
   removeMessage(eventId: string): void {
@@ -581,7 +585,12 @@ export class ThreadView {
   /** Header count, divider and the loading / empty line, from the state. */
   private _renderChrome(): void {
     const n = this._messages.length;
-    const label = n === 0 ? "no replies yet" : `${n} repl${n === 1 ? "y" : "ies"}`;
+    const sending = this._messages.filter((m) => m.pending).length;
+    const sent = n - sending;
+    const label = [
+      sent > 0 ? `${sent} repl${sent === 1 ? "y" : "ies"}` : "",
+      sending > 0 ? `${sending} sending` : "",
+    ].filter(Boolean).join(" · ") || "no replies yet";
     this._countEl.textContent = this._loading ? "" : label;
     this._dividerEl.textContent = n === 0 ? "" : `── ${label} ──`;
     this._dividerEl.style.display = n === 0 ? "none" : "";
