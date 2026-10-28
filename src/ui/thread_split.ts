@@ -247,9 +247,6 @@ export class TimelineSplit {
 
   // ── Layout ──────────────────────────────────────────────────────────────
 
-  /** Re-measure and re-place after the room or the panel changed size.
-   *  `animate` for the panel's own growth (replies arriving); the room's
-   *  changes snap, so a message landing underneath never shows as a wobble. */
   /**
    * Put back a nudge of the room's scroll position. The halves' transforms
    * count toward the scroller's scrollable overflow, and WebKit re-anchors a
@@ -269,6 +266,9 @@ export class TimelineSplit {
     return true;
   }
 
+  /** Re-measure and re-place after the room or the panel changed size.
+   *  `animate` for the panel's own growth (replies arriving); the room's
+   *  changes snap, so a message landing underneath never shows as a wobble. */
   private _relayout(animate: boolean): void {
     if (!this._rootId || this._closing) return;
     const seam = this._measure();
