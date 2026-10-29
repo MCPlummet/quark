@@ -307,9 +307,9 @@ export interface KeyBackupStatus {
 }
 
 /**
- * SAS emoji verification info — matches matrix::crypto::SasInfo.
+ * SAS emoji verification info — matches matrix::verification::SasInfo.
  * `emoji` is a list of [symbol, description] pairs (up to 7).
- * Available only after key exchange; poll get_sas_info until present.
+ * Legacy polling API; the UI is driven by `VerificationUpdate` events.
  */
 export interface SasInfo {
   flow_id: string;
@@ -319,6 +319,53 @@ export interface SasInfo {
   emoji: [string, string][];
   /** Three-digit decimal alternative to emoji, or null */
   decimals: [number, number, number] | null;
+}
+
+/**
+ * Where a verification flow is — matches matrix::verification::Phase. Ordered:
+ * a flow only moves forward; `done` and `cancelled` are terminal.
+ */
+export type VerificationPhase =
+  | "requested"      // request sent/received, not yet accepted
+  | "ready"          // accepted, SAS not started yet
+  | "started"        // SAS start sent or received
+  | "accepted"       // SAS start accepted, keys being exchanged
+  | "keys_exchanged" // emoji available — user compares
+  | "confirmed"      // we confirmed; waiting for the other side
+  | "done"
+  | "cancelled";
+
+/**
+ * One snapshot of a verification flow — matches
+ * matrix::verification::VerificationUpdate. Pushed on
+ * `quark://verification/state` and returned by `get_verification_state`.
+ */
+export interface VerificationUpdate {
+  flow_id: string;
+  /** The other party (our own user ID for self-verification). */
+  user_id: string;
+  other_device_id: string | null;
+  /** true: we sent the request (initiator); false: we received it. */
+  we_started: boolean;
+  phase: VerificationPhase;
+  /** [symbol, description] × 7 once keys are exchanged, else empty. */
+  emoji: [string, string][];
+  decimals: [number, number, number] | null;
+  /** e.g. "m.user", "m.timeout", "m.mismatched_sas", "tel.quark.unknown_device". */
+  cancel_code: string | null;
+  cancel_reason: string | null;
+  cancelled_by_us: boolean | null;
+}
+
+/**
+ * An incoming, still-answerable verification request — matches
+ * events::SyncVerificationRequest (`quark://sync/verification_request`).
+ */
+export interface IncomingVerificationRequest {
+  user_id: string;
+  device_id: string;
+  device_name?: string | null;
+  flow_id: string;
 }
 
 // ─── Spaces ───────────────────────────────────────────────────────────────────

@@ -2,8 +2,8 @@
 
 import { AppState } from "./state.js";
 import type { AppComponents } from "../ui/App.js";
-import type { TimelineEvent, RoomInfo } from "../ipc/types.js";
-import { refreshRooms, selectRoom, resolveDisplayName, applyIncomingReaction, handleIncomingVerificationRequest, ensureSenderAvatarDownloaded, applyIncomingRedaction, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, homeViewHandlePresence, recordLiveEvent, renderLiveEvent } from "./actions.js";
+import type { TimelineEvent, RoomInfo, IncomingVerificationRequest, VerificationUpdate, VerificationStatus } from "../ipc/types.js";
+import { refreshRooms, selectRoom, resolveDisplayName, applyIncomingReaction, handleIncomingVerificationRequest, handleVerificationUpdate, handleOwnTrustChanged, catchUpPendingVerificationRequests, ensureSenderAvatarDownloaded, applyIncomingRedaction, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, homeViewHandlePresence, recordLiveEvent, renderLiveEvent } from "./actions.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { handleIncomingMessage } from "./notifications.js";
 
@@ -35,12 +35,6 @@ interface SyncReactionPayload {
   sender: string;
   key: string;
   reaction_event_id: string;
-}
-
-interface SyncVerificationRequestPayload {
-  user_id: string;
-  device_id: string;
-  flow_id: string;
 }
 
 interface SyncRedactionPayload {
@@ -331,16 +325,20 @@ export async function startSync(components: AppComponents): Promise<() => void> 
     }
   );
 
-  // ── quark://sync/verification_request ────────────────────────────────────
-  const unlistenVerification = await tauriListen<SyncVerificationRequestPayload>(
+  // ── Verification ──────────────────────────────────────────────────────────
+  // An answerable incoming request (the backend filters out ones the SDK
+  // dropped or cancelled), then per-flow state from the backend watcher.
+  const unlistenVerification = await tauriListen<IncomingVerificationRequest>(
     "quark://sync/verification_request",
-    (payload) => {
-      handleIncomingVerificationRequest(
-        payload.user_id,
-        payload.device_id,
-        payload.flow_id,
-      );
-    }
+    (payload) => handleIncomingVerificationRequest(payload),
+  );
+  const unlistenVerificationState = await tauriListen<VerificationUpdate>(
+    "quark://verification/state",
+    (payload) => handleVerificationUpdate(payload),
+  );
+  const unlistenOwnTrust = await tauriListen<VerificationStatus>(
+    "quark://verification/own_trust",
+    (payload) => handleOwnTrustChanged(payload),
   );
 
   // ── quark://sync/redaction ────────────────────────────────────────────────
@@ -399,10 +397,16 @@ export async function startSync(components: AppComponents): Promise<() => void> 
     unlistenConnected,
     unlistenReaction,
     unlistenVerification,
+    unlistenVerificationState,
+    unlistenOwnTrust,
     unlistenRedaction,
     unlistenReadReceipt,
     unlistenRoomKeys,
   ];
+
+  // The backend began syncing before these listeners existed, so a request
+  // delivered in the first sync may have been emitted into the void.
+  void catchUpPendingVerificationRequests();
 
   // Mark as online
   statusBar.setConnected(true);

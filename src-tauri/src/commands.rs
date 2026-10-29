@@ -6,7 +6,7 @@ use crate::{
     gif::GifResult,
     matrix::{
         client::{MatrixState, OwnProfile, SyncState},
-        crypto::{CrossSigningInfo, KeyBackupStatus, SasInfo, VerificationStatus},
+        crypto::{CrossSigningInfo, KeyBackupStatus, VerificationStatus},
         emoji::EmojiPack,
         media::MediaDownload,
         reactions::ReactionGroup,
@@ -1832,54 +1832,64 @@ pub async fn get_verification_status(
     crate::matrix::crypto::get_own_verification_status(&client).await
 }
 
+/// Start verifying `device_id`. Returns the flow ID — which is the ID of an
+/// already-pending incoming request from that device when there is one (the
+/// request is accepted instead of a competing one being sent).
 #[tauri::command]
 pub async fn start_sas_verification(
     state: State<'_, MatrixState>,
+    app_handle: AppHandle,
     user_id: String,
     device_id: String,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
-    crate::matrix::crypto::start_sas_verification(&client, &user_id, &device_id).await
+    crate::matrix::verification::start_sas_verification(&client, &app_handle, &user_id, &device_id).await
 }
 
 #[tauri::command]
 pub async fn accept_verification_request(
     state: State<'_, MatrixState>,
+    app_handle: AppHandle,
     user_id: String,
     flow_id: String,
 ) -> Result<(), String> {
     let client = get_client(&state)?;
-    crate::matrix::crypto::accept_verification_request(&client, &user_id, &flow_id).await
+    crate::matrix::verification::accept_verification_request(&client, &app_handle, &user_id, &flow_id).await
 }
 
 #[tauri::command]
 pub async fn accept_sas_verification(
     state: State<'_, MatrixState>,
+    app_handle: AppHandle,
     user_id: String,
     flow_id: String,
 ) -> Result<(), String> {
     let client = get_client(&state)?;
-    crate::matrix::crypto::accept_sas_verification(&client, &user_id, &flow_id).await
+    crate::matrix::verification::accept_sas_verification(&client, &app_handle, &user_id, &flow_id).await
 }
 
 #[tauri::command]
 pub async fn confirm_sas_verification(
     state: State<'_, MatrixState>,
+    app_handle: AppHandle,
     user_id: String,
     flow_id: String,
 ) -> Result<(), String> {
     let client = get_client(&state)?;
-    crate::matrix::crypto::confirm_sas_verification(&client, &user_id, &flow_id).await
+    crate::matrix::verification::confirm_sas_verification(&client, &app_handle, &user_id, &flow_id).await
 }
 
+/// Cancel a flow — the SAS and/or the request. `mismatch: true` reports the
+/// emoji as not matching (`m.mismatched_sas`) instead of a plain user cancel.
 #[tauri::command]
 pub async fn cancel_sas_verification(
     state: State<'_, MatrixState>,
     user_id: String,
     flow_id: String,
+    mismatch: Option<bool>,
 ) -> Result<(), String> {
     let client = get_client(&state)?;
-    crate::matrix::crypto::cancel_sas_verification(&client, &user_id, &flow_id).await
+    crate::matrix::verification::cancel_sas_verification(&client, &user_id, &flow_id, mismatch.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -1887,9 +1897,34 @@ pub async fn get_sas_info(
     state: State<'_, MatrixState>,
     user_id: String,
     flow_id: String,
-) -> Result<Option<SasInfo>, String> {
+) -> Result<Option<crate::matrix::verification::SasInfo>, String> {
     let client = get_client(&state)?;
-    crate::matrix::crypto::get_sas_info(&client, &user_id, &flow_id).await
+    crate::matrix::verification::get_sas_info(&client, &user_id, &flow_id).await
+}
+
+/// Current state of a verification flow (same payload as the
+/// `quark://verification/state` event), or `None` if it is unknown.
+#[tauri::command]
+pub async fn get_verification_state(
+    state: State<'_, MatrixState>,
+    app_handle: AppHandle,
+    user_id: String,
+    flow_id: String,
+) -> Result<Option<crate::matrix::verification::VerificationUpdate>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::verification::get_verification_state(&client, &app_handle, &user_id, &flow_id).await
+}
+
+/// Incoming verification requests still awaiting an answer. The frontend asks
+/// once its event listeners are registered, because the backend starts syncing
+/// (and may emit a request) before they are.
+#[tauri::command]
+pub async fn pending_verification_requests(
+    state: State<'_, MatrixState>,
+    app_handle: AppHandle,
+) -> Result<Vec<crate::events::SyncVerificationRequest>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::verification::pending_verification_requests(&client, &app_handle).await
 }
 
 #[tauri::command]

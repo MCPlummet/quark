@@ -420,7 +420,12 @@ pub fn init_logging() {
                     // "Got the same sync response twice", which is the difference
                     // between a real incremental sync and a short-circuited one.
                     // Without this the cold path only ever sees our side of it.
-                    .add_directive("matrix_sdk_base=info".parse().expect("static directive")),
+                    .add_directive("matrix_sdk_base=info".parse().expect("static directive"))
+                    // The SDK's verification decisions (dropped/cancelled
+                    // requests, start collisions); quiet unless verifying.
+                    .add_directive(
+                        "matrix_sdk_crypto::verification=info".parse().expect("static directive"),
+                    ),
                     // For request-level detail (URIs, response sizes — how the
                     // oversized-sync bug was found) set RUST_LOG to include
                     // `matrix_sdk::http_client=debug`. Left off by default: it

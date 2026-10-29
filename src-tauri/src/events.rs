@@ -150,11 +150,15 @@ pub struct SyncPresenceUpdate {
     pub status_msg: Option<String>,
 }
 
-/// Emitted when a verification request is received.
+/// Emitted when a verification request is received that the SDK holds in an
+/// actionable (not yet answered) state — see `matrix::verification`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncVerificationRequest {
     pub user_id: String,
     pub device_id: String,
+    /// The requesting device's display name, if it set one.
+    #[serde(default)]
+    pub device_name: Option<String>,
     pub flow_id: String,
 }
 
@@ -597,19 +601,15 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
 
     // ── Verification requests (to-device) ─────────────────────────────────────
     //
-    // Verification requests arrive as to-device events.  matrix-sdk wraps the
-    // content in a generic `ToDeviceEvent<C>` container.
+    // Handlers run after the SDK has processed the sync, so by now it has
+    // registered the request, silently dropped it (unknown device, stale
+    // timestamp) or cancelled it (another flow with that user was open).
+    // `on_incoming_request` works out which and only prompts for usable ones.
     client.add_event_handler(
         |ev: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>,
+         client: Client,
          Ctx(app): Ctx<tauri::AppHandle>| async move {
-            let payload = SyncVerificationRequest {
-                user_id: ev.sender.to_string(),
-                device_id: ev.content.from_device.to_string(),
-                flow_id: ev.content.transaction_id.to_string(),
-            };
-            if let Err(e) = app.emit(EVENT_VERIFICATION_REQUEST, &payload) {
-                error!("Failed to emit {}: {}", EVENT_VERIFICATION_REQUEST, e);
-            }
+            crate::matrix::verification::on_incoming_request(client, app, ev).await;
         },
     );
 
@@ -919,13 +919,20 @@ mod tests {
         let payload = SyncVerificationRequest {
             user_id: "@alice:example.com".to_string(),
             device_id: "DEVICE123".to_string(),
+            device_name: Some("Quark on Linux".to_string()),
             flow_id: "abc123flow".to_string(),
         };
         let json = serde_json::to_string(&payload).expect("serialize");
         let back: SyncVerificationRequest = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.user_id, "@alice:example.com");
         assert_eq!(back.device_id, "DEVICE123");
+        assert_eq!(back.device_name.as_deref(), Some("Quark on Linux"));
         assert_eq!(back.flow_id, "abc123flow");
+
+        // A payload without the name (older emitter) still parses.
+        let old = r#"{"user_id":"@a:x","device_id":"D","flow_id":"f"}"#;
+        let back: SyncVerificationRequest = serde_json::from_str(old).expect("deserialize");
+        assert!(back.device_name.is_none());
     }
 
     // ── SyncRoomUnreadCount ───────────────────────────────────────────────────

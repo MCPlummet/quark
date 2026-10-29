@@ -16,7 +16,7 @@ import {
   logVerificationPromptChoice,
 } from "../../ipc/index.js";
 import type { RestoreOutcome } from "../../ipc/index.js";
-import { startVerification } from "./crypto.js";
+import { startVerification, verificationInProgress } from "./verification.js";
 
 import { showMainLayout } from "../../ui/App.js";
 import { showSuccess } from "../../ui/NotificationToast.js";
@@ -203,11 +203,16 @@ export async function maybePromptSessionVerification(): Promise<void> {
     // against, or null to skip.
     const userId = await verificationPromptTarget();
     if (!userId) return;
+    // A verification is already under way (typically another device's request
+    // arrived first): the prompt would only cover it, and "Verify now" would
+    // race it with a competing request.
+    if (verificationInProgress()) return;
 
     getComponents().verificationPrompt.show((choice) => {
       void logVerificationPromptChoice(choice); // record the choice in the log
       if (choice === "verify") {
-        // Reuses the existing SAS flow: device picker (if >1) → emoji compare.
+        // Reuses the SAS flow: device picker (if >1) → emoji compare. If the
+        // chosen device has already asked us, the backend joins that request.
         void startVerification(userId);
       } else if (choice === "never") {
         void getAppConfig()

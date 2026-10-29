@@ -127,8 +127,11 @@ export { executeCommand } from "./actions/commands.js";
 export {
   startVerification,
   handleIncomingVerificationRequest,
-  setupCrossSigning,
-} from "./actions/crypto.js";
+  handleVerificationUpdate,
+  handleOwnTrustChanged,
+  catchUpPendingVerificationRequests,
+} from "./actions/verification.js";
+export { setupCrossSigning } from "./actions/crypto.js";
 
 // Theme loading.
 export { loadTheme, loadThemeFromConfig, configThemeOverridesRc, DEFAULT_THEME } from "./actions/theme.js";

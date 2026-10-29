@@ -69,7 +69,12 @@ pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("quark=debug".parse().unwrap()),
+                .add_directive("quark=debug".parse().unwrap())
+                // The SDK's own verification decisions (request dropped for an
+                // unknown device, "cancelling both requests", start-collision
+                // resolution) — silent otherwise, and only logged while a
+                // verification is running.
+                .add_directive("matrix_sdk_crypto::verification=info".parse().unwrap()),
         )
         .try_init();
 
@@ -93,10 +98,14 @@ pub fn run() {
 
     // Loopback HTTP server that streams decrypted media to inline <video> with
     // Range support (seekable, low memory), serving the temp dir that
-    // `write_media_to_temp` writes to. Only Linux/WebKitGTK needs it — other
-    // platforms stream video via the asset protocol — so we don't bind an unused
-    // socket elsewhere. If it can't bind, video falls back to the external player.
-    let media_server = if cfg!(target_os = "linux") {
+    // `write_media_to_temp` writes to. Linux/WebKitGTK can't feed the asset
+    // protocol to <video> at all, and Android's WebView only serves the first
+    // range of an asset-protocol response (#130); macOS/Windows/iOS stream via
+    // the asset protocol, so we don't bind an unused socket there. Every request
+    // must carry the server's random token, which matters on Android, where
+    // other apps share the loopback interface. If it can't bind, video falls
+    // back to the external player.
+    let media_server = if cfg!(any(target_os = "linux", target_os = "android")) {
         media_server::MediaServer::start(std::env::temp_dir())
             .map_err(|e| tracing::warn!("media server failed to start: {e}"))
             .ok()
@@ -149,6 +158,7 @@ pub fn run() {
         .manage(Mutex::new(config::app_config::AppConfig::default()))
         .manage(Mutex::new(notifications::NotificationConfig::default()))
         .manage(matrix::rooms::RecencyState::default())
+        .manage(matrix::verification::VerificationFlows::default())
         .manage(matrix::rooms::LastEventCache::default())
         .manage(notify::NotificationRegistry::default())
         .manage(updater::UpdaterState::default())
@@ -253,6 +263,8 @@ pub fn run() {
             commands::confirm_sas_verification,
             commands::cancel_sas_verification,
             commands::get_sas_info,
+            commands::get_verification_state,
+            commands::pending_verification_requests,
             // Spaces
             commands::get_space_hierarchy,
             commands::get_user_spaces,

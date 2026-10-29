@@ -483,6 +483,330 @@ describe("Timeline", () => {
       expect(timeline.selectLast()).toBe(true);
     });
   });
+
+  // Sending implies reading: a user's receipt avatar must sit on their own
+  // newest message even when the homeserver never sends a receipt alongside it.
+  // Placement is reconciled in a microtask queued by every change to the buffer,
+  // the window or receipt state, so each test flushes before it looks.
+  describe("read receipts", () => {
+    /** 2024-01-01 at the given UTC time, as ISO and as ms. */
+    const iso = (hms: string): string => `2024-01-01T${hms}Z`;
+    const ms = (hms: string): number => Date.parse(iso(hms));
+    const msg = (id: string, who: string, hms: string): MessageData =>
+      makeMsg({ id, senderId: `@${who}:x`, senderName: who, timestamp: iso(hms) });
+    /** Let the queued reconciliation run (it was queued first, so it goes first). */
+    const flush = (): Promise<void> => new Promise((resolve) => queueMicrotask(resolve));
+    /** `receiptEvent` of every cluster on screen, in document order. Asserting
+     *  the whole list also catches a stray second cluster. */
+    const clusters = (): string[] =>
+      Array.from(
+        timeline.getElement().querySelectorAll<HTMLElement>(".read-receipts"),
+        (c) => c.dataset.receiptEvent ?? "",
+      );
+    const clusterOn = (eventId: string): HTMLElement | null =>
+      timeline.getMessageElementById(eventId)?.querySelector<HTMLElement>(".read-receipts") ?? null;
+    /** Readers shown on `eventId`'s cluster, most recent first. */
+    const readersOn = (eventId: string): string[] =>
+      Array.from(
+        clusterOn(eventId)?.querySelectorAll<HTMLElement>(".read-receipt") ?? [],
+        (s) => s.dataset.receiptUser ?? "",
+      );
+    /** This test's hover card. Earlier tests' timelines leave theirs on <body>. */
+    const card = (): HTMLElement | undefined => {
+      const cards = document.querySelectorAll<HTMLElement>(".read-receipts-tooltip");
+      return cards[cards.length - 1];
+    };
+    const hover = (el: HTMLElement): void => {
+      el.dispatchEvent(new MouseEvent("mouseenter"));
+    };
+
+    // Bob has read Alice's 12:00 message and has not posted since.
+    beforeEach(async () => {
+      timeline.setMessages([msg("e1", "alice", "12:00:00"), msg("e2", "alice", "12:01:00")]);
+      timeline.setReadReceipts([{ userId: "@bob:x", eventId: "e1", ts: ms("12:00:30") }]);
+      await flush();
+    });
+
+    it("places a receipt on the event it names", () => {
+      expect(clusters()).toEqual(["e1"]);
+      expect(readersOn("e1")).toEqual(["@bob:x"]);
+    });
+
+    it("advances a receipt to the reader's own live-appended message", async () => {
+      timeline.appendMessage(msg("e3", "bob", "12:02:00"));
+      await flush();
+
+      expect(clusters()).toEqual(["e3"]);
+    });
+
+    it("advances a receipt when the live message merges into the sender's group", async () => {
+      timeline.appendMessage(msg("e3", "bob", "12:02:00"));
+      await flush();
+      expect(clusters()).toEqual(["e3"]);
+
+      // Merging into the previous group is a separate exit from appendMessage.
+      timeline.appendMessage(msg("e4", "bob", "12:02:10"));
+      await flush();
+
+      expect(clusters()).toEqual(["e4"]);
+    });
+
+    it("leaves a receipt alone when someone else posts", async () => {
+      const before = clusterOn("e1");
+      timeline.appendMessage(msg("e3", "carol", "12:02:00"));
+      await flush();
+
+      expect(clusters()).toEqual(["e1"]);
+      expect(clusterOn("e1")).toBe(before);
+    });
+
+    it("advances a receipt through forward pagination", async () => {
+      timeline.appendMessages([msg("e3", "bob", "12:02:00")]);
+      await flush();
+
+      expect(clusters()).toEqual(["e3"]);
+    });
+
+    it("decorates freshly prepended history", async () => {
+      timeline.setMessages([msg("e9", "dave", "13:00:00")]);
+      timeline.setReadReceipts([{ userId: "@bob:x", eventId: "e0", ts: ms("11:00:30") }]);
+      await flush();
+      expect(clusters()).toEqual([]); // the receipted event is older than the buffer
+
+      timeline.prependMessages([msg("e0", "alice", "11:00:00")]);
+      await flush();
+
+      expect(clusters()).toEqual(["e0"]);
+    });
+
+    it("clears every cluster when receipts are turned off", async () => {
+      timeline.setReadReceipts([]);
+      await flush();
+
+      expect(clusters()).toEqual([]);
+    });
+
+    // The review probe for #72: rebuilding every cluster on each append threw
+    // away the one under the pointer, and with it the hover card.
+    it("keeps the hovered cluster and its card across an unrelated append", async () => {
+      const cluster = clusterOn("e1")!;
+      hover(cluster);
+      expect(card()?.style.display).toBe("block");
+
+      timeline.appendMessage(msg("e3", "carol", "12:02:00"));
+      await flush();
+
+      expect(clusterOn("e1")).toBe(cluster);
+      expect(card()?.style.display).toBe("block");
+    });
+
+    // Touch: a tap opens the card and mouseleave may never come, so a scroll
+    // has to keep the card with its cluster rather than leave it floating.
+    describe("when the timeline scrolls with the card open", () => {
+      const rect = (top: number, bottom: number, right = 300): DOMRect =>
+        ({ top, bottom, left: right - 40, right, width: 40, height: bottom - top, x: right - 40, y: top, toJSON() {} }) as DOMRect;
+      const scroller = (): HTMLElement => timeline.getElement().querySelector<HTMLElement>(".timeline")!;
+      const scroll = (): void => {
+        scroller().dispatchEvent(new Event("scroll"));
+      };
+
+      it("moves the card with its cluster", () => {
+        const cluster = clusterOn("e1")!;
+        vi.spyOn(scroller(), "getBoundingClientRect").mockReturnValue(rect(0, 600));
+        const at = vi.spyOn(cluster, "getBoundingClientRect").mockReturnValue(rect(400, 414));
+        hover(cluster);
+        const before = card()!.style.top;
+
+        at.mockReturnValue(rect(300, 314));
+        scroll();
+
+        expect(card()?.style.display).toBe("block");
+        expect(card()!.style.top).not.toBe(before);
+      });
+
+      it("closes the card once its cluster scrolls out of view", () => {
+        const cluster = clusterOn("e1")!;
+        vi.spyOn(scroller(), "getBoundingClientRect").mockReturnValue(rect(0, 600));
+        const at = vi.spyOn(cluster, "getBoundingClientRect").mockReturnValue(rect(400, 414));
+        hover(cluster);
+
+        at.mockReturnValue(rect(700, 714));
+        scroll();
+
+        expect(card()?.style.display).toBe("none");
+      });
+    });
+
+    it("refreshes the open card in place when the hovered cluster loses a reader", async () => {
+      timeline.setReadReceipts([
+        { userId: "@bob:x", eventId: "e1", ts: ms("12:00:30") },
+        { userId: "@dave:x", eventId: "e1", ts: ms("12:00:40") },
+      ]);
+      await flush();
+      const cluster = clusterOn("e1")!;
+      expect(readersOn("e1")).toEqual(["@dave:x", "@bob:x"]);
+      hover(cluster);
+      expect(card()?.textContent).toContain("Read by 2");
+
+      timeline.appendMessage(msg("e3", "dave", "12:02:00"));
+      await flush();
+
+      expect(clusterOn("e1")).toBe(cluster);
+      expect(readersOn("e1")).toEqual(["@bob:x"]);
+      expect(readersOn("e3")).toEqual(["@dave:x"]);
+      expect(card()?.style.display).toBe("block");
+      expect(card()?.textContent).not.toContain("Read by 2");
+    });
+
+    it("closes the card when its cluster goes away", async () => {
+      hover(clusterOn("e1")!);
+      timeline.appendMessage(msg("e3", "bob", "12:02:00")); // Bob, the only reader, moves on
+      await flush();
+
+      expect(clusters()).toEqual(["e3"]);
+      expect(card()?.style.display).toBe("none");
+    });
+
+    it("leaves a cluster alone when a neighbouring message is redacted", async () => {
+      const cluster = clusterOn("e1");
+      timeline.removeMessage("e2");
+      await flush();
+
+      expect(clusters()).toEqual(["e1"]);
+      expect(clusterOn("e1")).toBe(cluster);
+    });
+
+    it("moves readers off a redacted message instead of dropping them", async () => {
+      // The receipt names e2. Once e2 is gone, the receipt time puts Bob on e1.
+      timeline.setReadReceipts([{ userId: "@bob:x", eventId: "e2", ts: ms("12:01:30") }]);
+      await flush();
+      expect(clusters()).toEqual(["e2"]);
+
+      timeline.removeMessage("e2");
+      await flush();
+
+      expect(clusters()).toEqual(["e1"]);
+    });
+
+    it("returns a reader to their receipt when their own message is redacted", async () => {
+      timeline.appendMessage(msg("e3", "bob", "12:02:00"));
+      await flush();
+      expect(clusters()).toEqual(["e3"]);
+
+      timeline.removeMessage("e3");
+      await flush();
+
+      expect(clusters()).toEqual(["e1"]);
+    });
+
+    it("follows an optimistic message's rename to its real event ID", async () => {
+      timeline.appendMessage(makeMsg({ id: "optimistic-1", senderId: "@me:x", isOwn: true, timestamp: iso("12:02:00") }));
+      // Carol's receipt names the real ID, which isn't known yet. The receipt
+      // time puts her on the echo anyway.
+      timeline.setReadReceipt("@carol:x", "$real", ms("12:02:30"));
+      await flush();
+      const cluster = clusterOn("optimistic-1");
+      expect(clusters()).toEqual(["e1", "optimistic-1"]); // Bob's still on e1
+      expect(readersOn("optimistic-1")).toEqual(["@carol:x"]);
+
+      timeline.confirmMessage("optimistic-1", "$real");
+      await flush();
+
+      expect(clusters()).toEqual(["e1", "$real"]);
+      expect(clusterOn("$real")).toBe(cluster);
+    });
+
+    // Clock skew: an optimistic echo carries the client clock, and a federated
+    // event can arrive with an older origin_server_ts. A binary search over the
+    // buffer assumed ascending timestamps, so one outlier sent its search the
+    // wrong way and misplaced every time-based receipt.
+    it("is not thrown off by timestamps that run out of order", async () => {
+      timeline.setMessages([
+        msg("e1", "alice", "12:00:00"),
+        msg("e2", "alice", "12:01:00"),
+        msg("e3", "alice", "13:00:00"), // skewed ahead
+        msg("e4", "alice", "12:03:00"),
+        msg("e5", "alice", "12:04:00"),
+        msg("e6", "dave", "11:00:00"), // arrived last, stamped early
+      ]);
+      timeline.setReadReceipts([
+        // Names a reaction, which isn't in the timeline, so the time decides:
+        // the latest message stamped at or before 12:03:30 is e4.
+        { userId: "@bob:x", eventId: "$reaction", ts: ms("12:03:30") },
+        // Names e5, so it goes on e5, even though the receipt's own time is earlier.
+        { userId: "@carol:x", eventId: "e5", ts: ms("12:00:10") },
+        // Names e2, but Dave has posted since. e6 comes later in the timeline,
+        // whatever its timestamp says.
+        { userId: "@dave:x", eventId: "e2", ts: ms("12:01:30") },
+      ]);
+      await flush();
+
+      expect(clusters()).toEqual(["e4", "e5", "e6"]);
+      expect(readersOn("e4")).toEqual(["@bob:x"]);
+      expect(readersOn("e5")).toEqual(["@carol:x"]);
+      expect(readersOn("e6")).toEqual(["@dave:x"]);
+    });
+
+    it("coalesces a burst of appends into one reconciliation pass", async () => {
+      const pass = vi.spyOn(timeline as unknown as { _reconcileReceipts(): void }, "_reconcileReceipts");
+      for (let i = 0; i < 20; i++) {
+        timeline.appendMessage(msg(`n${i}`, i % 2 ? "bob" : "carol", `12:02:${String(i).padStart(2, "0")}`));
+      }
+      await flush();
+
+      expect(pass).toHaveBeenCalledTimes(1);
+      expect(clusters()).toEqual(["n19"]); // Bob's last
+    });
+
+    describe("with Bob's newest message outside the rendered window", () => {
+      /** 300 messages a minute apart from 10:00. Alice posts them all except the
+       *  last, which is Bob's. */
+      const history = (): MessageData[] =>
+        Array.from({ length: 300 }, (_, i) =>
+          makeMsg({
+            id: `m${i}`,
+            senderId: i === 299 ? "@bob:x" : "@alice:x",
+            senderName: i === 299 ? "bob" : "alice",
+            timestamp: new Date(Date.UTC(2024, 0, 1, 10, i)).toISOString(),
+          }),
+        );
+
+      beforeEach(async () => {
+        timeline.setMessages(history()); // renders m50..m299
+        timeline.setReadReceipts([{ userId: "@bob:x", eventId: "m100", ts: null }]);
+        await flush();
+        expect(clusters()).toEqual(["m299"]); // sending implies reading
+
+        // Jump back into history. The window becomes m0..m249, and m299 drops out.
+        timeline.scrollToMessage("m10");
+        await flush();
+      });
+
+      it("falls back to the explicit receipt instead of dropping the reader", () => {
+        expect(timeline.getMessageElementById("m299")).toBeNull();
+        expect(clusters()).toEqual(["m100"]);
+      });
+
+      it("keeps that fallback through a history prepend", async () => {
+        const cluster = clusterOn("m100");
+        timeline.prependMessages([
+          makeMsg({ id: "p0", senderId: "@alice:x", senderName: "alice", timestamp: iso("09:00:00") }),
+        ]);
+        await flush();
+
+        expect(clusters()).toEqual(["m100"]);
+        expect(clusterOn("m100")).toBe(cluster);
+      });
+
+      it("leaves the reader in place when they post off screen", async () => {
+        timeline.appendMessage(msg("m300", "bob", "15:00:00")); // window isn't at the tail: buffer only
+        await flush();
+
+        expect(timeline.getMessageElementById("m300")).toBeNull();
+        expect(clusters()).toEqual(["m100"]);
+      });
+    });
+  });
 });
 
 // #40 — separator labels are relative to "now", so they must be built against a
@@ -572,5 +896,59 @@ describe("time separator day labels (#40)", () => {
       if (prevTz === undefined) delete env.TZ;
       else env.TZ = prevTz;
     }
+  });
+});
+
+describe("Timeline stick-to-bottom observer", () => {
+  let observed: (() => void) | null;
+  let tl: Timeline;
+  let scroller: HTMLElement;
+  let scrollTop: number;
+  let writes: number[];
+
+  beforeEach(() => {
+    observed = null;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: () => void) {
+          // The constructor builds the stick observer before any other.
+          observed ??= cb;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    tl = new Timeline();
+    document.body.appendChild(tl.getElement());
+    scroller = tl.getElement().querySelector<HTMLElement>(".timeline")!;
+    scrollTop = 0;
+    writes = [];
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => {
+        writes.push(v);
+        scrollTop = v;
+      },
+    });
+  });
+
+  afterEach(() => {
+    tl.getElement().remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("re-pins to the tail when growth leaves the stuck view short of it", () => {
+    scrollTop = -12; // a resize clamped the view above the tail
+    observed!();
+    expect(writes).toEqual([0]);
+  });
+
+  it("leaves an overscroll past the tail to the rubber-band spring", () => {
+    // column-reverse: past the tail scrollTop is positive while the bounce runs.
+    scrollTop = 30;
+    observed!();
+    expect(writes).toEqual([]);
   });
 });

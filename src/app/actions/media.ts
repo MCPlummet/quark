@@ -40,11 +40,26 @@ import { openThread, findLoadedEvent, isInOpenThread } from "./threads.js";
 import { openProfileForUser } from "./profile.js";
 import { saveMedia } from "../media_save.js";
 
-// Inline-video transport is platform-dependent (see the `get_platform` command):
-// on Linux/WebKitGTK the asset protocol can't feed a `<video>`, so we stream from
-// the loopback HTTP server; elsewhere the asset protocol works natively and
-// avoids loading `http://127.0.0.1` (and its ATS/loopback restrictions). Cached
-// after the first lookup.
+/**
+ * Which transport feeds an inline `<video>` on `platform` (the `get_platform`
+ * command's OS string).
+ *
+ * - **loopback** — the media server's `http://127.0.0.1` URL. Linux needs it
+ *   because WebKitGTK can't feed the asset protocol to `<video>` at all.
+ *   Android needs it because its WebView serves only the *first* range of an
+ *   intercepted (asset-protocol) response: Tauri answers with ≤1 MB 206
+ *   chunks, every follow-up range request fails with `net::ERR_FAILED`, and
+ *   the player spins until the media stack gives up ~30 s later (#130). A
+ *   file whose `moov` atom sits at the end never starts at all.
+ * - **asset** — everywhere else the asset protocol works natively and avoids
+ *   loading `http://127.0.0.1` (and its ATS/loopback restrictions).
+ */
+export function inlineVideoTransport(platform: string): "loopback" | "asset" {
+  return platform === "linux" || platform === "android" ? "loopback" : "asset";
+}
+
+// The platform lookup behind `inlineVideoTransport`, cached after the first
+// success.
 let _platform: Promise<string> | null = null;
 function platformOnce(): Promise<string> {
   if (!_platform) {
@@ -558,17 +573,15 @@ export function setupMessageActionHandlers(): void {
 
     // Respect the "Play videos inline" setting; when off, go straight to the
     // external player. Read fresh (cheap, in-memory) so toggling takes effect
-    // immediately. Otherwise resolve the inline-video URL per platform: Linux
-    // streams via the loopback HTTP server (seekable; WebKitGTK can't feed the
-    // asset protocol to <video>); macOS/Windows/iOS use the asset protocol
-    // natively. On any error — including a codec WebKit can't decode — fall back
-    // to the external player.
+    // immediately. Otherwise resolve the inline-video URL per platform (see
+    // `inlineVideoTransport`). On any error — including a codec the webview
+    // can't decode — fall back to the external player.
     void getAppConfig()
       .then((cfg) => {
         if (!cfg.media.inline_video) return openExternally().finally(stopLoading);
         return platformOnce()
           .then((platform) =>
-            platform === "linux"
+            inlineVideoTransport(platform) === "loopback"
               ? serveMedia(mxcUrl, encryptionInfo, mimeType, filename)
               : saveMediaToTemp(mxcUrl, encryptionInfo, filename, mimeType).then(convertFileSrc),
           )

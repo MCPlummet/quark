@@ -51,7 +51,7 @@ The backend handles all Matrix protocol interaction and exposes commands to the 
 - Login (OIDC via MAS + legacy password fallback)
 - Sync loop, room list management & subscriptions — classic v3 `/sync` (see *Core Protocol* below)
 - Sending/receiving messages, reactions, edits, redactions
-- E2EE: device verification (SAS emoji, QR), key backup, cross-signing
+- E2EE: device verification (SAS emoji), key backup, cross-signing
 - Media download/upload with authenticated media (MSC3916)
 - Custom emoji/sticker pack resolution (MSC2545)
 - Theme file loading and validation
@@ -365,8 +365,19 @@ overwhelmed its own homeserver with:
   two concurrent E2EE outgoing-request flushes from one device (#52). Instead
   `client::restart_sync` aborts the loop and spawns a fresh one — on Tauri's
   runtime, since the wake's JNI runtime dies when it returns — and the wake
-  waits, within its budget, for the new loop's first completed sync, which
-  delivers the event through the warm handlers. A restart never revives a loop
+  waits, within its budget, until the warm handlers report the pushed event
+  (two completed syncs without it, `RESTART_SYNCS_WITHOUT_EVENT`, end the wait
+  early). The first completed sync is not enough: it re-sends the `since`
+  token the stalled loop was polling with, and Synapse answers a repeated
+  request from its response cache — the stalled loop's long-poll, completed
+  while the process was frozen, from before the event existed. Ending the wake
+  there stopped the foreground service, Doze cut the network, and the sync that
+  carried the event never ran (#123). A loop has one request in flight, so
+  there is at most one stale answer, and the sync after it carries the event
+  at once if it is coming at all. Without a stale answer, the second sync is a
+  30 s long-poll, so an event the timeline never carries holds the wake to its
+  budget. Completions are counted from after the restart, so a last sync from
+  the stalled loop can't use up the allowance. A restart never revives a loop
   that was stopped: the "is one running?" check, the abort and the spawn all
   happen under the `SyncState` lock logout also takes. Restarting stamps the
   liveness clock, so a burst restarts the loop once. A dismissal push needs no
@@ -1154,7 +1165,31 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       builds on the current API. The upgrade does not itself require sliding sync — 0.18 still exposes `sync`,
       `sync_once` and `sync_with_callback`, so the v3 loop survives it and the two are separable pieces of work.
 - [x] E2EE: Megolm via Vodozemac, cross-signing, key backup (SSSS)
-- [x] Device verification: SAS emoji, QR code
+- [x] Device verification: SAS emoji (to-device; QR is not built — matrix-sdk's `qrcode` feature is off,
+      so requests are accepted advertising `m.sas.v1` only)
+  - Each flow is driven by a backend watcher (`matrix/verification.rs`) on the SDK's request/SAS state
+    observables; it emits `quark://verification/state` (`VerificationUpdate`: flow ID, role, phase
+    requested → ready → started → accepted → keys_exchanged → confirmed → done | cancelled, emoji, cancel
+    code/reason) and logs every transition at INFO. The UI (`app/actions/verification.ts`) shows one flow,
+    keyed by flow ID, merges updates monotonically, and has no client-side timeout (the SDK's apply:
+    10 min per request, 1 min per SAS step).
+  - The responder starts SAS right after accepting; the initiator accepts the other side's start
+    automatically and only starts SAS itself if none arrived 5 s after the request turned ready.
+  - The SDK allows one flow per user and cancels old *and* new when a second appears, so every abandoned
+    flow is cancelled for real (request and SAS), a new request first cancels earlier live flows with that
+    user, and picking a device that already sent us a request accepts that request instead. A failed
+    send (`ready`, SAS start, MAC) cancels the flow too, and so does any accept/confirm the UI reports
+    as failed.
+  - Closing the dialog (Esc, `[x]`, backdrop, Android back) cancels a live flow with `m.user`. Only
+    "They Don't Match" at the emoji step sends `m.mismatched_sas`.
+  - `quark://sync/verification_request` fires only for requests the SDK holds in an answerable state.
+    A request the SDK dropped because this session didn't have the sender's device keys yet is cancelled
+    back to the sender (`tel.quark.unknown_device`) and the keys are re-queried so a retry works; one
+    dropped for any other reason is cancelled with `tel.quark.request_dropped`.
+  - A request from a *different* user while a flow is live never replaces it (anyone can send one): a
+    toast names the requester, and the request opens when the dialog closes, if it is still waiting.
+  - An incoming request dismisses the startup "verify this session" prompt and the device picker; the
+    prompt is not shown while a flow is live.
 - [x] Room creation, join, leave, invite, kick, ban
 - [x] Room directory & federated room search
 - [x] In-room message search — header search box (`:search`) with four tiers: loaded window (instant) · local cache (matrix-sdk event cache, offline) · back-to-date · entire history. Server tiers stream results one page at a time (bounded memory) and are cancelable.
@@ -1189,6 +1224,22 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       `m.new_content` keeps the HTML `formatted_body` and custom emoji survive
       the edit instead of degrading to literal `:shortcode:` text
 - [x] Read receipts (public m.read + private m.read.private) — displayed Element-style as shifting, overlapping avatars at the bottom-right of each other user's last-read message (seeded on room open via `get_room_receipts`, updated live). Settings toggles: "send my read receipts" (private-only when off) and "show others' read receipts".
+      Placement (`src/ui/receipt_placement.ts`) goes by timeline order wherever
+      it can. Local echoes carry the client clock and federated events can
+      arrive stamped earlier than what's already shown, so timestamps aren't
+      monotonic. A receipt sits on the event it names. Only a receipt naming an
+      event not in the timeline (a reaction, an edit) falls back to time: it
+      sits on the latest message stamped at or before the receipt's time, found
+      through a timestamp-sorted index that is rebuilt whenever a message
+      object changes (a reload replacing an echo's clock with the server's). Sending implies reading:
+      homeservers send no receipt with a message, so a reader whose own message
+      comes later moves to it. If that message is outside the rendered window,
+      the avatar stays on the explicit receipt rather than vanishing. The
+      timeline reconciles clusters in one microtask after any change to the
+      buffer, the window or receipt state. Unchanged clusters are left in
+      place, so a hovered reader list survives incoming messages. An open
+      reader list follows its cluster as the timeline scrolls and closes once
+      the cluster is out of view.
 - [x] Typing indicators
 - [x] Presence (when homeserver enables it)
 - [x] Authenticated media (MSC3916)
@@ -1480,7 +1531,7 @@ alongside `openExternalUrl` opened every link twice.
   render as a bare filename line.
 - Hovering a message reveals the exact send time (HH:MM:SS) in the action bar;
   its tooltip (and the header timestamps') shows the full localized date
-- Inline video playback — `m.video` plays inline and seekable: a loopback HTTP server (Range requests) on Linux/WebKitGTK, the asset protocol on macOS/Windows/iOS; graceful fallback to the external player on decode failure
+- Inline video playback — `m.video` plays inline and seekable: a loopback HTTP server (Range requests, random path token) on Linux/WebKitGTK and Android, the asset protocol on macOS/Windows/iOS; graceful fallback to the external player on decode failure. Android can't use the asset protocol: its WebView serves only the first range of an intercepted response, so every follow-up range request fails and the player spins until it gives up (#130). Release builds refuse cleartext except to `127.0.0.1` (`res/xml/network_security_config.xml`); debug builds override that to keep `tauri android dev`'s LAN dev server reachable
 - Sticker rendering (larger than emoji, centered)
 - Image uploads with thumbnail generation
 - Blurhash placeholders during loading
@@ -1772,7 +1823,8 @@ quark/
 │   │   │   ├── emoji.rs      # MSC2545 pack resolution
 │   │   │   ├── stickers.rs   # Sticker pack handling & sending
 │   │   │   ├── media.rs      # Authenticated media, cache
-│   │   │   ├── crypto.rs     # E2EE, verification, key backup
+│   │   │   ├── crypto.rs     # E2EE status, cross-signing, key backup
+│   │   │   ├── verification.rs # SAS verification flow lifecycle (watchers, registry)
 │   │   │   └── spaces.rs     # Space hierarchy
 │   │   ├── gif/              # GIF search integration
 │   │   │   ├── mod.rs
@@ -1806,7 +1858,7 @@ quark/
 │   │   ├── GifPicker.ts      # GIF search overlay
 │   │   ├── ShortcodePreview.ts # Inline emoji preview popup
 │   │   ├── MemberList.ts     # Room member sidebar
-│   │   └── Verification.ts   # SAS/QR verification UI
+│   │   └── Verification.ts   # SAS verification dialog
 │   ├── vim/
 │   │   ├── mode.ts           # Mode state machine
 │   │   ├── keybindings.ts    # Keymap resolution
