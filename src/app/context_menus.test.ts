@@ -39,7 +39,7 @@ beforeEach(() => {
 describe("buildMenu", () => {
   it("reproduces the message menu's grouping", () => {
     expect(shape(buildMenu("message", ctx(), MESSAGE_HANDLERS))).toEqual([
-      "Reply", "React", "Thread",
+      "Reply", "React", "Reply in thread",
       "──",
       "Copy message text", "View raw event",
       "──",
@@ -50,7 +50,7 @@ describe("buildMenu", () => {
   it("drops own-message rows on someone else's message", () => {
     const entries = buildMenu("message", ctx({ selectedMessageIsOwn: false }), MESSAGE_HANDLERS);
     expect(shape(entries)).toEqual([
-      "Reply", "React", "Thread",
+      "Reply", "React", "Reply in thread",
       "──",
       "Copy message text", "View raw event",
     ]);

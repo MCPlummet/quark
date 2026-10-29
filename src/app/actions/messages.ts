@@ -21,8 +21,16 @@ import {
   prepareOutgoingBody,
   replyPreviewFor,
   _downloadInlineEmoji,
+  resolveDisplayName,
 } from "./context.js";
-import { sendThreadReply } from "./threads.js";
+import { sendThreadReply, closeThread, isInOpenThread } from "./threads.js";
+import {
+  armReply,
+  disarmReply,
+  renameReplyTarget,
+  setEditSnippet,
+  refreshComposeBanner,
+} from "./compose_target.js";
 
 /**
  * Send a message in the current room. Optimistically appends to timeline.
@@ -31,10 +39,12 @@ export async function sendMessage(body: string): Promise<void> {
   const roomId = AppState.get("currentRoomId");
   if (!roomId || !body.trim()) return;
 
-  // Route to thread when one is open.
+  // Route to the thread when one is open — quoting the armed reply, which is
+  // always one of the thread's own messages (replying to anything else leaves
+  // the thread first, see startReply).
   const threadRootId = AppState.get("threadRootEventId");
   if (threadRootId) {
-    await sendThreadReply(body, threadRootId, roomId);
+    await sendThreadReply(body, threadRootId, roomId, AppState.get("replyToEventId") ?? undefined);
     return;
   }
 
@@ -302,11 +312,20 @@ export async function sendMessage(body: string): Promise<void> {
 
 /**
  * Start composing a reply to a message.
+ *
+ * With a thread open, replying to one of its messages quotes it inside the
+ * thread. Replying to anything else is a reply in the room, so the thread is
+ * closed first: before, the reply banner simply replaced the thread banner
+ * while the thread stayed open, and the "reply" went into the thread without
+ * its quote — "stuck in the thread" (#131).
  */
 export function startReply(eventId: string, senderName: string, snippet: string): void {
-  const { replyPreview } = getComponents();
-  AppState.set("replyToEventId", eventId);
-  replyPreview.show({ eventId, senderName, snippet });
+  if (AppState.get("threadRootEventId") && !isInOpenThread(eventId)) closeThread();
+  // A reply and an edit are different messages; the newer intent wins.
+  if (AppState.get("editingEventId")) cancelEdit();
+  // Callers pass the sender as they have it — often the bare MXID. The banner
+  // shows the display name when the member list knows one.
+  armReply({ eventId, senderName: resolveDisplayName(senderName), snippet });
 }
 
 /**
@@ -319,31 +338,31 @@ export function startReply(eventId: string, senderName: string, snippet: string)
  * `confirmMessage`.
  */
 export function promoteReplyTarget(optimisticId: string, realEventId: string): void {
-  if (AppState.get("replyToEventId") === optimisticId) {
-    AppState.set("replyToEventId", realEventId);
-  }
+  renameReplyTarget(optimisticId, realEventId);
 }
 
 /**
- * Cancel the current reply without touching thread mode.
+ * Cancel the armed reply. Inside an open thread the thread stays open (the
+ * banner goes back to "replying in thread"); closing the thread is
+ * {@link dismissComposeBanner}'s next press, or `closeThread`.
  */
 export function cancelReply(): void {
-  const { replyPreview } = getComponents();
-  AppState.set("replyToEventId", null);
-  // Don't hide if we're in thread mode — thread has its own banner.
-  if (!replyPreview.isThreadMode()) {
-    replyPreview.hide();
-  }
+  disarmReply();
 }
 
 /**
  * Begin inline editing of an own message — loads the body into the compose box
- * and shows the edit banner above it.
+ * and shows the edit banner above it. Only room-timeline messages are
+ * editable, so an open thread is left first.
  */
 export function startEdit(eventId: string, body: string): void {
-  const { replyPreview, input } = getComponents();
+  const { input } = getComponents();
+  if (AppState.get("threadRootEventId") && !isInOpenThread(eventId)) closeThread();
+  // An edit replaces a message; it cannot also be a reply.
+  if (AppState.get("replyToEventId")) disarmReply();
+  setEditSnippet(body);
   AppState.set("editingEventId", eventId);
-  replyPreview.showEdit(body);
+  refreshComposeBanner();
   input.setValue(body);
 }
 
@@ -351,11 +370,35 @@ export function startEdit(eventId: string, body: string): void {
  * Cancel an in-progress inline edit — clears the compose box and the banner.
  */
 export function cancelEdit(): void {
-  const { replyPreview, input } = getComponents();
+  const { input } = getComponents();
   if (AppState.get("editingEventId") === null) return;
   AppState.set("editingEventId", null);
   input.setValue("");
-  replyPreview.hide();
+  refreshComposeBanner();
+}
+
+/**
+ * The edit is being committed: drop the edit target but leave the compose box
+ * to the caller (which clears it as it sends). The banner falls back to
+ * whatever else is armed — an open thread keeps its banner, where this used to
+ * hide it outright and leave the thread open behind no banner at all.
+ */
+export function finishEdit(): void {
+  AppState.set("editingEventId", null);
+  refreshComposeBanner();
+}
+
+/**
+ * The compose banner's [x]: cancel what the banner shows, one layer at a time.
+ * An edit, else an armed reply (inside a thread that leaves you in the
+ * thread), else the thread itself — fully closed, panel and all. The banner
+ * and the thread panel are one state, so either close button ends it (#131).
+ */
+export function dismissComposeBanner(): void {
+  if (AppState.get("editingEventId")) cancelEdit();
+  else if (AppState.get("replyToEventId")) cancelReply();
+  else if (AppState.get("threadRootEventId")) closeThread();
+  else refreshComposeBanner();
 }
 
 /**
@@ -393,8 +436,9 @@ export async function editMessage(eventId: string, newBody: string): Promise<voi
  * Removes the message from the DOM and state cache.
  */
 export function applyIncomingRedaction(eventId: string): void {
-  const { timeline } = getComponents();
+  const { timeline, threadView } = getComponents();
   timeline.removeMessage(eventId);
+  threadView?.removeMessage(eventId);
   AppState.set(
     "currentTimeline",
     AppState.get("currentTimeline").filter((e) => e.event_id !== eventId)
@@ -411,8 +455,9 @@ export async function redactMessage(eventId: string): Promise<void> {
   try {
     await ipcRedactMessage(roomId, eventId);
     // Remove immediately from DOM and state cache
-    const { timeline } = getComponents();
+    const { timeline, threadView } = getComponents();
     timeline.removeMessage(eventId);
+    threadView?.removeMessage(eventId);
     AppState.set(
       "currentTimeline",
       AppState.get("currentTimeline").filter((e) => e.event_id !== eventId)

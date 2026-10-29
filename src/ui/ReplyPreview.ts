@@ -1,4 +1,11 @@
-// Reply compose preview — shown above the input bar when composing a reply
+// Compose banner — the bar above the input that says where the next message
+// goes: a reply, an edit, the open thread, or a reply inside the open thread.
+//
+// A pure view. It used to carry its own "thread mode" flag, which is how it
+// and the app state came apart: dismissing the banner cleared the flag and hid
+// the bar while the thread stayed open and kept receiving every message (#131).
+// What the bar shows is now decided in one place, `refreshComposeBanner`
+// (app/actions/compose_target.ts), from AppState alone.
 
 type DismissCallback = () => void;
 
@@ -9,6 +16,12 @@ export interface ReplyPreviewData {
   senderName: string;
   /** Plain-text snippet of the quoted message body */
   snippet: string;
+}
+
+const MAX_SNIPPET = 80;
+
+function clip(snippet: string): string {
+  return snippet.length > MAX_SNIPPET ? snippet.slice(0, MAX_SNIPPET) + "…" : snippet;
 }
 
 /**
@@ -23,7 +36,6 @@ export class ReplyPreview {
   private _closeBtn: HTMLButtonElement;
 
   private _currentReply: ReplyPreviewData | null = null;
-  private _threadMode = false;
   private _onDismiss: DismissCallback | null = null;
 
   constructor() {
@@ -59,14 +71,14 @@ export class ReplyPreview {
     this._closeBtn.type = "button";
     this._closeBtn.textContent = "[x]";
     this._closeBtn.setAttribute("aria-label", "Cancel reply");
-    this._closeBtn.addEventListener("click", () => this._dismiss());
+    this._closeBtn.addEventListener("click", () => this._onDismiss?.());
     this._el.appendChild(this._closeBtn);
 
     // ── Keyboard handling ─────────────────────────────────────────────────
     this._el.addEventListener("keydown", (e) => {
       if (e.key === "Escape" || (e.ctrlKey && e.key === "[")) {
         e.preventDefault();
-        this._dismiss();
+        this._onDismiss?.();
       }
     });
   }
@@ -75,74 +87,56 @@ export class ReplyPreview {
     return this._el;
   }
 
+  /** The [x] button (or Escape on the bar). What it cancels is the caller's
+   *  call — see `dismissComposeBanner`. */
   onDismiss(cb: DismissCallback): void {
     this._onDismiss = cb;
   }
 
-  /** Display the preview for the given reply target. */
-  show(data: ReplyPreviewData): void {
-    this._threadMode = false;
+  /** A reply banner. `inThread` marks a reply inside the open thread, which
+   *  is sent into that thread quoting the message. */
+  show(data: ReplyPreviewData, opts: { inThread?: boolean } = {}): void {
+    const inThread = opts.inThread ?? false;
+    this._render({
+      variant: inThread ? "thread" : null,
+      sender: inThread ? `⌥ ↩ <${data.senderName}>` : `<${data.senderName}>`,
+      snippet: data.snippet,
+      label: inThread ? `Replying in thread to ${data.senderName}` : `Replying to ${data.senderName}`,
+      close: inThread ? "Cancel reply (stay in thread)" : "Cancel reply",
+    });
     this._currentReply = data;
-    this._el.classList.remove("reply-preview-bar--thread");
-
-    this._senderEl.textContent = `<${data.senderName}>`;
-    const MAX_SNIPPET = 80;
-    const displaySnippet =
-      data.snippet.length > MAX_SNIPPET
-        ? data.snippet.slice(0, MAX_SNIPPET) + "…"
-        : data.snippet;
-    this._snippetEl.textContent = displaySnippet;
-
-    this._el.style.display = "";
-    this._el.setAttribute("aria-label", `Replying to ${data.senderName}`);
   }
 
   /** Show an edit-mode banner (sending will edit the original message). */
   showEdit(snippet: string): void {
-    this._threadMode = false;
-    this._currentReply = null;
-    this._el.classList.remove("reply-preview-bar--thread");
-    this._el.classList.add("reply-preview-bar--edit");
-
-    this._senderEl.textContent = "Editing";
-    const MAX_SNIPPET = 80;
-    this._snippetEl.textContent =
-      snippet.length > MAX_SNIPPET ? snippet.slice(0, MAX_SNIPPET) + "…" : snippet;
-
-    this._el.style.display = "";
-    this._el.setAttribute("aria-label", "Editing message");
+    this._render({
+      variant: "edit",
+      sender: "Editing",
+      snippet,
+      label: "Editing message",
+      close: "Cancel edit",
+    });
   }
 
-  /** Show a thread-mode banner (sending goes to the open inline thread). */
+  /** Show the thread banner: everything sent goes into the open thread. */
   showThread(snippet: string): void {
-    this._threadMode = true;
-    this._currentReply = null;
-    this._el.classList.add("reply-preview-bar--thread");
-
-    this._senderEl.textContent = "⌥ Thread";
-    const MAX_SNIPPET = 80;
-    this._snippetEl.textContent =
-      snippet.length > MAX_SNIPPET ? snippet.slice(0, MAX_SNIPPET) + "…" : snippet;
-
-    this._el.style.display = "";
-    this._el.setAttribute("aria-label", "Replying in thread");
+    this._render({
+      variant: "thread",
+      sender: "⌥ Replying in thread",
+      snippet,
+      label: "Replying in thread",
+      close: "Close thread",
+    });
   }
 
   hide(): void {
     this._el.style.display = "none";
     this._currentReply = null;
-    this._threadMode = false;
-    this._el.classList.remove("reply-preview-bar--thread");
-    this._el.classList.remove("reply-preview-bar--edit");
+    this._el.classList.remove("reply-preview-bar--thread", "reply-preview-bar--edit");
   }
 
   isVisible(): boolean {
     return this._el.style.display !== "none";
-  }
-
-  /** True when the bar is showing the thread-send indicator (not a reply). */
-  isThreadMode(): boolean {
-    return this._threadMode;
   }
 
   /** Returns the event ID currently being replied to, or null. */
@@ -152,8 +146,21 @@ export class ReplyPreview {
 
   // ── Private ────────────────────────────────────────────────────────────
 
-  private _dismiss(): void {
-    this.hide();
-    this._onDismiss?.();
+  private _render(opts: {
+    variant: "thread" | "edit" | null;
+    sender: string;
+    snippet: string;
+    label: string;
+    close: string;
+  }): void {
+    this._currentReply = null;
+    this._el.classList.toggle("reply-preview-bar--thread", opts.variant === "thread");
+    this._el.classList.toggle("reply-preview-bar--edit", opts.variant === "edit");
+    this._senderEl.textContent = opts.sender;
+    this._snippetEl.textContent = clip(opts.snippet);
+    this._closeBtn.setAttribute("aria-label", opts.close);
+    this._closeBtn.title = opts.close;
+    this._el.style.display = "";
+    this._el.setAttribute("aria-label", opts.label);
   }
 }

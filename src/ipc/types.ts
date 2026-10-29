@@ -142,6 +142,10 @@ export interface TimelineEvent {
   relates_to_event_id: string | null;
   in_reply_to: string | null;
   thread_root: string | null;
+  /** On a thread root: its reply count from the server's bundled `m.thread`
+   *  summary, as of when the event was fetched. Absent when the server sent
+   *  none — an event that came in by sync before it had replies, say. */
+  thread_reply_count?: number | null;
   media_url: string | null;
   media_mimetype: string | null;
   media_width: number | null;

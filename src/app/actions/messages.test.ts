@@ -40,18 +40,18 @@ const replyPreview = {
   show: vi.fn(),
   hide: vi.fn(),
   showEdit: vi.fn(),
-  isThreadMode: vi.fn(() => false),
+  showThread: vi.fn(),
 };
 const input = { setValue: vi.fn() };
 const timeline = { removeMessage: vi.fn(), updateMessageBody: vi.fn() };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  replyPreview.isThreadMode.mockReturnValue(false);
   setComponents({ replyPreview, input, timeline } as unknown as AppComponents);
   AppState.patch({
     replyToEventId: null,
     editingEventId: null,
+    threadRootEventId: null,
     currentTimeline: [],
   });
 });
@@ -74,27 +74,35 @@ describe("startReply / cancelReply", () => {
   it("startReply records the target and shows the reply preview", () => {
     startReply("$e1", "Alice", "hello there");
     expect(AppState.get("replyToEventId")).toBe("$e1");
-    expect(replyPreview.show).toHaveBeenCalledExactlyOnceWith({
-      eventId: "$e1",
-      senderName: "Alice",
-      snippet: "hello there",
-    });
+    expect(replyPreview.show).toHaveBeenCalledExactlyOnceWith(
+      { eventId: "$e1", senderName: "Alice", snippet: "hello there" },
+      { inThread: false },
+    );
   });
 
-  it("cancelReply clears the target and hides the preview when NOT in thread mode", () => {
+  it("cancelReply clears the target and hides the preview when no thread is open", () => {
     AppState.set("replyToEventId", "$e1");
-    replyPreview.isThreadMode.mockReturnValue(false);
     cancelReply();
     expect(AppState.get("replyToEventId")).toBeNull();
     expect(replyPreview.hide).toHaveBeenCalledOnce();
   });
 
-  it("cancelReply keeps the preview visible in thread mode (thread has its own banner)", () => {
-    AppState.set("replyToEventId", "$e1");
-    replyPreview.isThreadMode.mockReturnValue(true);
+  // Derived from state, not from a flag on the banner: with a thread open the
+  // banner falls back to the thread's, because the thread is still where the
+  // next message goes.
+  it("cancelReply falls back to the thread banner while a thread is open", () => {
+    AppState.patch({ threadRootEventId: "$root", replyToEventId: "$e1" });
     cancelReply();
     expect(AppState.get("replyToEventId")).toBeNull();
     expect(replyPreview.hide).not.toHaveBeenCalled();
+    expect(replyPreview.showThread).toHaveBeenCalledOnce();
+  });
+
+  it("startReply cancels an edit in progress rather than leaving it armed", () => {
+    startEdit("$mine", "draft");
+    startReply("$e1", "Alice", "hello");
+    expect(AppState.get("editingEventId")).toBeNull();
+    expect(AppState.get("replyToEventId")).toBe("$e1");
   });
 });
 

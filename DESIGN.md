@@ -644,15 +644,14 @@ use one.
 
 ### Mobile touch behaviour
 
-**Nothing the user composes on pans the viewport.** With the keyboard up, iOS keeps the layout viewport at full height and lets the visual viewport be panned within it, so any drag the page doesn't consume pans the shell — including drags on a compose bar, which has nothing of its own to scroll (#33). `touch-action` handles the leaves it can, but it cannot express the rule for a region: it intersects down the tree, so `none` on `.input-bar` or the compose box would take the text field's own `pan-y` with it. `guardViewportPan` (`src/app/mobile.ts`) is the enforcement — a non-passive `touchmove` listener on a container that swallows every drag except the one element with something of its own to scroll. Three surfaces carry one, because each is a container the others don't reach into:
+**Nothing the user composes on pans the viewport.** With the keyboard up, iOS keeps the layout viewport at full height and lets the visual viewport be panned within it, so any drag the page doesn't consume pans the shell — including drags on a compose bar, which has nothing of its own to scroll (#33). `touch-action` handles the leaves it can, but it cannot express the rule for a region: it intersects down the tree, so `none` on `.input-bar` or the compose box would take the text field's own `pan-y` with it. `guardViewportPan` (`src/app/mobile.ts`) is the enforcement — a non-passive `touchmove` listener on a container that swallows every drag except the one element with something of its own to scroll. Two surfaces carry one, because each is a container the other doesn't reach into:
 
 | Surface | Guarded element | Let through |
 | --- | --- | --- |
 | Main composer | `.input-bar-wrap` (`Input`) | `.input-bar__field` — it scrolls past six lines — and `.attach-tray__items`, the staged-attachments row, which scrolls sideways |
 | Autocomplete popover | `.shortcode-preview` (`ShortcodePreview` / `MentionPreview`, mounted on `.content-area`, so outside the wrap) | itself, but only while the list actually overflows |
-| Thread overlay compose row | `.thread-view__input-bar` (`ThreadView` builds its own row; it does not use `Input`) | nothing — the reply field is one line |
 
-Adding chrome inside one of those containers needs no new `touch-action` rule. Adding a *new* compose surface does need its own guard. The guard is attached only while mobile mode is on, so desktop never pays for a blocking touch path, and it stands down while the page is pinch-zoomed, where panning is how the user reaches the rest of the shell.
+Adding chrome inside one of those containers needs no new `touch-action` rule. Adding a *new* compose surface does need its own guard. (The thread panel has no compose row of its own — an open thread sends through the main composer — so it needs none.) The guard is attached only while mobile mode is on, so desktop never pays for a blocking touch path, and it stands down while the page is pinch-zoomed, where panning is how the user reaches the rest of the shell.
 
 **Overlays follow the pan.** The shell compensates for the pan with a transform on `#app` (`--viewport-pan`, published by `mobile.ts`). Overlays mount on `<body>` so nothing can clip them, which puts them outside that element — so they mount through `mountOverlay` (`src/ui/overlay.ts`), which tags them with `.quark-overlay` and earns them the same offset. Without it the two shear apart as the pan grows: toasts land off-screen and the emoji picker floats away from the compose bar it is anchored to. The offset uses the individual `translate` property, not `transform`, so it composes with the `translate(-50%, -50%)` that dialogs centre themselves with. The shell and the overlay layer therefore share a coordinate space that client rects do not: an overlay placed off an anchor's `getBoundingClientRect()` must subtract `viewportPan()`, or it lands a pan below its anchor.
 
@@ -712,6 +711,121 @@ than absorbing every new action nobody got round to giving a home.
 ```
 
 All panels, borders, and text use monospace rendering. Colors, borders, and glyph styles are controlled by themes.
+
+### Threads
+
+A thread opens **in the timeline, at its root**: the room parts there — the
+messages above slide up, the ones below slide down — and the thread panel
+unfolds in the gap, with everything else greyed back:
+
+```
+┌────┬───────────┬──────────────────────────────────┐
+│░░░░│░░░░░░░░░░░│░ #general ░░░░░░░░░░░░░░░░░░░░░░░│
+│░░░░│░░ Rooms ░░│░░ <alice> … (dimmed, frozen) ░░░░│  ← click: close
+│░░░░│░░░░░░░░░░░│ ┌ ⌥ Thread  12 replies  Esc [x] ┐│
+│░░░░│░░░░░░░░░░░│D│ ▌dave  which bindings…  (root)││
+│░░░░│░░░░░░░░░░░│ │ ── 12 replies ──              ││
+│░░░░│░░░░░░░░░░░│ │ bob   `t` is hard to discover ││
+│░░░░│░░░░░░░░░░░│ │ ↩ bob `t` is hard to discover ││
+│░░░░│░░░░░░░░░░░│ │ carol that's what the palette…││
+│░░░░│░░░░░░░░░░░│ └───────────────────────────────┘│
+│░░░░│░░░░░░░░░░░│░░ <bob> … (dimmed, frozen) ░░░░░░│  ← click: close
+│░░░░│░░░░░░░░░░░│ ┊ ⌥ Replying in thread  …     [x]│
+│░░░░│░░░░░░░░░░░│ NOR│ reply in thread…            │
+└────┴───────────┴──────────────────────────────────┘
+```
+
+- **One state.** "Composing into thread X" is `AppState.threadRootEventId` and
+  nothing else; every send path (text, attachments, stickers, GIFs) reads it.
+  `openThread` / `closeThread` (`src/app/actions/threads.ts`) are its only
+  writers and move the panel, the dimmed layout, the active panel and the
+  compose banner together. The banner above the composer is derived from
+  state in one place (`refreshComposeBanner`, `actions/compose_target.ts`) —
+  edit, else reply (in-thread or room), else thread — rather than carrying a
+  mode flag of its own; the split between a banner flag, the panel and the
+  state is what kept users posting into a thread they thought they had left
+  (#131).
+- **Closing.** The panel's `[x]`, a click on the dimmed room, the banner's
+  `[x]`, `Esc` (the thread panel's `close`), `t` again, Android back,
+  switching rooms, opening the drawer on mobile, and **Close thread** in the
+  command palette all end the thread completely. With a reply armed *inside*
+  the thread, the banner's `[x]` — and `Esc` — first cancel that reply (back
+  to "replying in thread"), and a second press closes the thread. In vim mode
+  the `Esc` that leaves Insert or Visual inside a thread only changes mode
+  (`escapeRunsPanelClose`): opening a thread lands in Insert, so otherwise its
+  rows could never be reached, and a reflexive `Esc` mid-reply would retarget
+  the draft at the room.
+- **Replying.** A reply to one of the thread's messages (its root included) —
+  the row's hover `↩`, its long-press sheet, `r` on a selected row — is sent
+  into the thread as an MSC3440 threaded reply quoting it. A reply to anything
+  outside the thread is a reply in the room, so it **closes the thread first**;
+  so does editing a room message. Opening a thread disarms a reply armed in
+  the room.
+- **Rendering.** The panel shows the root once as its header (the backend
+  returns it with the replies; it is not drawn or counted as one) and opens
+  scrolled to the newest reply. It follows new replies only while the reader is
+  at the bottom (or the reply is their own). Re-opening the open thread (its
+  indicator, `⌥` on the hover bar) keeps the panel as it is rather than
+  rebuilding it at the top. Every in-thread reply gets the main timeline's reply
+  banner from `m.in_reply_to` with the rich-reply fallback stripped from its
+  body, so a reply from a client that still sends the `> <@user>` fallback and
+  one that doesn't (MSC2781) look the same; a plain thread message's
+  `is_falling_back` pointer is not a reply and gets no banner.
+- **Counting.** A root's `⌥ n replies` starts as the higher of the replies
+  loaded with the room and the server's bundled `m.thread` count on the root
+  (`thread_reply_count`), then goes up once per reply *by event ID*: a reply
+  reported twice — our send returning, then its sync echo — counts once, and a
+  send that fails never counts. It is kept on the root's `MessageData`, so a
+  windowed re-render does not put it back. Opening the thread sets it to the
+  replies the thread loaded, so the room and the panel agree. The panel's
+  header counts replies that have landed; our own still being sent are drawn
+  but listed apart ("12 replies · 3 sending"). Those are held outside the
+  panel (`_sendingReplies` in `threads.ts`), so a thread closed and reopened
+  while they queue behind a rate limit still shows them, and one that lands
+  meanwhile appears — its sync echo, being our own, is suppressed.
+- **Modal-ish, not a modal.** The panel is not a `DialogBase`: the composer has
+  to stay live. It is a panel (`activePanel === "thread"`) with its own
+  registered nav — `j`/`k`/`gg`/`G` move within it, `k` from the top of the
+  composer lands on its newest reply, `nav-down` past it drops into the
+  composer. The dimmed side columns stay clickable: they are navigation, and
+  navigating away closes the thread.
+- **Freezing the room.** `ThreadView` is mounted inside `.timeline-wrap`
+  beside the scroller — never inside it. Its backdrop takes pointer, wheel and
+  touch over the room, and `.quark-layout--thread-focus .timeline` drops the
+  scroller's overflow, so nothing behind the thread can scroll; programmatic
+  writes still apply, so new messages keep the room pinned to its tail
+  underneath. Keeping the rows out of the scroller matters beyond looks: as an
+  inline panel inside the message list, its rows were `[data-message-id]`
+  elements the windowed renderer's cull could pivot on, re-centring the window
+  on older history and dropping the live tail when a message arrived, and the
+  timeline's selection methods diverted to the thread so jump-to-latest
+  scrolled the room up to it (#132). `Timeline` now has no thread code at all.
+- **The split is paint only.** `TimelineSplit` (`src/ui/thread_split.ts`)
+  places the panel over the root's message box — its root row lined up with
+  the timeline's when there is room, pushed back inside the region near an
+  edge — and moves the room's two halves with `translateY`, written as one
+  generated stylesheet keyed on the root's event ID so it holds when the
+  windowed renderer rebuilds the list. A transform changes neither layout nor
+  scroll position, so the frozen room's window and cull see nothing. A root
+  that shares a box with other messages splits the box: each half draws its
+  own frame. The panel unfolds from the root's band on open (`clip-path`,
+  timed with the halves so the edges stay flush) and folds back into it on
+  close; the thread is closed at once, only the fold is left. Once open the
+  panel stays put: a message landing underneath moves the halves to stay
+  flush with it in the same frame, so nothing on screen shifts, while replies
+  arriving grow it and re-part the room with the animation. A root outside the
+  rendered window opens from the top edge, the whole room moving down. WebKit
+  counts the transformed rows toward the scroller's overflow and nudges a
+  `column-reverse` scroller by a rounding pixel as it changes; the split holds
+  the room's scroll position against nudges of up to 2px and leaves it exactly
+  as it found it.
+- **Theming.** The wash is `--thread-focus-dim`, mixed from `--bg` (not black)
+  so it greys the room toward the theme's own surface on light and dark themes
+  alike; the side columns fade with opacity. Borders and accents use
+  `--msg-thread-indicator`.
+- **Mobile.** The panel is the width of the root's box and at most all but a
+  56px strip of the timeline region (the dimmed room around it — tap to
+  close); the hover bar gives way to long press, and the key hint is hidden.
 
 ### Spaces (Cinny-Style)
 
@@ -783,13 +897,16 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Global        | `?`           | Open settings                 |
 | Timeline      | `r`           | Reply to selected message     |
 | Timeline      | `e`           | React to selected message     |
-| Timeline      | `t`           | Open/enter thread             |
+| Timeline      | `t`           | Reply in thread (again: close)|
 | Timeline      | `dd`          | Redact own message            |
 | Timeline      | `E` / `c`     | Edit own message              |
 | Timeline      | `y`           | Copy selected message         |
 | Timeline      | `o`           | Select text within the message|
 | Timeline      | `p`           | Paste into the compose box    |
 | Timeline      | `>`           | Quote selection into compose  |
+| Thread        | `j`/`k`/`G`   | Move within the open thread   |
+| Thread        | `r` / `e`     | Reply in thread / react       |
+| Thread        | `Esc`         | Cancel an in-thread reply, else close the thread (from Insert: to Normal only) |
 | Insert        | `Ctrl-e`      | Open emoji/sticker picker     |
 | Insert        | `Ctrl-g`      | Open GIF search               |
 | Insert        | `Ctrl-b/i/u`  | Bold / italic / underline     |
@@ -1078,7 +1195,14 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
 - [x] In-room message search — header search box (`:search`) with four tiers: loaded window (instant) · local cache (matrix-sdk event cache, offline) · back-to-date · entire history. Server tiers stream results one page at a time (bounded memory) and are cancelable.
 - [x] Spaces: hierarchy display, space-scoped room lists, restricted joins
 - [x] Threads (m.thread relation) — replies carry media and MSC2530 captions,
-      converted by the same code path as the main timeline
+      converted by the same code path as the main timeline. Replies *inside* a
+      thread are sent as MSC3440 threaded replies (`m.thread` carrying a real
+      `m.in_reply_to`, `is_falling_back: false`) and rendered with the reply
+      banner, fallback stripped. The thread timeline is the root plus its
+      `m.thread` relations (`/relations`, paged to the end), in server order,
+      undecryptable replies kept as such. It used to be the last 100 room
+      events filtered to the thread, which lost every reply further back (see
+      *Threads* under UI Design for the interaction model)
 - [x] Rich replies (m.in_reply_to) — every reply gets its banner, even when the
       original is outside the loaded window: the preview is looked up in the
       page, then the whole buffer, then a cache of fetched originals, and
@@ -1088,6 +1212,13 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       cleartext; a thread's `is_falling_back` pointer is not a reply. Clicking
       the banner jumps to the original — scrolling if loaded, else loading its
       context, else opening its thread if it is a thread reply
+- [x] Sending in order — a room's messages (text, thread replies, attachments,
+      stickers, GIFs) go out one at a time, in the order they were sent
+      (`src/ipc/send_order.ts`). Sent concurrently, they were scrambled by the
+      homeserver's rate limit: Synapse allows a burst of ten events and one every
+      few seconds after, answering the rest with 429s that matrix-sdk retries
+      each on its own, so they landed in whichever order their retries won.
+      Reactions are not queued — their order carries no meaning
 - [x] Reactions (m.annotation) — Unicode + custom emoji
 - [x] Message editing & redaction — an edit re-runs the outgoing formatter, so
       `m.new_content` keeps the HTML `formatted_body` and custom emoji survive
@@ -1265,14 +1396,14 @@ alongside `openExternalUrl` opened every link twice.
   reply does. A reply armed *inside* a thread produces one threaded reply
   (`m.thread` carrying the replied-to event), not a reply alongside a thread —
   `m.relates_to` holds one relation, so the two cannot both be set. A reply
-  armed *outside* the open thread is not carried: opening a thread disarms the
-  reply (the thread banner replaces the reply banner, so one left armed is armed
-  invisibly), and an attachment only folds in a reply to the thread's root or to
-  one of its replies. Files sent into a thread render in the panel as the same
+  armed *outside* the open thread is not carried: opening a thread disarms a
+  room reply, replying to a room message closes the thread, and an attachment
+  only folds in a reply to the thread's root or to one of its replies (asked of
+  the thread itself, which knows the replies loaded with it). Files sent into a thread render in the thread panel as the same
   click-to-open affordance the main timeline gives them. Attachments
   sent into a thread have no optimistic row: they appear once sent, from the
   send's own echo (see *Attachment progress*), which the live render path
-  routes into the panel with its media just as it would the sync echo. Stickers
+  routes into the thread panel with its media just as it would the sync echo. Stickers
   and GIFs sent into a thread still wait for the sync echo. An armed reply is
   consumed by the attachment and cleared, as it is for a text message.
 - **One attachment route.** The attach button (which accepts several files),
@@ -1718,7 +1849,8 @@ quark/
 │   │   ├── Timeline.ts       # Message rendering
 │   │   ├── MessageRow.ts     # Single message (text, images, emoji)
 │   │   ├── ReplyPreview.ts   # Inline reply rendering
-│   │   ├── ThreadView.ts     # Thread timeline
+│   │   ├── ThreadView.ts     # Thread panel (the open thread, in the timeline)
+│   │   ├── thread_split.ts   # Parts the room around the thread panel (paint only)
 │   │   ├── Reactions.ts      # Reaction bar
 │   │   ├── Input.ts          # Compose bar with mode indicator
 │   │   ├── EmojiPicker.ts    # Keyboard-navigable emoji/sticker picker

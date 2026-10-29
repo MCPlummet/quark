@@ -2,11 +2,11 @@
 // Kept separate from keyboard.ts (keyboard concerns) and state.ts (no UI deps).
 
 import { AppState } from "./state.js";
-import { cancelReply, cancelEdit, closeThread } from "./actions.js";
+import { cancelReply, cancelEdit, closeThread, dismissComposeBanner } from "./actions.js";
 import type { AppComponents } from "../ui/App.js";
 
 export function setupPanelNav(components: AppComponents): void {
-  const { spaceStrip, roomList, timeline, memberList, homeView } = components;
+  const { spaceStrip, roomList, timeline, threadView, memberList, homeView } = components;
 
   AppState.registerPanelNav("spaces", {
     navDown: () => spaceStrip.navDown(),
@@ -40,6 +40,27 @@ export function setupPanelNav(components: AppComponents): void {
       cancelEdit();
       closeThread();
     },
+    selectedMessageId: () => timeline.selectedMessageId,
+  });
+
+  // The open thread is its own panel. It used to borrow the timeline's
+  // registration, with every timeline nav method branching on "is a thread
+  // open" — the branch that made jump-to-latest scroll the room to the thread
+  // (#132). Opening a thread makes this the active panel; closing it hands
+  // focus back to the timeline (actions/threads.ts).
+  AppState.registerPanelNav("thread", {
+    navDown: () => threadView.selectNext(),
+    navUp: () => threadView.selectPrev(),
+    jumpTop: () => threadView.selectFirst(),
+    jumpBottom: () => { threadView.selectLast(); },
+    // Esc in Normal does what the banner's [x] does: drops an armed reply or
+    // edit first, else closes the thread outright — panel, banner and routing.
+    // (The Esc that leaves Insert doesn't get here; see escapeRunsPanelClose.)
+    close: () => dismissComposeBanner(),
+    selectedMessageId: () => threadView.selectedMessageId,
+  });
+  threadView.onFocus(() => {
+    if (AppState.get("activePanel") !== "thread") AppState.set("activePanel", "thread");
   });
 
   // Clicking in the timeline should immediately route j/k there, even if the

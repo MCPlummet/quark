@@ -1,6 +1,7 @@
 // Thread IPC calls
 
 import { invoke } from "./invoke.js";
+import { inSendOrder } from "./send_order.js";
 import type { TimelineEvent, ThreadRoot } from "./types.js";
 
 export type { ThreadRoot };
@@ -28,19 +29,26 @@ export async function getThreadTimeline(
 }
 
 /**
- * Send a reply in a thread. Returns the new event ID.
+ * Send a message into a thread. Returns the new event ID.
  * Matches the Rust `send_thread_reply` command.
+ *
+ * With `replyToEventId` (one of the thread's own messages) the event is a
+ * reply inside the thread — `m.thread` carrying that event as a real
+ * `m.in_reply_to` — rather than a plain thread message whose reply pointer is
+ * only the `is_falling_back` one.
  */
 export async function sendThreadReplyIpc(
   roomId: string,
   threadRootEventId: string,
   body: string,
   formattedBody?: string,
+  replyToEventId?: string,
 ): Promise<string> {
-  return invoke<string>("send_thread_reply", {
+  return inSendOrder(roomId, () => invoke<string>("send_thread_reply", {
     roomId,
     threadRootEventId,
     body,
     formattedBody,
-  });
+    replyToEventId: replyToEventId ?? null,
+  }));
 }

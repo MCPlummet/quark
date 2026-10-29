@@ -57,10 +57,10 @@ export async function sendReaction(eventId: string, key: string): Promise<void> 
       events.map((e) => (e.event_id === eventId ? { ...e, reactions: updated } : e))
     );
 
-    timeline.updateMessageReactions(
-      eventId,
-      updated.map((r) => ({ key: r.key, count: r.count, own: r.own, imageUrl: _resolveReactionImage(r.key) }))
-    );
+    const groups = updated.map((r) => ({ key: r.key, count: r.count, own: r.own, imageUrl: _resolveReactionImage(r.key) }));
+    timeline.updateMessageReactions(eventId, groups);
+    // …and in the thread panel, if the message is one of its rows.
+    getComponents().threadView?.updateMessageReactions(eventId, groups);
   }
 
   try {
@@ -104,18 +104,18 @@ export function applyIncomingReaction(
     events.map((e) => (e.event_id === targetEventId ? { ...e, reactions: updated } : e))
   );
 
-  timeline.updateMessageReactions(
-    targetEventId,
-    updated.map((r) => ({ key: r.key, count: r.count, own: r.own, imageUrl: _resolveReactionImage(r.key) }))
-  );
+  const groups = updated.map((r) => ({ key: r.key, count: r.count, own: r.own, imageUrl: _resolveReactionImage(r.key) }));
+  timeline.updateMessageReactions(targetEventId, groups);
+  getComponents().threadView?.updateMessageReactions(targetEventId, groups);
 }
 
 /**
  * Show the quick reaction picker anchored to the currently selected message.
  */
 export function openQuickReactPicker(eventId: string): void {
-  const { timeline, quickReactPicker } = getComponents();
-  const anchor = timeline.getMessageElementById(eventId);
+  const { timeline, threadView, quickReactPicker } = getComponents();
+  // A row of the open thread panel is not in the timeline's list.
+  const anchor = timeline.getMessageElementById(eventId) ?? threadView?.getMessageEl(eventId) ?? null;
   quickReactPicker.show(eventId, anchor);
 
   // Load custom emoji for current room and inject into the picker.

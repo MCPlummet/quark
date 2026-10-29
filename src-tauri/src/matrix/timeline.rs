@@ -12,7 +12,8 @@ use matrix_sdk::{
                 ImageInfo, MediaSource,
             },
             sticker::StickerEventContent,
-            AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
+            AnySyncMessageLikeEvent, AnySyncTimelineEvent, MessageLikeEventContent,
+            MessageLikeUnsigned, SyncMessageLikeEvent,
         },
         serde::Raw,
         EventId, OwnedEventId, RoomId, TransactionId, UInt,
@@ -40,6 +41,12 @@ pub struct TimelineEvent {
     pub relates_to_event_id: Option<String>,
     pub in_reply_to: Option<String>,
     pub thread_root: Option<String>,
+    /// On a thread root: its reply count from the server's bundled `m.thread`
+    /// summary, as of when the event was fetched. `None` when the server sent
+    /// none — an event that came in by sync before it had replies, say. The
+    /// frontend used to count only the replies inside its loaded window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_reply_count: Option<u64>,
     /// URL for media messages (images, videos, files, stickers).
     pub media_url: Option<String>,
     pub media_mimetype: Option<String>,
@@ -371,6 +378,7 @@ fn index_msg_to_event(m: crate::search_index::IndexedMessage) -> TimelineEvent {
         relates_to_event_id: None,
         in_reply_to: None,
         thread_root: None,
+        thread_reply_count: None,
         media_url: None,
         media_mimetype: None,
         media_width: None,
@@ -809,6 +817,7 @@ fn convert_sync_sticker(ev: matrix_sdk::ruma::events::OriginalSyncMessageLikeEve
         relates_to_event_id,
         in_reply_to,
         thread_root,
+        thread_reply_count: bundled_thread_count(&ev.unsigned),
         media_url: url,
         media_mimetype: mime,
         media_width: w,
@@ -841,6 +850,7 @@ fn convert_sync_encrypted(
         relates_to_event_id: None,
         in_reply_to,
         thread_root,
+        thread_reply_count: bundled_thread_count(&ev.unsigned),
         media_url: None,
         media_mimetype: None,
         media_width: None,
@@ -853,6 +863,13 @@ fn convert_sync_encrypted(
         media_thumbnail_encryption_info: None,
         reactions: vec![],
     }
+}
+
+/// The reply count of the thread an event roots, from the server's bundled
+/// summary (`unsigned` → `m.relations` → `m.thread`). Decryption keeps the
+/// envelope's `unsigned`, so an encrypted root carries it too.
+fn bundled_thread_count<C: MessageLikeEventContent>(unsigned: &MessageLikeUnsigned<C>) -> Option<u64> {
+    unsigned.relations.thread.as_ref().map(|t| t.count.into())
 }
 
 pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> TimelineEvent {
@@ -889,6 +906,7 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
         relates_to_event_id,
         in_reply_to,
         thread_root,
+        thread_reply_count: bundled_thread_count(&ev.unsigned),
         media_url: content.media_url,
         media_mimetype: content.media_mimetype,
         media_width: content.media_width,
@@ -1801,6 +1819,7 @@ mod tests {
             relates_to_event_id: None,
             in_reply_to: None,
             thread_root: None,
+            thread_reply_count: None,
             media_url: None,
             media_mimetype: None,
             media_width: None,

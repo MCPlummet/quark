@@ -60,8 +60,10 @@ export interface AppComponents {
   replyPreview: ReplyPreview;
   input: Input;
 
-  // Sidebars
+  // The open thread — a panel opened in the timeline region, at its root
   threadView: ThreadView;
+
+  // Sidebars
   memberList: MemberList;
 
   // Overlays
@@ -178,6 +180,12 @@ export function mountApp(container: HTMLElement): AppComponents {
 
   contentArea.appendChild(roomHeader.getElement());
   contentArea.appendChild(timeline.getElement());
+  // The thread panel lives in the timeline's non-scrolling wrapper — the host
+  // for its viewport-pinned overlays — so it covers exactly the timeline region
+  // and leaves the compose box below it live. It is deliberately NOT inside the
+  // scroller: rows in there are the windowed renderer's business (#132). It
+  // opens at the thread's root by parting the room around it, in paint only.
+  threadView.embedIn(timeline);
   contentArea.appendChild(replyPreview.getElement());
 
   // Shortcode / mention previews sit above input bar
@@ -200,10 +208,7 @@ export function mountApp(container: HTMLElement): AppComponents {
 
   mainLayout.appendChild(contentArea);
 
-  // Column 4: Thread view sidebar (hidden by default)
-  mainLayout.appendChild(threadView.getElement());
-
-  // Column 5: Member list sidebar (hidden by default)
+  // Column 4: Member list sidebar (hidden by default)
   mainLayout.appendChild(memberList.getElement());
 
   // Mobile drawer backdrop — sits over the content area while the drawer is open.

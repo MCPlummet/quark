@@ -344,12 +344,23 @@ export function _applyEdits(events: TimelineEvent[]): TimelineEvent[] {
     });
 }
 
-/** Build a map of thread root event IDs → reply count from a batch of events. */
+/**
+ * Build a map of thread root event IDs → reply count from the loaded events.
+ *
+ * Counting the loaded replies alone undercounts any thread that reaches past
+ * them; the server's bundled count on the root covers those, but is as old as
+ * the fetch that brought it. Each is a floor, so the higher wins.
+ */
 export function _buildThreadRootCounts(events: TimelineEvent[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const e of events) {
     if (e.thread_root) {
       counts.set(e.thread_root, (counts.get(e.thread_root) ?? 0) + 1);
+    }
+  }
+  for (const e of events) {
+    if (e.thread_reply_count) {
+      counts.set(e.event_id, Math.max(counts.get(e.event_id) ?? 0, e.thread_reply_count));
     }
   }
   return counts;
@@ -512,11 +523,20 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
 }
 
 /**
- * Convert IPC TimelineEvent → inline-thread ThreadMessageData.
+ * Convert IPC TimelineEvent → ThreadMessageData for the thread sheet.
  *
  * The thread panel's counterpart to {@link timelineEventToMessage}, shared by
  * the thread-open path (`actions/threads.ts`) and the live sync tail so a reply
  * arriving into an open thread renders exactly like one loaded with the thread.
+ *
+ * A reply *inside* the thread (`m.in_reply_to` with `is_falling_back` unset —
+ * the backend reports the fallback pointer as no reply at all) gets the same
+ * banner the main timeline draws, looked up in `lookups` (the thread's own
+ * events, then the room buffer), and its body has the rich-reply fallback
+ * stripped. The panel used to do neither: it printed the raw body, so a reply
+ * from a client that still sends the `> <@user> quote` fallback showed the
+ * quoted text while one from a client that doesn't (MSC2781, and Quark itself)
+ * showed nothing — two replies in one thread, drawn two different ways (#131).
  *
  * Carries the MSC2530 caption through like {@link timelineEventToMessage} does
  * (#42), including its formatted form — which is where an inline custom emoji
@@ -526,8 +546,14 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
  * over — the dedicated `caption` field is what the renderer draws beneath the
  * media.
  */
-export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageData {
+export function timelineEventToThreadMessage(
+  e: TimelineEvent,
+  ...lookups: (readonly TimelineEvent[] | undefined)[]
+): ThreadMessageData {
   const ownUserId = AppState.get("ownUserId");
+  const { body, htmlBody } = e.in_reply_to
+    ? stripReplyFallback(e.body, e.formatted_body ?? undefined)
+    : { body: e.body, htmlBody: e.formatted_body ?? undefined };
   // Prefer an already-fetched blob URL so revisiting a thread paints cached
   // media instantly, exactly as the main-timeline mapper does; otherwise pass
   // the raw mxc:// through for _downloadMessageImages to swap.
@@ -538,17 +564,24 @@ export function timelineEventToThreadMessage(e: TimelineEvent): ThreadMessageDat
     senderName: resolveDisplayName(e.sender),
     isOwn: ownUserId ? e.sender === ownUserId : false,
     timestamp: new Date(e.timestamp).toISOString(),
-    body: e.body,
-    htmlBody: e.formatted_body ?? undefined,
+    body,
+    htmlBody,
     type: _messageTypeOf(e),
     mediaUrl,
-    mediaAlt: e.filename ?? e.body,
+    mediaAlt: e.filename ?? body,
     caption: e.caption ?? undefined,
     captionHtml: e.caption_formatted ?? undefined,
     mediaMimeType: e.media_mimetype ?? undefined,
     mediaEncryptionInfo: e.media_encryption_info ?? undefined,
     mediaThumbnailUrl: e.media_thumbnail_url ?? undefined,
     mediaThumbnailEncryptionInfo: e.media_thumbnail_encryption_info ?? undefined,
+    reactions: e.reactions?.map((r) => ({
+      key: r.key,
+      count: r.count,
+      own: r.own,
+      imageUrl: _resolveReactionImage(r.key),
+    })),
+    replyTo: e.in_reply_to ? replyPreviewFor(e.in_reply_to, ...lookups) : undefined,
   };
 }
 
@@ -753,12 +786,19 @@ export function ensureSenderAvatarDownloaded(senderId: string, timeline: import(
 }
 
 /** Public alias used by sync.ts after appending a new message. */
-export function resolveInlineEmojiForTimeline(timeline: import("../../ui/Timeline.js").Timeline): void {
+export function resolveInlineEmojiForTimeline(timeline: InlineEmojiHost): void {
   _downloadInlineEmoji(timeline);
 }
 
+/** A surface that renders inline custom emoji with their mxc:// stashed in
+ *  `data-mxc` until resolved — the timeline, and the thread sheet. */
+export interface InlineEmojiHost {
+  getPendingInlineEmojiUrls(): string[];
+  resolveInlineEmoji(mxcUrl: string, dataUrl: string): void;
+}
+
 /** Resolve mxc:// URLs for inline custom emoji (data-mx-emoticon imgs) in the timeline. */
-export function _downloadInlineEmoji(timeline: import("../../ui/Timeline.js").Timeline): void {
+export function _downloadInlineEmoji(timeline: InlineEmojiHost): void {
   const urls = timeline.getPendingInlineEmojiUrls();
   for (const mxc of urls) {
     if (_emojiImageCache.has(mxc)) {

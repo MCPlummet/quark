@@ -2,7 +2,7 @@
 
 import { modeManager, Mode } from "../vim/mode.js";
 import { keymapManager, eventChord } from "../vim/keybindings.js";
-import { registerDefaultBindings } from "./registry.js";
+import { registerDefaultBindings, liveSequences } from "./registry.js";
 import { currentAvailability } from "./availability.js";
 import { buildMenu } from "./context_menus.js";
 import { initSaveTargets, savableMediaForEvent, saveMedia, saveMenuHandlers, type SavableMedia } from "./media_save.js";
@@ -31,6 +31,8 @@ import {
   startReply,
   startEdit,
   cancelEdit,
+  finishEdit,
+  dismissComposeBanner,
   editMessage,
   redactMessage,
   openThread,
@@ -79,6 +81,7 @@ import { getAppConfig, setAppConfig } from "../ipc/app_config.js";
 import type { KeyContext } from "../vim/keybindings.js";
 import { BUILTIN_EMOJI } from "../data/unicode-emoji.js";
 import { _shortcodeToMxc } from "./actions/context.js";
+import { findLoadedEvent } from "./actions/threads.js";
 import { onMobileChange, isMobile } from "./mobile.js";
 import { effectiveSendOnEnter, shouldShowSendButton } from "./send_behavior.js";
 import { showToast, showError } from "../ui/NotificationToast.js";
@@ -96,6 +99,22 @@ import { applySetOptions } from "./set_options.js";
 /** Which handler owns a keystroke, once modals and Escape have had their say. */
 export type ModeRoute = "insert" | "command" | "vim";
 
+
+/**
+ * Whether an Escape keypress also runs the active panel's `close`.
+ *
+ * Normally it does: Esc both resets to Normal and closes. The thread panel is
+ * the exception. Opening a thread lands in Insert, so if leaving Insert also
+ * closed the thread, a vim user could never reach its rows (`k` from the
+ * composer) — and a reflexive Esc mid-reply would quietly retarget the draft
+ * at the room, the very surprise #131 is about. So inside a thread the Esc that
+ * leaves Insert or Visual only changes mode; the next one, in Normal, peels the
+ * banner a layer (reply, then the thread itself).
+ */
+export function escapeRunsPanelClose(modeBefore: Mode, activePanel: string, vimMode: boolean): boolean {
+  if (!vimMode || activePanel !== "thread") return true;
+  return modeBefore !== Mode.Insert && modeBefore !== Mode.Visual;
+}
 /**
  * Decide which handler a keystroke belongs to.
  *
@@ -121,6 +140,21 @@ export function resolveModeRoute(mode: Mode, vimMode: boolean): ModeRoute {
 
 // ── Action dispatcher ─────────────────────────────────────────────────────────
 
+/**
+ * The message a message action (r, e, y, dd) targets: the active panel's
+ * selection — the thread panel's while a thread is open — else the timeline's.
+ */
+function selectedMessageId(components: AppComponents): string | null {
+  const fromPanel = AppState.selectedMessageId();
+  return fromPanel === undefined ? components.timeline.selectedMessageId : fromPanel;
+}
+
+/** Whether the room timeline's own selection is what the keys act on (the
+ *  thread panel is not open and focused over it). */
+function timelineOwnsKeys(): boolean {
+  return AppState.get("activePanel") !== "thread";
+}
+
 export function dispatchAction(action: string, components: AppComponents): void {
   const { input, commandBar, timeline, imageLightbox, revisionHistoryDialog, contextMenu } = components;
 
@@ -145,7 +179,8 @@ export function dispatchAction(action: string, components: AppComponents): void 
       // through into the compose box (#15) — it behaves like the message below
       // the last one.
       const movedWithinPanel = AppState.navDown();
-      if (!movedWithinPanel && AppState.get("activePanel") === "timeline") {
+      const panel = AppState.get("activePanel");
+      if (!movedWithinPanel && (panel === "timeline" || panel === "thread")) {
         enterComposeFromTimeline(components);
       }
       break;
@@ -177,10 +212,9 @@ export function dispatchAction(action: string, components: AppComponents): void 
 
     // ── Message actions — operate on the selected message ───────────────
     case "reply": {
-      const msgId = timeline.selectedMessageId;
+      const msgId = selectedMessageId(components);
       if (msgId) {
-        const events = AppState.get("currentTimeline");
-        const evt = events.find((e) => e.event_id === msgId);
+        const evt = findLoadedEvent(msgId);
         if (evt) {
           startReply(msgId, evt.sender, evt.body.slice(0, 80));
           modeManager.transition(Mode.Insert);
@@ -191,16 +225,15 @@ export function dispatchAction(action: string, components: AppComponents): void 
     }
 
     case "redact": {
-      const msgId = timeline.selectedMessageId;
+      const msgId = selectedMessageId(components);
       if (msgId) void redactMessage(msgId);
       break;
     }
 
     case "copy-message": {
-      const msgId = timeline.selectedMessageId;
+      const msgId = selectedMessageId(components);
       if (msgId) {
-        const events = AppState.get("currentTimeline");
-        const evt = events.find((e) => e.event_id === msgId);
+        const evt = findLoadedEvent(msgId);
         if (evt) {
           void navigator.clipboard.writeText(evt.body).then(() => {
             showToast("Copied message");
@@ -220,19 +253,23 @@ export function dispatchAction(action: string, components: AppComponents): void 
     }
 
     case "open-thread": {
-      if (timeline.inlineThreadRootId) {
+      // A toggle keyed on the one thread state there is: with a thread open,
+      // `t` closes it — whatever is selected — so the key never strands you.
+      if (AppState.get("threadRootEventId")) {
         closeThread();
       } else {
-        // selectedMessageId returns the thread-reply ID when a thread is
-        // navigated — we need the underlying timeline selection here.
-        const msgId = timeline.timelineSelectedMessageId;
+        const msgId = timeline.selectedMessageId;
         if (msgId) void openThread(msgId);
       }
       break;
     }
 
+    case "close-thread":
+      closeThread();
+      break;
+
     case "react": {
-      const msgId = timeline.selectedMessageId;
+      const msgId = selectedMessageId(components);
       if (msgId) openQuickReactPicker(msgId);
       break;
     }
@@ -252,6 +289,8 @@ export function dispatchAction(action: string, components: AppComponents): void 
     case "enter-text-select": {
       // `o` in timeline: drop a caret into the selected message's body. Images
       // (and other media) have no text to select — fall back to the lightbox.
+      // The room's selection sits dimmed behind an open thread; don't act on it.
+      if (!timelineOwnsKeys()) break;
       const sel = timeline.selectedMessage;
       if (sel?.type === "image" && sel.mediaUrl) {
         imageLightbox.show(sel.mediaUrl, sel.mediaAlt ?? sel.body, savableMediaForMessage(sel.id));
@@ -263,6 +302,9 @@ export function dispatchAction(action: string, components: AppComponents): void 
     }
 
     case "edit": {
+      // Thread messages aren't editable here, and the room's selection sits
+      // dimmed behind the open thread — editing it would close the thread.
+      if (!timelineOwnsKeys()) break;
       const msg = timeline.selectedMessage;
       if (msg?.id && msg.isOwn) {
         // Use body from MessageData (already has _applyEdits applied and
@@ -604,12 +646,16 @@ function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents)
  * when the timeline has no message to move to, so the caller can stay put.
  */
 function exitComposeToTimeline(components: AppComponents): boolean {
-  const { input, timeline } = components;
-  if (!timeline.selectLast()) return false; // nothing to land on — stay in compose
+  const { input, timeline, threadView } = components;
+  // The compose box sits under the thread panel while one is open, so "up"
+  // is the thread's newest reply, not the dimmed room behind it.
+  const inThread = AppState.get("threadRootEventId") !== null;
+  const landed = inThread ? threadView.selectLast() : timeline.selectLast();
+  if (!landed) return false; // nothing to land on — stay in compose
   exitTextSelect();
   composeEditor.reset();
-  input.blur(); // focus has left the compose box; keys now drive the timeline
-  AppState.set("activePanel", "timeline");
+  input.blur(); // focus has left the compose box; keys now drive the panel above
+  AppState.set("activePanel", inThread ? "thread" : "timeline");
   return true;
 }
 
@@ -621,10 +667,11 @@ function exitComposeToTimeline(components: AppComponents): boolean {
  * plain timeline navigation in an empty room is unaffected — `i` still composes.
  */
 function enterComposeFromTimeline(components: AppComponents): void {
-  const { input, timeline } = components;
+  const { input, timeline, threadView } = components;
   if (modeManager.current !== Mode.Normal) return;
   if (input.getValue().length === 0) return;
   timeline.clearSelection();
+  threadView.clearSelection();
   input.focus();
   const field = input.getFieldElement();
   field.setSelectionRange(0, 0); // entered from above — caret at the top
@@ -757,8 +804,7 @@ function submitComposeBox(components: AppComponents): void {
       return;
     case "edit": {
       const editingId = AppState.get("editingEventId")!;
-      AppState.set("editingEventId", null);
-      components.replyPreview.hide();
+      finishEdit();
       input.setValue("");
       void editMessage(editingId, plan.body);
       return;
@@ -964,7 +1010,7 @@ export function setupKeyboard(components: AppComponents): void {
   // Overlays no longer need to be referenced here for the keydown guard — they
   // self-register with modalManager. Only components wired with callbacks below
   // are destructured.
-  const { input, commandBar, shortcodePreview, mentionPreview, timeline,
+  const { input, commandBar, shortcodePreview, mentionPreview, timeline, threadView,
           quickReactPicker, pinnedMessagesDialog, searchDialog, revisionHistoryDialog,
           roomHeader, imageLightbox, commandPalette, contextMenu,
           spaceStrip, roomList } = components;
@@ -1051,6 +1097,30 @@ export function setupKeyboard(components: AppComponents): void {
   document.addEventListener("quark:msg-menu" as keyof DocumentEventMap, (e: Event) => {
     const { eventId, x, y } = (e as CustomEvent<{ eventId: string; x: number; y: number }>).detail;
     if (eventId) timeline.emitContextMenu(eventId, x, y);
+  });
+
+  // The same menu for a message in the thread panel, minus what doesn't apply
+  // there: opening a thread (it is one), editing (not supported in threads) and
+  // the touch text-selection row (it targets the timeline's DOM).
+  threadView.onContextMenu((eventId, x, y) => {
+    const evt = findLoadedEvent(eventId);
+    const ownUserId = AppState.get("ownUserId");
+    const isOwn = !!evt && !!ownUserId && evt.sender === ownUserId;
+    const ctx = currentAvailability({ selectedMessageId: eventId, selectedMessageIsOwn: isOwn });
+    contextMenu.show(x, y, buildMenu("message", ctx, {
+      "reply": () => {
+        if (!evt) return;
+        startReply(eventId, evt.sender, evt.body.slice(0, 80));
+        input.focus();
+      },
+      "react": () => openQuickReactPicker(eventId),
+      "copy-message": () => {
+        void navigator.clipboard.writeText(evt?.body ?? "");
+      },
+      "view-raw-event": () => void openDebugViewerForEvent(eventId),
+      ...saveMenuHandlers(evt),
+      "redact": () => void redactMessage(eventId),
+    }));
   });
 
   // Right-click / long-press context menu for messages
@@ -1332,20 +1402,29 @@ export function setupKeyboard(components: AppComponents): void {
 
   commandBar.onCancel(leaveCommandMode);
 
-  // Reply preview dismiss → cancel reply
-  components.replyPreview.onDismiss(() => {
-    cancelReply();
-    cancelEdit();
-  });
+  // The compose banner's [x] cancels what it shows — and when it shows the
+  // thread, that closes the thread outright, panel and all (#131).
+  components.replyPreview.onDismiss(() => dismissComposeBanner());
 
-  // Thread view close → closeThread (sidebar fallback)
-  components.threadView.onClose(() => {
+  // The thread panel's [x], or a click on the dimmed room behind it.
+  threadView.onClose(() => closeThread());
+  // A reply banner in the thread pointing outside it: leave, then jump.
+  threadView.onJumpOutside((eventId) => {
     closeThread();
+    void jumpToMessage(eventId);
   });
-
-  // Inline thread close callback (the [x] button inside the panel)
-  components.timeline.onInlineThreadClose(() => {
-    closeThread();
+  threadView.onUnresolvedReply((eventId) => resolveReplyPreview(eventId));
+  threadView.onImageClick((src, alt, eventId) => {
+    imageLightbox.show(src, alt, savableMediaForEvent(findLoadedEvent(eventId)));
+  });
+  // The panel names the key that closes it, as the user has it bound.
+  const refreshThreadCloseHint = (): void => {
+    const seq = liveSequences("close")[0] ?? null;
+    threadView.setCloseHint(seq === "Escape" ? "Esc" : seq);
+  };
+  refreshThreadCloseHint();
+  AppState.on("threadRootEventId", (_k, root) => {
+    if (root) refreshThreadCloseHint();
   });
 
   // ── Shortcode preview wiring ────────────────────────────────────────────
@@ -1469,6 +1548,7 @@ export function setupKeyboard(components: AppComponents): void {
         keymapManager.resetSequence();
         return;
       }
+      const modeBefore = modeManager.current;
       if (AppState.get("vimMode")) {
         // If a text-select submode is active in Visual, drop the selection
         // first (back to Normal+text-select). A second Escape exits text-select
@@ -1490,7 +1570,9 @@ export function setupKeyboard(components: AppComponents): void {
         keymapManager.resetSequence();
         commandBar.hide();
       }
-      AppState.close();
+      if (escapeRunsPanelClose(modeBefore, AppState.get("activePanel"), AppState.get("vimMode"))) {
+        AppState.close();
+      }
       return;
     }
 

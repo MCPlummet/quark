@@ -41,6 +41,7 @@ export type Requirement =
   | "space"        // a space is selected
   | "message"      // a timeline message is selected
   | "own-message"  // …and the account sent it (implies "message")
+  | "thread"       // a thread is open
   | "desktop";     // not available in mobile mode
 
 /** Context menus an action can appear in. */
@@ -292,13 +293,25 @@ const ACTION_LITERALS = [
     palette: false,
   },
   {
+    // A toggle: with a thread open, `t` closes it whatever is selected.
     id: "open-thread",
-    description: "Open the selected message's thread",
+    description: "Reply in the selected message's thread (again to close it)",
     requires: ["message"],
     bindings: [{ sequence: "t", context: "global" }],
-    menus: [{ surface: "message", label: "Thread", group: 1, order: 3 }],
+    menus: [{ surface: "message", label: "Reply in thread", group: 1, order: 3 }],
     chrome: ["timeline"],
     palette: false,
+  },
+  {
+    // Esc (`close`) and `t` close it from the keyboard; the panel's [x], its
+    // dimmed backdrop and the compose banner's [x] by pointer and touch. In the
+    // palette as well, so "how do I get out of this thread" has an answer that
+    // needs none of those to be known (#131).
+    id: "close-thread",
+    description: "Close the open thread and return to the room",
+    requires: ["thread"],
+    chrome: ["compose"],
+    palette: true,
   },
   {
     id: "copy-message",
@@ -846,6 +859,9 @@ export interface AvailabilityContext {
   selectedMessageId: string | null;
   selectedMessageIsOwn: boolean;
   isMobile: boolean;
+  /** A thread is open. Optional so contexts built for message menus — where
+   *  it never matters — need not spell it out. */
+  threadOpen?: boolean;
 }
 
 /**
@@ -873,6 +889,9 @@ export function isAvailable(entry: ActionEntry, ctx: AvailabilityContext): boole
         break;
       case "own-message":
         if (!ctx.selectedMessageId || !ctx.selectedMessageIsOwn) return false;
+        break;
+      case "thread":
+        if (!ctx.threadOpen) return false;
         break;
       case "desktop":
         if (ctx.isMobile) return false;

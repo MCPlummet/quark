@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { dispatchAction, resolveModeRoute } from "./keyboard.js";
+import { dispatchAction, resolveModeRoute, escapeRunsPanelClose } from "./keyboard.js";
 import { Mode } from "../vim/mode.js";
 import { confirmAndLeaveRoom } from "./actions.js";
 import type { AppComponents } from "../ui/App.js";
@@ -83,5 +83,24 @@ describe("dispatchAction — chord-bound actions", () => {
       dispatchAction(action, components);
       expect(wrapSelection).toHaveBeenLastCalledWith(marker);
     }
+  });
+});
+
+describe("escapeRunsPanelClose", () => {
+  it("leaving Insert or Visual inside a thread only changes mode", () => {
+    // Opening a thread lands in Insert; if that first Esc closed it, a vim user
+    // could never reach the thread's rows and a reflexive Esc mid-reply would
+    // retarget the draft at the room (#131).
+    expect(escapeRunsPanelClose(Mode.Insert, "thread", true)).toBe(false);
+    expect(escapeRunsPanelClose(Mode.Visual, "thread", true)).toBe(false);
+  });
+
+  it("an Esc in Normal inside a thread still closes", () => {
+    expect(escapeRunsPanelClose(Mode.Normal, "thread", true)).toBe(true);
+  });
+
+  it("leaves every other panel, and vim-off, closing on the first Esc", () => {
+    expect(escapeRunsPanelClose(Mode.Insert, "timeline", true)).toBe(true);
+    expect(escapeRunsPanelClose(Mode.Insert, "thread", false)).toBe(true);
   });
 });

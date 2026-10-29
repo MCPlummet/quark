@@ -7,7 +7,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 
 import { Input } from "./Input.js";
-import { ThreadView } from "./ThreadView.js";
 import { ShortcodePreview } from "./ShortcodePreview.js";
 import { initMobile } from "../app/mobile.js";
 
@@ -79,36 +78,8 @@ describe("compose region (#33)", () => {
   });
 });
 
-describe("thread overlay compose row (#33)", () => {
-  let thread: ThreadView;
-
-  beforeEach(() => {
-    thread = new ThreadView();
-    document.body.appendChild(thread.getElement());
-  });
-
-  afterEach(() => {
-    thread.getElement().remove();
-  });
-
-  function surface(selector: string): Element {
-    return thread.getElement().querySelector(selector)!;
-  }
-
-  // The overlay builds its own compose row instead of using Input, so it needs
-  // its own guard — and nothing in it scrolls, not even the reply field.
-  it("swallows a drag on the row itself", () => {
-    expect(drag(surface(".thread-view__input-bar")).defaultPrevented).toBe(true);
-  });
-
-  it("swallows a drag on the single-line reply field", () => {
-    expect(drag(surface(".thread-view__input")).defaultPrevented).toBe(true);
-  });
-
-  it("leaves the thread timeline alone — that one scrolls", () => {
-    expect(drag(surface(".thread-view__timeline")).defaultPrevented).toBe(false);
-  });
-});
+// The thread sheet no longer has a compose row of its own: an open thread
+// sends through the main composer above, whose guard is covered here.
 
 describe("autocomplete popover (#33)", () => {
   let preview: ShortcodePreview;

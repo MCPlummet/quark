@@ -2239,6 +2239,7 @@ pub async fn send_thread_reply(
     thread_root_event_id: String,
     body: String,
     formatted_body: Option<String>,
+    reply_to_event_id: Option<String>,
 ) -> Result<String, String> {
     let client = get_client(&state)?;
     crate::matrix::threads::send_thread_reply(
@@ -2247,6 +2248,7 @@ pub async fn send_thread_reply(
         &thread_root_event_id,
         &body,
         formatted_body.as_deref(),
+        reply_to_event_id.as_deref(),
     )
     .await
 }
