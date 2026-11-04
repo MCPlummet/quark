@@ -29,7 +29,7 @@ import {
   _emojiImageCache,
   _shortcodeToMxc,
 } from "./context.js";
-import { cancelReply, promoteReplyTarget } from "./messages.js";
+import { consumeReply, promoteReplyTarget } from "./messages.js";
 import { currentAttachmentTarget } from "./media.js";
 
 // ── Emoji picker state ────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@ export function openEmojiPicker(initialTab: "emoji" | "sticker" = "emoji"): void
           sticker.packName ?? null,
           { replyToEventId, threadRootEventId },
         );
-        if (replyToEventId) cancelReply();
+        if (replyToEventId) consumeReply(replyToEventId);
         // Promote optimistic message and suppress the sync echo — only when
         // there was one to promote.
         if (!threadRootEventId) {
@@ -340,7 +340,7 @@ export function openGifPicker(): void {
       });
       // The GIF consumed the armed reply, so disarm it — otherwise the banner
       // stays up and the next typed message replies to the same event.
-      if (replyToEventId) cancelReply();
+      if (replyToEventId) consumeReply(replyToEventId);
       showSuccess("GIF sent");
     } catch (err) {
       showError(

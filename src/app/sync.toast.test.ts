@@ -76,20 +76,19 @@ const ALICE = "@alice:example.com";
 const THREAD = "$root:example.com";
 
 const appendMessage = vi.fn();
-const appendInlineReply = vi.fn();
-const incrementThreadReplyCount = vi.fn();
+const appendReply = vi.fn();
+const countThreadReply = vi.fn();
 
 function makeComponents(): AppComponents {
   return {
     timeline: {
       appendMessage,
       getMessageElementById: () => null,
-      appendInlineReply,
-      incrementThreadReplyCount,
+      countThreadReply,
       updateMessageBody: vi.fn(),
       updateMessageMedia: vi.fn(),
-      updateInlineThreadMedia: vi.fn(),
     },
+    threadView: { appendReply, updateMessageMedia: vi.fn() },
     roomList: { updateRoomBadge: vi.fn(), setRooms: vi.fn() },
     statusBar: { setStatusMessage: vi.fn(), setConnected: vi.fn() },
     typingIndicator: document.createElement("div"),
@@ -132,8 +131,8 @@ describe("sync tells the toast layer whether the message was actually drawn", ()
   beforeEach(async () => {
     handlers.clear();
     appendMessage.mockClear();
-    appendInlineReply.mockClear();
-    incrementThreadReplyCount.mockClear();
+    appendReply.mockClear();
+    countThreadReply.mockClear();
     handleIncomingMessage.mockClear();
     vi.mocked(isInContextView).mockReturnValue(false);
     _ownSentEventIds.clear();
@@ -168,8 +167,8 @@ describe("sync tells the toast layer whether the message was actually drawn", ()
     deliver(makeEvent({ thread_root: THREAD }));
 
     expect(appendMessage).not.toHaveBeenCalled();
-    expect(appendInlineReply).not.toHaveBeenCalled();
-    expect(incrementThreadReplyCount).toHaveBeenCalledWith(THREAD);
+    expect(appendReply).not.toHaveBeenCalled();
+    expect(countThreadReply).toHaveBeenCalledWith(THREAD, expect.any(String));
     expect(reportedAsRendered()).toBe(false);
   });
 
@@ -177,7 +176,7 @@ describe("sync tells the toast layer whether the message was actually drawn", ()
     AppState.set("threadRootEventId", "$some-other-root:example.com");
     deliver(makeEvent({ thread_root: THREAD }));
 
-    expect(appendInlineReply).not.toHaveBeenCalled();
+    expect(appendReply).not.toHaveBeenCalled();
     expect(reportedAsRendered()).toBe(false);
   });
 
@@ -185,7 +184,7 @@ describe("sync tells the toast layer whether the message was actually drawn", ()
     AppState.set("threadRootEventId", THREAD);
     deliver(makeEvent({ thread_root: THREAD }));
 
-    expect(appendInlineReply).toHaveBeenCalledTimes(1);
+    expect(appendReply).toHaveBeenCalledTimes(1);
     expect(reportedAsRendered()).toBe(true);
   });
 

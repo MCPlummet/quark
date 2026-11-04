@@ -16,7 +16,7 @@ const input = {
     fieldValue = text;
   }),
 };
-const replyPreview = { hide: vi.fn(), isThreadMode: () => false };
+const replyPreview = { hide: vi.fn(), show: vi.fn(), showEdit: vi.fn(), showThread: vi.fn() };
 
 beforeEach(() => {
   vi.clearAllMocks();

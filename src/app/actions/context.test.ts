@@ -132,16 +132,60 @@ describe("stripReplyFallback", () => {
 });
 
 describe("_buildThreadRootCounts", () => {
+  const counts = (events: TimelineEvent[]) =>
+    new Map([..._buildThreadRootCounts(events)].map(([root, t]) => [root, t.count]));
+
   it("counts replies per thread root and ignores non-threaded events", () => {
-    const counts = _buildThreadRootCounts([
+    const tallies = _buildThreadRootCounts([
       makeEvent({ event_id: "$1", thread_root: "$root" }),
       makeEvent({ event_id: "$2", thread_root: "$root" }),
       makeEvent({ event_id: "$3", thread_root: "$other" }),
       makeEvent({ event_id: "$4" }),
     ]);
-    expect(counts.get("$root")).toBe(2);
-    expect(counts.get("$other")).toBe(1);
-    expect(counts.has("$4")).toBe(false);
+    expect(tallies.get("$root")).toEqual({ count: 2, replyIds: ["$1", "$2"] });
+    expect(tallies.get("$other")).toEqual({ count: 1, replyIds: ["$3"] });
+    expect(tallies.has("$4")).toBe(false);
+  });
+
+  // The loaded events hold only the replies inside the window; the server's
+  // bundled summary counts every reply up to its latest one. A loaded reply
+  // sent after that is not in it — taking the higher of the two lost it.
+  it("adds the loaded replies sent after the server's count to it", () => {
+    expect(counts([
+      makeEvent({ event_id: "$root", thread_reply_count: 12, thread_latest_reply_ts: 1_000 }),
+      makeEvent({ event_id: "$counted", thread_root: "$root", timestamp: 1_000 }),
+      makeEvent({ event_id: "$live", thread_root: "$root", timestamp: 2_000 }),
+    ]).get("$root")).toBe(13);
+  });
+
+  it("lists the loaded replies a count includes, the server's or not", () => {
+    expect(_buildThreadRootCounts([
+      makeEvent({ event_id: "$root", thread_reply_count: 12, thread_latest_reply_ts: 1_000 }),
+      makeEvent({ event_id: "$counted", thread_root: "$root", timestamp: 1_000 }),
+      makeEvent({ event_id: "$live", thread_root: "$root", timestamp: 2_000 }),
+    ]).get("$root")!.replyIds).toEqual(["$counted", "$live"]);
+  });
+
+  it("counts a reply loaded twice once", () => {
+    expect(counts([
+      makeEvent({ event_id: "$1", thread_root: "$root" }),
+      makeEvent({ event_id: "$1", thread_root: "$root" }),
+    ]).get("$root")).toBe(1);
+  });
+
+  // No timestamp to tell which replies the server's count includes.
+  it("without the count's timestamp, takes the higher of it and the loaded replies", () => {
+    const tallies = counts([
+      makeEvent({ event_id: "$root", thread_reply_count: 40 }),
+      makeEvent({ event_id: "$1", thread_root: "$root" }),
+      makeEvent({ event_id: "$old", thread_reply_count: 3 }),
+      makeEvent({ event_id: "$stale", thread_reply_count: 1 }),
+      makeEvent({ event_id: "$2", thread_root: "$stale" }),
+      makeEvent({ event_id: "$3", thread_root: "$stale" }),
+    ]);
+    expect(tallies.get("$root")).toBe(40);
+    expect(tallies.get("$old")).toBe(3);
+    expect(tallies.get("$stale")).toBe(2);
   });
 });
 

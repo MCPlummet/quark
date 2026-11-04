@@ -125,6 +125,12 @@ describe("isAvailable", () => {
     expect(isAvailable(entry, ctx({ roomId: null }))).toBe(false);
   });
 
+  it("offers close-thread only while a thread is open", () => {
+    const entry = actionById("close-thread")!;
+    expect(isAvailable(entry, ctx())).toBe(false);
+    expect(isAvailable(entry, ctx({ threadOpen: true }))).toBe(true);
+  });
+
   it("requires a selected space", () => {
     const entry = actionById("open-space-settings")!;
     expect(isAvailable(entry, ctx())).toBe(true);

@@ -74,6 +74,8 @@ export {
   cancelReply,
   startEdit,
   cancelEdit,
+  finishEdit,
+  dismissComposeBanner,
   editMessage,
   applyIncomingRedaction,
   redactMessage,

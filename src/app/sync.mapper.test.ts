@@ -73,20 +73,19 @@ const ROOM = "!room:example.com";
 const ME = "@me:example.com";
 
 const appendMessage = vi.fn();
-const appendInlineReply = vi.fn();
-const incrementThreadReplyCount = vi.fn();
+const appendReply = vi.fn();
+const countThreadReply = vi.fn();
 
 function makeComponents(): AppComponents {
   return {
     timeline: {
       appendMessage,
       getMessageElementById: () => null,
-      appendInlineReply,
-      incrementThreadReplyCount,
+      countThreadReply,
       updateMessageBody: vi.fn(),
       updateMessageMedia: vi.fn(),
-      updateInlineThreadMedia: vi.fn(),
     },
+    threadView: { appendReply, updateMessageMedia: vi.fn() },
     roomList: { updateRoomBadge: vi.fn(), setRooms: vi.fn() },
     statusBar: { setStatusMessage: vi.fn(), setConnected: vi.fn() },
     typingIndicator: document.createElement("div"),
@@ -146,8 +145,8 @@ describe("sync live-tail messages use the shared mapper", () => {
   beforeEach(async () => {
     handlers.clear();
     appendMessage.mockClear();
-    appendInlineReply.mockClear();
-    incrementThreadReplyCount.mockClear();
+    appendReply.mockClear();
+    countThreadReply.mockClear();
     _ownSentEventIds.clear();
     AppState.set("currentRoomId", ROOM);
     AppState.set("currentTimeline", []);
@@ -259,8 +258,8 @@ describe("sync live-tail thread replies", () => {
   beforeEach(async () => {
     handlers.clear();
     appendMessage.mockClear();
-    appendInlineReply.mockClear();
-    incrementThreadReplyCount.mockClear();
+    appendReply.mockClear();
+    countThreadReply.mockClear();
     _ownSentEventIds.clear();
     AppState.set("currentRoomId", ROOM);
     AppState.set("currentTimeline", []);
@@ -281,8 +280,8 @@ describe("sync live-tail thread replies", () => {
     }));
 
     expect(appendMessage).not.toHaveBeenCalled();
-    expect(appendInlineReply).toHaveBeenCalledTimes(1);
-    const reply = appendInlineReply.mock.calls[0][0] as ThreadMessageData;
+    expect(appendReply).toHaveBeenCalledTimes(1);
+    const reply = appendReply.mock.calls[0][0] as ThreadMessageData;
     expect(reply).toMatchObject({
       id: "$img:example.com",
       type: "image",
@@ -291,7 +290,7 @@ describe("sync live-tail thread replies", () => {
       mediaEncryptionInfo: '{"key":"k"}',
       isOwn: true,
     });
-    expect(incrementThreadReplyCount).toHaveBeenCalledWith(THREAD_ROOT);
+    expect(countThreadReply).toHaveBeenCalledWith(THREAD_ROOT, "$img:example.com");
   });
 
   it("forwards the thumbnail for a video sent into the open thread", () => {
@@ -306,7 +305,7 @@ describe("sync live-tail thread replies", () => {
       media_thumbnail_url: "mxc://example.com/thumb",
     }));
 
-    const reply = appendInlineReply.mock.calls[0][0] as ThreadMessageData;
+    const reply = appendReply.mock.calls[0][0] as ThreadMessageData;
     expect(reply).toMatchObject({
       type: "video",
       mediaThumbnailUrl: "mxc://example.com/thumb",
@@ -316,7 +315,7 @@ describe("sync live-tail thread replies", () => {
 
   it("only counts a reply belonging to another thread", () => {
     deliver(makeEvent({ event_id: "$other:example.com", thread_root: "$another:example.com" }));
-    expect(appendInlineReply).not.toHaveBeenCalled();
-    expect(incrementThreadReplyCount).toHaveBeenCalledWith("$another:example.com");
+    expect(appendReply).not.toHaveBeenCalled();
+    expect(countThreadReply).toHaveBeenCalledWith("$another:example.com", "$other:example.com");
   });
 });

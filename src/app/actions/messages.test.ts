@@ -3,6 +3,7 @@ import {
   startReply,
   promoteReplyTarget,
   cancelReply,
+  consumeReply,
   startEdit,
   cancelEdit,
   applyIncomingRedaction,
@@ -40,18 +41,18 @@ const replyPreview = {
   show: vi.fn(),
   hide: vi.fn(),
   showEdit: vi.fn(),
-  isThreadMode: vi.fn(() => false),
+  showThread: vi.fn(),
 };
 const input = { setValue: vi.fn() };
-const timeline = { removeMessage: vi.fn(), updateMessageBody: vi.fn() };
+const timeline = { removeMessage: vi.fn(), updateMessageBody: vi.fn(), uncountThreadReply: vi.fn() };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  replyPreview.isThreadMode.mockReturnValue(false);
   setComponents({ replyPreview, input, timeline } as unknown as AppComponents);
   AppState.patch({
     replyToEventId: null,
     editingEventId: null,
+    threadRootEventId: null,
     currentTimeline: [],
   });
 });
@@ -74,27 +75,47 @@ describe("startReply / cancelReply", () => {
   it("startReply records the target and shows the reply preview", () => {
     startReply("$e1", "Alice", "hello there");
     expect(AppState.get("replyToEventId")).toBe("$e1");
-    expect(replyPreview.show).toHaveBeenCalledExactlyOnceWith({
-      eventId: "$e1",
-      senderName: "Alice",
-      snippet: "hello there",
-    });
+    expect(replyPreview.show).toHaveBeenCalledExactlyOnceWith(
+      { eventId: "$e1", senderName: "Alice", snippet: "hello there" },
+      { inThread: false },
+    );
   });
 
-  it("cancelReply clears the target and hides the preview when NOT in thread mode", () => {
+  it("cancelReply clears the target and hides the preview when no thread is open", () => {
     AppState.set("replyToEventId", "$e1");
-    replyPreview.isThreadMode.mockReturnValue(false);
     cancelReply();
     expect(AppState.get("replyToEventId")).toBeNull();
     expect(replyPreview.hide).toHaveBeenCalledOnce();
   });
 
-  it("cancelReply keeps the preview visible in thread mode (thread has its own banner)", () => {
-    AppState.set("replyToEventId", "$e1");
-    replyPreview.isThreadMode.mockReturnValue(true);
+  // Derived from state, not from a flag on the banner: with a thread open the
+  // banner falls back to the thread's, because the thread is still where the
+  // next message goes.
+  it("cancelReply falls back to the thread banner while a thread is open", () => {
+    AppState.patch({ threadRootEventId: "$root", replyToEventId: "$e1" });
     cancelReply();
     expect(AppState.get("replyToEventId")).toBeNull();
     expect(replyPreview.hide).not.toHaveBeenCalled();
+    expect(replyPreview.showThread).toHaveBeenCalledOnce();
+  });
+
+  // Stickers, GIFs and attachments let go of the reply when their send
+  // returns — seconds later behind the send queue. Cancelling whatever was
+  // armed by then wiped a reply the user had set up meanwhile.
+  it("consumeReply cancels the reply a send used, and only that one", () => {
+    startReply("$a", "Alice", "first");
+    startReply("$b", "Bob", "set up while $a's send was out");
+    consumeReply("$a");
+    expect(AppState.get("replyToEventId")).toBe("$b");
+    consumeReply("$b");
+    expect(AppState.get("replyToEventId")).toBeNull();
+  });
+
+  it("startReply cancels an edit in progress rather than leaving it armed", () => {
+    startEdit("$mine", "draft");
+    startReply("$e1", "Alice", "hello");
+    expect(AppState.get("editingEventId")).toBeNull();
+    expect(AppState.get("replyToEventId")).toBe("$e1");
   });
 });
 
@@ -134,5 +155,23 @@ describe("applyIncomingRedaction", () => {
     AppState.set("currentTimeline", [makeEvent("$a")]);
     applyIncomingRedaction("$missing");
     expect(AppState.get("currentTimeline").map((e) => e.event_id)).toEqual(["$a"]);
+  });
+
+  // The room's count on a root used to stay put when one of its replies was
+  // redacted, while the open thread's dropped with the row.
+  it("takes a thread reply off its root's count", () => {
+    const root = { ...makeEvent("$root"), thread_reply_count: 5, thread_latest_reply_ts: 2_000 };
+    AppState.set("currentTimeline", [root, { ...makeEvent("$r"), thread_root: "$root", timestamp: 1_000 }]);
+    applyIncomingRedaction("$r");
+    expect(timeline.uncountThreadReply).toHaveBeenCalledWith("$r");
+    // …and out of the bundled count it was part of, so a re-render agrees.
+    expect(AppState.get("currentTimeline")).toEqual([{ ...root, thread_reply_count: 4 }]);
+  });
+
+  it("leaves the bundled count alone for a reply sent after it", () => {
+    const root = { ...makeEvent("$root"), thread_reply_count: 5, thread_latest_reply_ts: 2_000 };
+    AppState.set("currentTimeline", [root, { ...makeEvent("$r"), thread_root: "$root", timestamp: 3_000 }]);
+    applyIncomingRedaction("$r");
+    expect(AppState.get("currentTimeline")).toEqual([root]);
   });
 });
