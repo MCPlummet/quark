@@ -27,6 +27,7 @@ vi.mock("../../ipc/index.js", () => ({
   getThumbnail: (...a: unknown[]) => getThumbnail(...a),
   downloadMedia: vi.fn(),
   getPresenceStatus: vi.fn(),
+  getEmojiPacks: vi.fn(async () => []),
 }));
 vi.mock("../../ui/NotificationToast.js", () => ({ showError: vi.fn(), showSuccess: vi.fn(), showToast: vi.fn() }));
 vi.mock("../mobile.js", async (importActual) => ({
@@ -39,6 +40,7 @@ import { openThread, closeThread, isInOpenThread, THREAD_FOCUS_CLASS } from "./t
 import { sendMessage, startReply, startEdit, dismissComposeBanner } from "./messages.js";
 import { setComponents, _ownSentEventIds } from "./context.js";
 import { renderLiveEvent } from "./live.js";
+import { openQuickReactPicker } from "./reactions.js";
 import { AppState } from "../state.js";
 import { Timeline } from "../../ui/Timeline.js";
 import { ThreadView } from "../../ui/ThreadView.js";
@@ -78,6 +80,7 @@ let threadView: ThreadView;
 let replyPreview: ReplyPreview;
 let input: Input;
 let mainLayout: HTMLElement;
+const quickReactPicker = { show: vi.fn(), isVisible: () => false, setCustomEmoji: vi.fn() };
 
 /** The pieces App and keyboard.ts wire together, wired the same way. */
 function mount(): void {
@@ -91,7 +94,7 @@ function mount(): void {
   document.body.appendChild(mainLayout);
   replyPreview.onDismiss(() => dismissComposeBanner());
   threadView.onClose(() => closeThread());
-  setComponents({ timeline, threadView, replyPreview, input, mainLayout } as unknown as AppComponents);
+  setComponents({ timeline, threadView, replyPreview, input, mainLayout, quickReactPicker } as unknown as AppComponents);
 }
 
 const sheetOpen = () => threadView.getElement().style.display !== "none";
@@ -567,4 +570,16 @@ describe("a thread reply that fails to send", () => {
     await sent;
     expect(input.getValue()).toBe("something new");
   });
+});
+
+// The root is drawn twice while its thread is open: its room row, hidden behind
+// the panel, and the panel's header. Reacting to it anchored the picker to the
+// hidden row, so it opened away from both.
+it("anchors the reaction picker to the thread's row of the root, not the room's", async () => {
+  timeline.setMessages([{ id: "$root", senderName: "Alice", timestamp: "2024-01-01T12:00:00Z", body: "the root" }]);
+  await openThread("$root");
+  openQuickReactPicker("$root");
+  const anchor = quickReactPicker.show.mock.calls[0][1] as HTMLElement;
+  expect(anchor).toBe(threadView.getMessageEl("$root"));
+  expect(threadView.getElement().contains(anchor)).toBe(true);
 });

@@ -114,8 +114,13 @@ export function applyIncomingReaction(
  */
 export function openQuickReactPicker(eventId: string): void {
   const { timeline, threadView, quickReactPicker } = getComponents();
-  // A row of the open thread panel is not in the timeline's list.
-  const anchor = timeline.getMessageElementById(eventId) ?? threadView?.getMessageEl(eventId) ?? null;
+  // A message of the open thread is anchored to its row in the panel, which
+  // covers the room. The root is in both: anchored to the room's row, hidden
+  // behind the panel's header, the picker opened away from either.
+  const anchor =
+    (threadView?.hasMessage(eventId) ? threadView.getMessageEl(eventId) : null) ??
+    timeline.getMessageElementById(eventId) ??
+    null;
   quickReactPicker.show(eventId, anchor);
 
   // Load custom emoji for current room and inject into the picker.
