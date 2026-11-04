@@ -47,6 +47,13 @@ pub struct TimelineEvent {
     /// frontend used to count only the replies inside its loaded window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_reply_count: Option<u64>,
+    /// With `thread_reply_count`: when the newest reply that count includes
+    /// was sent (the summary's `latest_event`). A loaded reply sent later is
+    /// not in the count — without this the frontend could only take the higher
+    /// of the count and the replies it had loaded, and a reply counted live
+    /// dropped back out of the count on the next re-render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_latest_reply_ts: Option<u64>,
     /// URL for media messages (images, videos, files, stickers).
     pub media_url: Option<String>,
     pub media_mimetype: Option<String>,
@@ -379,6 +386,7 @@ fn index_msg_to_event(m: crate::search_index::IndexedMessage) -> TimelineEvent {
         in_reply_to: None,
         thread_root: None,
         thread_reply_count: None,
+        thread_latest_reply_ts: None,
         media_url: None,
         media_mimetype: None,
         media_width: None,
@@ -791,6 +799,7 @@ pub fn convert_sync_sticker_event(ev: matrix_sdk::ruma::events::OriginalSyncMess
 fn convert_sync_sticker(ev: matrix_sdk::ruma::events::OriginalSyncMessageLikeEvent<StickerEventContent>) -> TimelineEvent {
     use matrix_sdk::ruma::events::sticker::StickerMediaSource;
     let timestamp: u64 = ev.origin_server_ts.get().into();
+    let (thread_count, thread_latest) = bundled_thread(&ev.unsigned);
     let sender = ev.sender.to_string();
     let event_id = ev.event_id.to_string();
     let (url, enc) = match &ev.content.source {
@@ -817,7 +826,8 @@ fn convert_sync_sticker(ev: matrix_sdk::ruma::events::OriginalSyncMessageLikeEve
         relates_to_event_id,
         in_reply_to,
         thread_root,
-        thread_reply_count: bundled_thread_count(&ev.unsigned),
+        thread_reply_count: thread_count,
+        thread_latest_reply_ts: thread_latest,
         media_url: url,
         media_mimetype: mime,
         media_width: w,
@@ -838,6 +848,7 @@ fn convert_sync_encrypted(
     >,
 ) -> TimelineEvent {
     let timestamp: u64 = ev.origin_server_ts.get().into();
+    let (thread_count, thread_latest) = bundled_thread(&ev.unsigned);
     let (in_reply_to, thread_root) = extract_encrypted_relations(ev.content.relates_to.as_ref());
     TimelineEvent {
         event_id: ev.event_id.to_string(),
@@ -850,7 +861,8 @@ fn convert_sync_encrypted(
         relates_to_event_id: None,
         in_reply_to,
         thread_root,
-        thread_reply_count: bundled_thread_count(&ev.unsigned),
+        thread_reply_count: thread_count,
+        thread_latest_reply_ts: thread_latest,
         media_url: None,
         media_mimetype: None,
         media_width: None,
@@ -866,14 +878,23 @@ fn convert_sync_encrypted(
 }
 
 /// The reply count of the thread an event roots, from the server's bundled
-/// summary (`unsigned` → `m.relations` → `m.thread`). Decryption keeps the
-/// envelope's `unsigned`, so an encrypted root carries it too.
-fn bundled_thread_count<C: MessageLikeEventContent>(unsigned: &MessageLikeUnsigned<C>) -> Option<u64> {
-    unsigned.relations.thread.as_ref().map(|t| t.count.into())
+/// summary (`unsigned` → `m.relations` → `m.thread`), and when its latest reply
+/// was sent. Decryption keeps the envelope's `unsigned`, so an encrypted root
+/// carries them too; an encrypted latest reply still has a cleartext timestamp.
+fn bundled_thread<C: MessageLikeEventContent>(unsigned: &MessageLikeUnsigned<C>) -> (Option<u64>, Option<u64>) {
+    let Some(thread) = unsigned.relations.thread.as_ref() else { return (None, None) };
+    let latest = thread
+        .latest_event
+        .get_field::<matrix_sdk::ruma::MilliSecondsSinceUnixEpoch>("origin_server_ts")
+        .ok()
+        .flatten()
+        .map(|ts| ts.get().into());
+    (Some(thread.count.into()), latest)
 }
 
 pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> TimelineEvent {
     let timestamp = ev.origin_server_ts.get().into();
+    let (thread_count, thread_latest) = bundled_thread(&ev.unsigned);
     let sender = ev.sender.to_string();
     let event_id = ev.event_id.to_string();
 
@@ -906,7 +927,8 @@ pub(crate) fn convert_sync_room_message(ev: OriginalSyncRoomMessageEvent) -> Tim
         relates_to_event_id,
         in_reply_to,
         thread_root,
-        thread_reply_count: bundled_thread_count(&ev.unsigned),
+        thread_reply_count: thread_count,
+        thread_latest_reply_ts: thread_latest,
         media_url: content.media_url,
         media_mimetype: content.media_mimetype,
         media_width: content.media_width,
@@ -1820,6 +1842,7 @@ mod tests {
             in_reply_to: None,
             thread_root: None,
             thread_reply_count: None,
+            thread_latest_reply_ts: None,
             media_url: None,
             media_mimetype: None,
             media_width: None,

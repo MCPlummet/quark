@@ -356,7 +356,8 @@ mod tests {
     }
 
     // The room's count on a root is the server's bundled summary — encrypted
-    // roots included, since decryption keeps the envelope's `unsigned`.
+    // roots included, since decryption keeps the envelope's `unsigned` — with
+    // the time of the latest reply it includes.
     #[test]
     fn a_root_carries_the_servers_reply_count() {
         let unsigned = serde_json::json!({ "m.relations": { "m.thread": {
@@ -394,10 +395,15 @@ mod tests {
             "unsigned": unsigned,
         }));
         for root in [plain, encrypted] {
-            assert_eq!(convert_raw_message_like(&root).unwrap().thread_reply_count, Some(42));
+            let te = convert_raw_message_like(&root).unwrap();
+            assert_eq!(te.thread_reply_count, Some(42));
+            // When the count was taken: replies sent after it are not in it.
+            assert_eq!(te.thread_latest_reply_ts, Some(5));
         }
         let no_thread = text("$x:example.com", "no replies", 1, None);
-        assert_eq!(convert_raw_message_like(&no_thread).unwrap().thread_reply_count, None);
+        let te = convert_raw_message_like(&no_thread).unwrap();
+        assert_eq!(te.thread_reply_count, None);
+        assert_eq!(te.thread_latest_reply_ts, None);
     }
 
     // A sticker sent into a thread is an `m.sticker`, not an `m.room.message`,

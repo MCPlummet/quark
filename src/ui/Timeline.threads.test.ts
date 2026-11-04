@@ -59,6 +59,35 @@ describe("Timeline thread reply counts", () => {
     expect(indicator()).toBe("⌥ 3 replies");
   });
 
+  // A re-render's counts include the replies already in the room's buffer.
+  // Clearing the "already counted" record with it let one of those, reported
+  // again afterwards (our send returning after its echo), count a second time.
+  it("counts none of the replies a re-rendered count already includes", () => {
+    timeline.setMessages([{ ...ROOT, isThreadRoot: true, threadReplyCount: 12, threadReplyIds: ["$echoed"] }]);
+    timeline.countThreadReply("$root", "$echoed");
+    expect(indicator()).toBe("⌥ 12 replies");
+  });
+
+  it("keeps a reply counted while its thread was loading", () => {
+    timeline.setMessages([{ ...ROOT, isThreadRoot: true, threadReplyCount: 2 }]);
+    timeline.countThreadReply("$root", "$live");
+    timeline.setThreadReplies("$root", ["$a", "$b"]);
+    expect(indicator()).toBe("⌥ 3 replies");
+  });
+
+  it("takes a redacted reply back off the count, once", () => {
+    timeline.setMessages([{ ...ROOT, isThreadRoot: true, threadReplyCount: 2, threadReplyIds: ["$a", "$b"] }]);
+    timeline.uncountThreadReply("$a");
+    timeline.uncountThreadReply("$a");
+    expect(indicator()).toBe("⌥ 1 reply");
+  });
+
+  it("leaves the count alone for a redacted reply it does not include", () => {
+    timeline.setMessages([{ ...ROOT, isThreadRoot: true, threadReplyCount: 2 }]);
+    timeline.uncountThreadReply("$unknown");
+    expect(indicator()).toBe("⌥ 2 replies");
+  });
+
   it("does not make a thread root of a message whose thread has no replies", () => {
     timeline.setMessages([ROOT]);
     timeline.setThreadReplies("$root", []);

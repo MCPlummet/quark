@@ -775,12 +775,18 @@ unfolds in the gap, with everything else greyed back:
   body, so a reply from a client that still sends the `> <@user>` fallback and
   one that doesn't (MSC2781) look the same; a plain thread message's
   `is_falling_back` pointer is not a reply and gets no banner.
-- **Counting.** A root's `⌥ n replies` starts as the higher of the replies
-  loaded with the room and the server's bundled `m.thread` count on the root
-  (`thread_reply_count`), then goes up once per reply *by event ID*: a reply
-  reported twice — our send returning, then its sync echo — counts once, and a
-  send that fails never counts. It is kept on the root's `MessageData`, so a
-  windowed re-render does not put it back. Opening the thread sets it to the
+- **Counting.** A root's `⌥ n replies` starts as the server's bundled
+  `m.thread` count on the root (`thread_reply_count`) plus the loaded replies
+  sent after the latest reply that count includes (`thread_latest_reply_ts`)
+  — or, from a server that gives no such timestamp, the higher of the two.
+  Taking the higher of them always lost a reply counted live on the next
+  re-render. The count then goes up once per reply *by event ID*: a reply
+  reported twice — our send returning, then its sync echo — counts once, a
+  reply the count was built with is not counted again, and a send that fails
+  never counts. A redacted reply comes off it again, and out of the root's
+  bundled count when that included it. It is kept on the root's `MessageData`
+  (with the reply IDs it includes), so a windowed re-render does not put it
+  back. Opening the thread sets it to the
   replies the thread loaded, so the room and the panel agree. The panel's
   header counts replies that have landed; our own still being sent are drawn
   but listed apart ("12 replies · 3 sending"). Those are held outside the

@@ -10,6 +10,7 @@ import {
 } from "../../ipc/index.js";
 
 import type { MessageData, ReplyPreviewData } from "../../ui/Timeline.js";
+import type { TimelineEvent } from "../../ipc/types.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
@@ -23,7 +24,7 @@ import {
   _downloadInlineEmoji,
   resolveDisplayName,
 } from "./context.js";
-import { sendThreadReply, closeThread, isInOpenThread, applyEditToOpenThread } from "./threads.js";
+import { sendThreadReply, closeThread, isInOpenThread, applyEditToOpenThread, openThreadEvents } from "./threads.js";
 import {
   armReply,
   disarmReply,
@@ -440,13 +441,37 @@ export async function editMessage(eventId: string, newBody: string): Promise<voi
  * Removes the message from the DOM and state cache.
  */
 export function applyIncomingRedaction(eventId: string): void {
+  forgetRedacted(eventId);
+}
+
+/**
+ * Take a redacted message out of everything that shows it: the room, the
+ * thread panel, the state buffer — and, for a thread reply, its root's count.
+ * The panel's count follows its rows; the room's used to stay where it was.
+ */
+function forgetRedacted(eventId: string): void {
   const { timeline, threadView } = getComponents();
+  const events = AppState.get("currentTimeline");
+  const gone = events.find((e) => e.event_id === eventId) ?? openThreadEvents().find((e) => e.event_id === eventId);
   timeline.removeMessage(eventId);
   threadView?.removeMessage(eventId);
+  timeline.uncountThreadReply(eventId);
   AppState.set(
     "currentTimeline",
-    AppState.get("currentTimeline").filter((e) => e.event_id !== eventId)
+    events.filter((e) => e.event_id !== eventId).map((e) => withoutBundledReply(e, gone)),
   );
+}
+
+/**
+ * `root` with `reply` taken out of its bundled reply count, if that count
+ * includes it — else a re-render would count the redacted reply again.
+ */
+function withoutBundledReply(root: TimelineEvent, reply: TimelineEvent | undefined): TimelineEvent {
+  if (!reply?.thread_root || root.event_id !== reply.thread_root) return root;
+  const count = root.thread_reply_count;
+  const since = root.thread_latest_reply_ts;
+  if (!count || since == null || reply.timestamp > since) return root;
+  return { ...root, thread_reply_count: count - 1 };
 }
 
 /**
@@ -459,13 +484,7 @@ export async function redactMessage(eventId: string): Promise<void> {
   try {
     await ipcRedactMessage(roomId, eventId);
     // Remove immediately from DOM and state cache
-    const { timeline, threadView } = getComponents();
-    timeline.removeMessage(eventId);
-    threadView?.removeMessage(eventId);
-    AppState.set(
-      "currentTimeline",
-      AppState.get("currentTimeline").filter((e) => e.event_id !== eventId)
-    );
+    forgetRedacted(eventId);
     showSuccess("Message deleted");
   } catch (err) {
     showError(`Failed to delete: ${err instanceof Error ? err.message : String(err)}`);

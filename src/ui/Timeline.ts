@@ -254,6 +254,9 @@ export interface MessageData {
   isThreadRoot?: boolean;
   /** Number of thread replies (shown in the indicator) */
   threadReplyCount?: number;
+  /** The loaded replies `threadReplyCount` already includes, none of which is
+   *  counted again when reported live (see `countThreadReply`). */
+  threadReplyIds?: readonly string[];
   /** If true, this message has been edited at least once — show the (edited) marker. */
   wasEdited?: boolean;
   /** The original body before any edits were applied. */
@@ -922,8 +925,9 @@ export class Timeline {
    *  Extending the rendered window from the buffer is cheap; reaching the
    *  buffer edges fires server-fetch callbacks. */
   private _messages: MessageData[] = [];
-  /** Thread replies counted onto their roots since the last `setMessages`. */
-  private _countedThreadReplies = new Set<string>();
+  /** Thread replies the roots' counts include, reply ID → root ID: those the
+   *  counts were built with (`threadReplyIds`) and those counted since. */
+  private _countedThreadReplies = new Map<string, string>();
   /** Inclusive start of the rendered window into `_messages`. */
   private _renderStart = 0;
   /** Exclusive end of the rendered window into `_messages`. */
@@ -1592,6 +1596,7 @@ export class Timeline {
     if (msgs.length === 0) return;
 
     this._messages = [...msgs, ...this._messages];
+    this._noteCountedReplies(msgs);
     this._scheduleReceiptRender();
     this._announceUnresolvedReplies(msgs);
     // Shift selection and render-window indices forward so they still point at
@@ -1643,6 +1648,7 @@ export class Timeline {
   appendMessages(msgs: MessageData[]): void {
     if (msgs.length === 0) return;
     this._messages = [...this._messages, ...msgs];
+    this._noteCountedReplies(msgs);
     this._scheduleReceiptRender();
     this._announceUnresolvedReplies(msgs);
     this._renderEnd = this._messages.length;
@@ -1701,8 +1707,11 @@ export class Timeline {
     const savedScrollTop = this._el.scrollTop;
 
     this._messages = [...msgs];
-    // The new list's counts were built from its own events.
+    // The new list's counts were built from its own events — those replies
+    // included. Clearing alone let one of them reported again (our send
+    // returning after its echo) count a second time.
     this._countedThreadReplies.clear();
+    this._noteCountedReplies(msgs);
     this._announceUnresolvedReplies(msgs);
     // Render only the most recent window. Older messages remain in the buffer
     // and become visible when the user scrolls up.
@@ -2684,20 +2693,40 @@ export class Timeline {
     if (this._countedThreadReplies.has(replyId)) return;
     const idx = this._messages.findIndex((m) => m.id === rootId);
     if (idx < 0) return;
-    this._countedThreadReplies.add(replyId);
+    this._countedThreadReplies.set(replyId, rootId);
     this._setThreadReplyCount(idx, (this._messages[idx].threadReplyCount ?? 0) + 1);
   }
 
   /**
-   * The thread rooted at `rootId` has exactly these replies, as just loaded
-   * with it — the whole thread, where the room only ever had the replies
-   * inside its loaded window. None of them is counted again.
+   * Take a counted reply back off its root's count — it was redacted. A reply
+   * the count does not include (or no longer can find) is left alone.
+   */
+  uncountThreadReply(replyId: string): void {
+    const rootId = this._countedThreadReplies.get(replyId);
+    if (rootId === undefined) return;
+    this._countedThreadReplies.delete(replyId);
+    const idx = this._messages.findIndex((m) => m.id === rootId);
+    if (idx < 0) return;
+    this._setThreadReplyCount(idx, Math.max(0, (this._messages[idx].threadReplyCount ?? 0) - 1));
+  }
+
+  /**
+   * The thread rooted at `rootId` has these replies, as just loaded with it —
+   * the whole thread, where the room only ever had the replies inside its
+   * loaded window — plus any counted while it loaded. None of them is counted
+   * again.
    */
   setThreadReplies(rootId: string, replyIds: readonly string[]): void {
-    for (const id of replyIds) this._countedThreadReplies.add(id);
+    const all = new Set(replyIds);
+    for (const [reply, root] of this._countedThreadReplies) if (root === rootId) all.add(reply);
+    for (const id of all) this._countedThreadReplies.set(id, rootId);
     const idx = this._messages.findIndex((m) => m.id === rootId);
-    if (idx < 0 || (replyIds.length === 0 && !this._messages[idx].isThreadRoot)) return;
-    this._setThreadReplyCount(idx, replyIds.length);
+    if (idx < 0 || (all.size === 0 && !this._messages[idx].isThreadRoot)) return;
+    this._setThreadReplyCount(idx, all.size);
+  }
+
+  private _noteCountedReplies(msgs: readonly MessageData[]): void {
+    for (const m of msgs) for (const id of m.threadReplyIds ?? []) this._countedThreadReplies.set(id, m.id);
   }
 
   private _setThreadReplyCount(idx: number, count: number): void {

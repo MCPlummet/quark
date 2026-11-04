@@ -146,6 +146,9 @@ export interface TimelineEvent {
    *  summary, as of when the event was fetched. Absent when the server sent
    *  none — an event that came in by sync before it had replies, say. */
   thread_reply_count?: number | null;
+  /** With `thread_reply_count`: when the newest reply it includes was sent. A
+   *  loaded reply sent after that is not in the count. */
+  thread_latest_reply_ts?: number | null;
   media_url: string | null;
   media_mimetype: string | null;
   media_width: number | null;

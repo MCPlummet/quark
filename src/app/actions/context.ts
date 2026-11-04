@@ -344,26 +344,42 @@ export function _applyEdits(events: TimelineEvent[]): TimelineEvent[] {
     });
 }
 
+/** A thread root's reply count, and the loaded replies that count includes. */
+export interface ThreadTally {
+  count: number;
+  replyIds: string[];
+}
+
 /**
  * Build a map of thread root event IDs → reply count from the loaded events.
  *
  * Counting the loaded replies alone undercounts any thread that reaches past
- * them; the server's bundled count on the root covers those, but is as old as
- * the fetch that brought it. Each is a floor, so the higher wins.
+ * them. The server's bundled count on the root covers those, as of the latest
+ * reply it includes (`thread_latest_reply_ts`); loaded replies sent after that
+ * are added to it. Taking the higher of the two instead, as this used to, lost
+ * a reply counted live the next time the room was re-rendered — the bundled
+ * count, older than the reply, won. Without a timestamp the higher still wins.
  */
-export function _buildThreadRootCounts(events: TimelineEvent[]): Map<string, number> {
-  const counts = new Map<string, number>();
+export function _buildThreadRootCounts(events: readonly TimelineEvent[]): Map<string, ThreadTally> {
+  const replies = new Map<string, Map<string, TimelineEvent>>();
   for (const e of events) {
-    if (e.thread_root) {
-      counts.set(e.thread_root, (counts.get(e.thread_root) ?? 0) + 1);
-    }
+    if (!e.thread_root) continue;
+    let byId = replies.get(e.thread_root);
+    if (!byId) replies.set(e.thread_root, (byId = new Map()));
+    byId.set(e.event_id, e);
   }
+  const tallies = new Map<string, ThreadTally>();
+  for (const [root, byId] of replies) tallies.set(root, { count: byId.size, replyIds: [...byId.keys()] });
   for (const e of events) {
-    if (e.thread_reply_count) {
-      counts.set(e.event_id, Math.max(counts.get(e.event_id) ?? 0, e.thread_reply_count));
-    }
+    if (!e.thread_reply_count) continue;
+    const loaded = [...(replies.get(e.event_id)?.values() ?? [])];
+    const since = e.thread_latest_reply_ts;
+    const count = since == null
+      ? Math.max(loaded.length, e.thread_reply_count)
+      : e.thread_reply_count + loaded.filter((r) => r.timestamp > since).length;
+    tallies.set(e.event_id, { count, replyIds: loaded.map((r) => r.event_id) });
   }
-  return counts;
+  return tallies;
 }
 
 /**
@@ -452,7 +468,7 @@ function _messageTypeOf(e: TimelineEvent): "text" | "image" | "sticker" | "video
  * sync handler is what made captions (#41) appear only after a room reload, and
  * would have done the same for every field added since.
  */
-export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEvent[], threadRootCounts?: Map<string, number>): MessageData {
+export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEvent[], threadRootCounts?: Map<string, ThreadTally>): MessageData {
   const msgType = _messageTypeOf(e);
 
   // Looked up in the page being mapped *and* the whole loaded buffer: a page
@@ -516,7 +532,8 @@ export function timelineEventToMessage(e: TimelineEvent, allEvents?: TimelineEve
     })),
     replyTo,
     isThreadRoot: threadRootCounts ? threadRootCounts.has(e.event_id) : undefined,
-    threadReplyCount: threadRootCounts?.get(e.event_id),
+    threadReplyCount: threadRootCounts?.get(e.event_id)?.count,
+    threadReplyIds: threadRootCounts?.get(e.event_id)?.replyIds,
     wasEdited: e.was_edited,
     originalBody: e.original_body,
   };

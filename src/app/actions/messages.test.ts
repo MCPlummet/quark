@@ -43,7 +43,7 @@ const replyPreview = {
   showThread: vi.fn(),
 };
 const input = { setValue: vi.fn() };
-const timeline = { removeMessage: vi.fn(), updateMessageBody: vi.fn() };
+const timeline = { removeMessage: vi.fn(), updateMessageBody: vi.fn(), uncountThreadReply: vi.fn() };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -142,5 +142,23 @@ describe("applyIncomingRedaction", () => {
     AppState.set("currentTimeline", [makeEvent("$a")]);
     applyIncomingRedaction("$missing");
     expect(AppState.get("currentTimeline").map((e) => e.event_id)).toEqual(["$a"]);
+  });
+
+  // The room's count on a root used to stay put when one of its replies was
+  // redacted, while the open thread's dropped with the row.
+  it("takes a thread reply off its root's count", () => {
+    const root = { ...makeEvent("$root"), thread_reply_count: 5, thread_latest_reply_ts: 2_000 };
+    AppState.set("currentTimeline", [root, { ...makeEvent("$r"), thread_root: "$root", timestamp: 1_000 }]);
+    applyIncomingRedaction("$r");
+    expect(timeline.uncountThreadReply).toHaveBeenCalledWith("$r");
+    // …and out of the bundled count it was part of, so a re-render agrees.
+    expect(AppState.get("currentTimeline")).toEqual([{ ...root, thread_reply_count: 4 }]);
+  });
+
+  it("leaves the bundled count alone for a reply sent after it", () => {
+    const root = { ...makeEvent("$root"), thread_reply_count: 5, thread_latest_reply_ts: 2_000 };
+    AppState.set("currentTimeline", [root, { ...makeEvent("$r"), thread_root: "$root", timestamp: 3_000 }]);
+    applyIncomingRedaction("$r");
+    expect(AppState.get("currentTimeline")).toEqual([root]);
   });
 });
