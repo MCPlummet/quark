@@ -1090,13 +1090,24 @@ export function setupKeyboard(components: AppComponents): void {
     if (eventId) timeline.emitContextMenu(eventId, x, y);
   });
 
-  // The same menu for a message in the thread panel, minus what doesn't apply
-  // there: opening a thread (it is one), editing (not supported in threads) and
-  // the touch text-selection row (it targets the timeline's DOM).
-  threadView.onContextMenu((eventId, x, y) => {
+  /**
+   * The message menu, for a message on either surface. Both offer the same
+   * core — reply, react, copy, view source, save, delete — and only the
+   * entries in `surfaceOnly` differ; buildMenu leaves out any entry without a
+   * handler. Two copies of the core used to sit side by side, free to drift.
+   */
+  const showMessageMenu = (
+    eventId: string,
+    x: number,
+    y: number,
+    surfaceOnly: { "open-thread"?: () => void; "edit"?: () => void; "select-message-text"?: () => void },
+  ): void => {
     const evt = findLoadedEvent(eventId);
     const ownUserId = AppState.get("ownUserId");
     const isOwn = !!evt && !!ownUserId && evt.sender === ownUserId;
+    // Both the desktop right-click menu and the mobile long-press sheet flow
+    // through here, so this is the single place that gives finger-input users
+    // a way to edit or delete.
     const ctx = currentAvailability({ selectedMessageId: eventId, selectedMessageIsOwn: isOwn });
     contextMenu.show(x, y, buildMenu("message", ctx, {
       "reply": () => {
@@ -1109,60 +1120,40 @@ export function setupKeyboard(components: AppComponents): void {
         void navigator.clipboard.writeText(evt?.body ?? "");
       },
       "view-raw-event": () => void openDebugViewerForEvent(eventId),
-      ...saveMenuHandlers(evt),
-      "redact": () => void redactMessage(eventId),
-    }));
-  });
-
-  // Right-click / long-press context menu for messages
-  timeline.onContextMenu((eventId, x, y) => {
-    const events = AppState.get("currentTimeline");
-    const evt = events.find((ev) => ev.event_id === eventId);
-    const ownUserId = AppState.get("ownUserId");
-    const isOwn = !!evt && !!ownUserId && evt.sender === ownUserId;
-
-    // Both the desktop right-click menu and the mobile long-press sheet flow
-    // through this callback, so this is the single place that gives
-    // finger-input users a way to edit or delete.
-    const ctx = currentAvailability({
-      selectedMessageId: eventId,
-      selectedMessageIsOwn: isOwn,
-    });
-
-    contextMenu.show(x, y, buildMenu("message", ctx, {
-      "reply": () => {
-        if (!evt) return;
-        startReply(eventId, evt.sender, evt.body.slice(0, 80));
-        input.focus();
-      },
-      "react": () => openQuickReactPicker(eventId),
-      "open-thread": () => void openThread(eventId),
-      "copy-message": () => {
-        void navigator.clipboard.writeText(evt?.body ?? "");
-      },
-      // Mobile only. On desktop you select text by dragging, so the row would
-      // be noise; withholding the handler is what keeps it out of the menu.
-      "select-message-text": isMobile()
-        ? () => {
-            const bodyEl = timeline.getMessageBodyElementById(eventId);
-            if (bodyEl) selectMessageTextForTouch(bodyEl);
-          }
-        : undefined,
-      "view-raw-event": () => void openDebugViewerForEvent(eventId),
       // Image messages only, and Photos only where there is a photo library —
       // which is why these are withheld rather than registry requirements.
       ...saveMenuHandlers(evt),
-      "edit": () => {
-        // Prefer the MessageData body (reflects applied edits) over the raw
-        // timeline event.
-        const body = timeline.getMessageBodyById(eventId) ?? evt?.body ?? "";
-        startEdit(eventId, body);
-        modeManager.transition(Mode.Insert);
-        input.focus();
-      },
       "redact": () => void redactMessage(eventId),
+      ...surfaceOnly,
     }));
-  });
+  };
+
+  // In the thread panel, minus what doesn't apply there: opening a thread (it
+  // is one), editing (not supported in threads) and the touch text-selection
+  // row (it targets the timeline's DOM).
+  threadView.onContextMenu((eventId, x, y) => showMessageMenu(eventId, x, y, {}));
+
+  // Right-click / long-press context menu for messages
+  timeline.onContextMenu((eventId, x, y) => showMessageMenu(eventId, x, y, {
+    "open-thread": () => void openThread(eventId),
+    // Mobile only. On desktop you select text by dragging, so the row would
+    // be noise; withholding the handler is what keeps it out of the menu.
+    "select-message-text": isMobile()
+      ? () => {
+          const bodyEl = timeline.getMessageBodyElementById(eventId);
+          if (bodyEl) selectMessageTextForTouch(bodyEl);
+        }
+      : undefined,
+    "edit": () => {
+      // Prefer the MessageData body (reflects applied edits) over the raw
+      // timeline event.
+      const evt = findLoadedEvent(eventId);
+      const body = timeline.getMessageBodyById(eventId) ?? evt?.body ?? "";
+      startEdit(eventId, body);
+      modeManager.transition(Mode.Insert);
+      input.focus();
+    },
+  }));
 
   // Right-click context menu for rooms in the room list
   roomList.onContextMenu((roomId, x, y) => {
