@@ -64,11 +64,11 @@ vi.mock("../../ui/NotificationToast.js", () => ({
   showSuccess: vi.fn(),
 }));
 
-// cancelReply lives in messages.js; spy on it.
-const cancelReply = vi.fn();
+// consumeReply lives in messages.js; spy on it.
+const consumeReply = vi.fn<(eventId: string) => void>();
 vi.mock("./messages.js", () => ({
   startReply: vi.fn(),
-  cancelReply: () => cancelReply(),
+  consumeReply: (eventId: string) => consumeReply(eventId),
 }));
 
 // The local echo (#112): recorded rather than rendered — `live.test.ts` covers
@@ -176,12 +176,12 @@ describe("sending a staged image", () => {
     await sendPendingImage(blob(), "cat.png");
 
     expect(sendPastedImage.mock.calls[0][0].replyToEventId).toBe("$parent");
-    expect(cancelReply).toHaveBeenCalledTimes(1);
+    expect(consumeReply).toHaveBeenCalledExactlyOnceWith("$parent");
   });
 
   it("does not clear reply state when not replying", async () => {
     await sendPendingImage(blob(), "cat.png");
-    expect(cancelReply).not.toHaveBeenCalled();
+    expect(consumeReply).not.toHaveBeenCalled();
   });
 
   it("restores the staged image (and caption) when the send fails", async () => {
@@ -197,7 +197,7 @@ describe("sending a staged image", () => {
     // Field was empty, so the caption is restored.
     expect(setValue).toHaveBeenCalledWith("a cat");
     // Reply state is not cleared on failure.
-    expect(cancelReply).not.toHaveBeenCalled();
+    expect(consumeReply).not.toHaveBeenCalled();
   });
 });
 
@@ -497,7 +497,7 @@ describe("attachments follow the open thread (#78)", () => {
     await handleFilePick(new File(["hi"], "notes.txt", { type: "text/plain" }));
 
     expect(sendFile.mock.calls[0][0].replyToEventId).toBe("$parent");
-    expect(cancelReply).toHaveBeenCalledTimes(1);
+    expect(consumeReply).toHaveBeenCalledExactlyOnceWith("$parent");
   });
 
   it("keeps the reply armed when the attachment fails", async () => {
@@ -506,7 +506,7 @@ describe("attachments follow the open thread (#78)", () => {
 
     await handleFilePick(new File(["hi"], "notes.txt", { type: "text/plain" }));
 
-    expect(cancelReply).not.toHaveBeenCalled();
+    expect(consumeReply).not.toHaveBeenCalled();
   });
 
   it("leaves the thread root off when no thread is open", async () => {
@@ -744,7 +744,7 @@ describe("sendStagedAttachments", () => {
 
     expect(sendPastedImage.mock.calls[0][0].replyToEventId).toBe("$parent");
     expect(sendFile.mock.calls[0][0].replyToEventId).toBeUndefined();
-    expect(cancelReply).toHaveBeenCalledTimes(1);
+    expect(consumeReply).toHaveBeenCalledExactlyOnceWith("$parent");
   });
 
   it("sends every attachment into the open thread", async () => {

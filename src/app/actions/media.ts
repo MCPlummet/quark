@@ -35,7 +35,7 @@ import { getComponents, prepareOutgoingBody } from "./context.js";
 import { withSniffedType } from "../file_type.js";
 import { showSentEvent } from "./live.js";
 import { openQuickReactPicker } from "./reactions.js";
-import { startReply, cancelReply } from "./messages.js";
+import { startReply, consumeReply } from "./messages.js";
 import { openThread, findLoadedEvent, isInOpenThread } from "./threads.js";
 import { openProfileForUser } from "./profile.js";
 import { saveMedia } from "../media_save.js";
@@ -446,7 +446,7 @@ export async function sendStagedAttachments(
       // Consuming the armed reply means disarming it: the attachment really
       // is a reply, so a banner left standing makes every message after it
       // one too.
-      if (first && target.replyToEventId) cancelReply();
+      if (first && target.replyToEventId) consumeReply(target.replyToEventId);
     } else {
       failed.push(item);
       if (first) captionLost = true;

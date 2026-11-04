@@ -3,6 +3,7 @@ import {
   startReply,
   promoteReplyTarget,
   cancelReply,
+  consumeReply,
   startEdit,
   cancelEdit,
   applyIncomingRedaction,
@@ -96,6 +97,18 @@ describe("startReply / cancelReply", () => {
     expect(AppState.get("replyToEventId")).toBeNull();
     expect(replyPreview.hide).not.toHaveBeenCalled();
     expect(replyPreview.showThread).toHaveBeenCalledOnce();
+  });
+
+  // Stickers, GIFs and attachments let go of the reply when their send
+  // returns — seconds later behind the send queue. Cancelling whatever was
+  // armed by then wiped a reply the user had set up meanwhile.
+  it("consumeReply cancels the reply a send used, and only that one", () => {
+    startReply("$a", "Alice", "first");
+    startReply("$b", "Bob", "set up while $a's send was out");
+    consumeReply("$a");
+    expect(AppState.get("replyToEventId")).toBe("$b");
+    consumeReply("$b");
+    expect(AppState.get("replyToEventId")).toBeNull();
   });
 
   it("startReply cancels an edit in progress rather than leaving it armed", () => {

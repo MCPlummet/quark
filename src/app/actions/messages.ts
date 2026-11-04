@@ -352,6 +352,17 @@ export function cancelReply(): void {
 }
 
 /**
+ * A send that quoted `eventId` is done with it: cancel the reply — unless
+ * another has been armed since. Stickers, GIFs and attachments let go of the
+ * reply once their send returns, which behind the room's send queue can be
+ * seconds later; cancelling whatever was armed by then wiped a reply set up in
+ * the meantime, and the next message went out as a plain one.
+ */
+export function consumeReply(eventId: string): void {
+  if (AppState.get("replyToEventId") === eventId) cancelReply();
+}
+
+/**
  * Begin inline editing of an own message — loads the body into the compose box
  * and shows the edit banner above it. Only room-timeline messages are
  * editable, so an open thread is left first.
