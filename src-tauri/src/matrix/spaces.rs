@@ -8,7 +8,9 @@ use matrix_sdk::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use tracing::warn;
+use tracing::{info, warn};
+
+use super::space_order::{between, compare_children, order_updates, sanitize_order, ChildKey};
 
 /// A child room/space in a space hierarchy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,19 +139,234 @@ async fn enrich_with_order(
         }
     }
 
-    // Sort by order field (lexicographic), then by room name
-    enriched.sort_by(|a, b| match (&a.order, &b.order) {
-        (Some(oa), Some(ob)) => oa.cmp(ob),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => {
-            let name_a = a.name.as_deref().unwrap_or("");
-            let name_b = b.name.as_deref().unwrap_or("");
-            name_a.cmp(name_b)
-        }
-    });
+    // Same listing order as the local path and the reorder computation.
+    enriched.sort_by(|a, b| compare_space_children(a, b));
 
     enriched
+}
+
+fn child_key(child: &SpaceChild) -> ChildKey {
+    ChildKey {
+        room_id: child.room_id.clone(),
+        order: sanitize_order(child.order.as_deref()),
+        name: child.name.clone().unwrap_or_default(),
+    }
+}
+
+fn compare_space_children(a: &SpaceChild, b: &SpaceChild) -> std::cmp::Ordering {
+    compare_children(&child_key(a), &child_key(b))
+}
+
+/// One `m.space.child` event of a joined space, as read from the local store.
+struct ChildEvent {
+    room_id: String,
+    /// The event content, kept whole so a reorder rewrites `order` and
+    /// nothing else (`via`, `suggested`, anything a newer spec adds).
+    content: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The live `m.space.child` events of a joined space.
+///
+/// A child event whose `via` is missing or empty is how a child is *removed*
+/// (state events cannot be deleted), so those are skipped.
+async fn read_child_events(space: &matrix_sdk::Room) -> Result<Vec<ChildEvent>, String> {
+    let raw_events = space
+        .get_state_events(StateEventType::from("m.space.child"))
+        .await
+        .map_err(|e| format!("Failed to read space children: {e}"))?;
+
+    let mut out = Vec::new();
+    for raw in raw_events {
+        let value: Option<serde_json::Value> = match raw {
+            matrix_sdk::deserialized_responses::RawAnySyncOrStrippedState::Sync(r) => {
+                r.deserialize_as::<serde_json::Value>().ok()
+            }
+            matrix_sdk::deserialized_responses::RawAnySyncOrStrippedState::Stripped(r) => {
+                r.deserialize_as::<serde_json::Value>().ok()
+            }
+        };
+        let Some(value) = value else { continue };
+        let Some(room_id) = value.get("state_key").and_then(|v| v.as_str()) else { continue };
+        let Some(content) = value.get("content").and_then(|v| v.as_object()) else { continue };
+        let has_via = content
+            .get("via")
+            .and_then(|v| v.as_array())
+            .is_some_and(|via| !via.is_empty());
+        if !has_via || RoomId::parse(room_id).is_err() {
+            continue;
+        }
+        out.push(ChildEvent { room_id: room_id.to_owned(), content: content.clone() });
+    }
+    Ok(out)
+}
+
+/// The joined space room for `space_room_id`, or `None` when this account is
+/// not in it (an unjoined subspace, say), whose state we do not hold.
+fn joined_space(client: &Client, space_room_id: &RoomId) -> Option<matrix_sdk::Room> {
+    client
+        .get_room(space_room_id)
+        .filter(|room| room.state() == matrix_sdk::RoomState::Joined)
+}
+
+/// The direct children of a space, in listing order.
+///
+/// Read from the local store whenever this account has joined the space — no
+/// HTTP, and current with sync, which matters because the room list re-reads
+/// every space's children on every room-list change. `/hierarchy` used to
+/// serve this; it is a server round-trip per space per refresh, and it lagged
+/// a reorder or a new child until the server's own view caught up. It is kept
+/// as the fallback for a space this account has not joined.
+///
+/// Children are described from the local room when this account knows it;
+/// one it has never seen has only its ID, and is never shown in the room list
+/// anyway (that lists joined rooms).
+pub async fn get_space_children(
+    client: &Client,
+    space_room_id: &str,
+) -> Result<Vec<SpaceChild>, String> {
+    let space_id = RoomId::parse(space_room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let Some(space) = joined_space(client, &space_id) else {
+        return get_space_hierarchy(client, space_room_id, Some(1)).await;
+    };
+
+    let mut children = Vec::new();
+    for event in read_child_events(&space).await? {
+        let order = event
+            .content
+            .get("order")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        let known = RoomId::parse(&event.room_id).ok().and_then(|id| client.get_room(&id));
+        let child = match known {
+            Some(room) => SpaceChild {
+                room_id: event.room_id,
+                name: room.compute_display_name().await.ok().map(|n| n.to_string()),
+                topic: room.topic(),
+                avatar_url: room.avatar_url().map(|u| u.to_string()),
+                is_space: room.is_space(),
+                member_count: Some(room.joined_members_count()),
+                order,
+                canonical_alias: room.canonical_alias().map(|a| a.to_string()),
+            },
+            None => SpaceChild {
+                room_id: event.room_id,
+                name: None,
+                topic: None,
+                avatar_url: None,
+                is_space: false,
+                member_count: None,
+                order,
+                canonical_alias: None,
+            },
+        };
+        children.push(child);
+    }
+    children.sort_by(compare_space_children);
+    Ok(children)
+}
+
+/// Reorder a joined space's children so the rooms in `visible_order` list in
+/// that sequence. Returns how many `m.space.child` events were written.
+///
+/// `visible_order` is what the user sees: the joined rooms of one section of
+/// the room list. Children it does not mention — rooms this account has not
+/// joined, subspaces — keep their slots, and the listed rooms are permuted
+/// among the remaining slots. The writes are the fewest [`order_updates`] can
+/// find (one, for a single move in a space that has been ordered before), and
+/// each rewrites only `order`.
+pub async fn reorder_space_children(
+    client: &Client,
+    space_room_id: &str,
+    visible_order: &[String],
+) -> Result<usize, String> {
+    let space_id = RoomId::parse(space_room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let space = joined_space(client, &space_id).ok_or("You are not in this space")?;
+
+    let children = get_space_children(client, space_room_id).await?;
+    let keys: Vec<ChildKey> = children.iter().map(child_key).collect();
+
+    let visible: std::collections::HashSet<&str> = visible_order.iter().map(String::as_str).collect();
+    if visible.len() != visible_order.len() {
+        return Err("A room is listed twice".into());
+    }
+    if let Some(stray) = visible_order.iter().find(|id| !keys.iter().any(|k| &k.room_id == *id)) {
+        return Err(format!("{stray} is not a child of this space"));
+    }
+    let mut moved = visible_order.iter();
+    let target: Vec<String> = keys
+        .iter()
+        .map(|k| {
+            if visible.contains(k.room_id.as_str()) {
+                moved.next().cloned().unwrap_or_else(|| k.room_id.clone())
+            } else {
+                k.room_id.clone()
+            }
+        })
+        .collect();
+
+    let updates = order_updates(&keys, &target)?;
+    if updates.is_empty() {
+        return Ok(0);
+    }
+
+    let events = read_child_events(&space).await?;
+    for (room_id, order) in &updates {
+        let mut content = events
+            .iter()
+            .find(|e| &e.room_id == room_id)
+            .map(|e| e.content.clone())
+            .ok_or_else(|| format!("{room_id} is no longer a child of this space"))?;
+        content.insert("order".into(), serde_json::Value::String(order.clone()));
+        space
+            .send_state_event_raw("m.space.child", room_id, serde_json::Value::Object(content))
+            .await
+            .map_err(|e| format!("Failed to reorder the space: {e}"))?;
+    }
+    info!(space = %space_room_id, writes = updates.len(), "Reordered space children");
+    Ok(updates.len())
+}
+
+/// Make `child_id` a child of `space_id`: the `m.space.child` event in the
+/// space, which is what lists it there. `via` names the servers a client can
+/// join the child through; the child's own server is always one.
+pub async fn add_space_child(client: &Client, space_id: &str, child_id: &str) -> Result<(), String> {
+    let space_room_id = RoomId::parse(space_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let child_room_id = RoomId::parse(child_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let space = joined_space(client, &space_room_id).ok_or("You are not in this space")?;
+    let via = space_via(client, &child_room_id);
+
+    // Append after every child that has an order, so the new room lands at the
+    // end of the ordered run instead of jumping to wherever its name sorts.
+    let last_order = read_child_events(&space)
+        .await?
+        .iter()
+        .filter_map(|e| sanitize_order(e.content.get("order").and_then(|v| v.as_str())))
+        .max();
+    let mut content = serde_json::json!({ "via": via });
+    if let Some(last) = last_order {
+        if let Some(order) = between(Some(&last), None) {
+            content["order"] = serde_json::Value::String(order);
+        }
+    }
+    space
+        .send_state_event_raw("m.space.child", child_id, content)
+        .await
+        .map_err(|e| format!("Failed to add the room to the space: {e}"))?;
+    Ok(())
+}
+
+/// Servers to route through for a room: its own, then ours.
+pub fn space_via(client: &Client, room_id: &RoomId) -> Vec<String> {
+    let mut via = Vec::new();
+    if let Some(server) = room_id.server_name() {
+        via.push(server.to_string());
+    }
+    if let Some(own) = client.user_id().map(|u| u.server_name().to_string()) {
+        if !via.contains(&own) {
+            via.push(own);
+        }
+    }
+    via
 }
 
 /// List all space rooms the user has joined.
