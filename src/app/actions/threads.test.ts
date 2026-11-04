@@ -511,6 +511,20 @@ describe("the header reads as the root's row in the room does", () => {
     expect(bannerSnippet()).toBe("edited again");
   });
 
+  // An edit carries `m.replace` alone, never `m.thread`, so it takes the room's
+  // edit path whichever message it edits.
+  it("takes an edit of a reply that arrives while the thread is open", async () => {
+    await openThread("$root");
+    renderLiveEvent(
+      ev("$edit3", { is_edit: true, relates_to_event_id: "$t2", body: "second, edited", timestamp: T2.timestamp + 1 }),
+      timeline,
+      threadView,
+    );
+    const row = threadView.getMessageEl("$t2")!;
+    expect(row.querySelector(".thread-view__message-body")!.textContent).toBe("second, edited");
+    expect(bannerSnippet()).toBe("the root, edited");
+  });
+
   it("uses the backend's root for a root the room has not loaded", async () => {
     AppState.set("currentTimeline", [MAIN_EV]);
     await openThread("$root");
