@@ -97,6 +97,16 @@ function mount(): void {
 const sheetOpen = () => threadView.getElement().style.display !== "none";
 const bannerText = () =>
   replyPreview.isVisible() ? replyPreview.getElement().querySelector(".reply-preview-bar__sender")!.textContent : null;
+const bannerSnippet = () => replyPreview.getElement().querySelector(".reply-preview-bar__snippet")!.textContent;
+const bannerClose = () => replyPreview.getElement().querySelector<HTMLElement>(".reply-preview-bar__close")!;
+
+/** The next thread send, held open until the test settles it. */
+function deferredSend(): { resolve: (id: string) => void; reject: (e: unknown) => void } {
+  let resolve!: (id: string) => void;
+  let reject!: (e: unknown) => void;
+  sendThreadReplyIpc.mockReturnValueOnce(new Promise<string>((res, rej) => { resolve = res; reject = rej; }));
+  return { resolve, reject };
+}
 const threadRowIds = () =>
   [...threadView.getElement().querySelectorAll(".thread-view__timeline [data-message-id]")]
     .map((e) => e.getAttribute("data-message-id"));
@@ -281,6 +291,26 @@ describe("replying with a thread open", () => {
     expectFullyClosed();
   });
 
+  // With focus on the banner's [x], the banner handles Esc itself. Left to
+  // bubble, the same press reached the document's Esc as well — the thread
+  // panel's close, which peeled a second layer and closed the thread too.
+  it("Esc on the banner peels one layer, not two", () => {
+    // Stands in for keyboard.ts's document handler: Esc in Normal runs the
+    // thread panel's close.
+    const documentEscape = (e: KeyboardEvent) => { if (e.key === "Escape") dismissComposeBanner(); };
+    document.addEventListener("keydown", documentEscape);
+    try {
+      startReply("$t1", "Bob", "first in thread");
+      bannerClose().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+      expect(AppState.get("replyToEventId")).toBeNull();
+      expect(AppState.get("threadRootEventId")).toBe("$root");
+      expect(bannerText()).toMatch(/Replying in thread/);
+    } finally {
+      document.removeEventListener("keydown", documentEscape);
+    }
+  });
+
   it("closing the thread drops a reply armed inside it", () => {
     startReply("$t1", "Bob", "first in thread");
     closeThread();
@@ -360,13 +390,6 @@ describe("reply counts and replies still sending", () => {
   const panelCount = () => threadView.getElement().querySelector(".thread-view__count")!.textContent;
   const flush = () => new Promise((r) => setTimeout(r, 0));
 
-  function deferredSend(): { resolve: (id: string) => void; reject: (e: unknown) => void } {
-    let resolve!: (id: string) => void;
-    let reject!: (e: unknown) => void;
-    sendThreadReplyIpc.mockReturnValueOnce(new Promise<string>((res, rej) => { resolve = res; reject = rej; }));
-    return { resolve, reject };
-  }
-
   beforeEach(async () => {
     timeline.setMessages([
       { id: "$root", senderName: "Alice", timestamp: "2024-01-01T12:00:00Z", body: "the root", isThreadRoot: true, threadReplyCount: 7 },
@@ -443,5 +466,105 @@ describe("reply counts and replies still sending", () => {
     await sent;
     expect(threadView.getMessageEl("$queued")).toBeNull();
     expect(threadRowIds()).toEqual([]);
+  });
+});
+
+// The panel's header stands in for the root's row in the room, which is hidden
+// while the thread is open. Once the thread loaded, the header was redrawn from
+// the backend's copy of the root — no edits applied, no reactions — so an
+// edited root went back to its first wording and its reactions disappeared.
+describe("the header reads as the root's row in the room does", () => {
+  const header = () => threadView.getElement().querySelector<HTMLElement>(".thread-view__root .thread-view__message")!;
+  const headerBody = () => header().querySelector(".thread-view__message-body")!.textContent;
+  const edit = (id: string, body: string, at: number) =>
+    ev(id, { is_edit: true, relates_to_event_id: "$root", body, timestamp: ROOT_EV.timestamp + at });
+
+  beforeEach(() => {
+    AppState.set("currentTimeline", [
+      { ...ROOT_EV, reactions: [{ key: "👍", count: 3, senders: [], own: false, own_event_id: null }] },
+      edit("$edit", "the root, edited", 1),
+      MAIN_EV,
+    ]);
+    // The backend's root, as it comes with the thread: first wording, no reactions.
+    getThreadTimeline.mockResolvedValue([ROOT_EV, T1, T2]);
+  });
+
+  it("keeps the root's edit and reactions once the thread has loaded", async () => {
+    await openThread("$root");
+    expect(headerBody()).toBe("the root, edited");
+    expect(header().querySelector(".reaction-bar")?.textContent).toContain("3");
+    expect(bannerSnippet()).toBe("the root, edited");
+  });
+
+  it("takes an edit of the root that arrives while the thread is open", async () => {
+    await openThread("$root");
+    renderLiveEvent(edit("$edit2", "edited again", 2), timeline, threadView);
+    expect(headerBody()).toBe("edited again");
+    expect(bannerSnippet()).toBe("edited again");
+  });
+
+  it("uses the backend's root for a root the room has not loaded", async () => {
+    AppState.set("currentTimeline", [MAIN_EV]);
+    await openThread("$root");
+    expect(headerBody()).toBe("the root");
+  });
+});
+
+// A thread reply that failed after its thread was left went back into whatever
+// composer was current — another room's, with no thread banner, one Enter from
+// posting it there. And the quote it was sent with was dropped.
+describe("a thread reply that fails to send", () => {
+  beforeEach(async () => {
+    await openThread("$root");
+  });
+
+  it("comes back to the composer with its quote while its thread is open", async () => {
+    startReply("$t1", "Bob", "first in thread");
+    const send = deferredSend();
+    const sent = sendMessage("agreed");
+    expect(AppState.get("replyToEventId")).toBeNull();
+    send.reject(new Error("offline"));
+    await sent;
+
+    expect(input.getValue()).toBe("agreed");
+    expect(AppState.get("replyToEventId")).toBe("$t1");
+    expect(bannerText()).toBe("⌥ ↩ <Bob>");
+  });
+
+  it("stays out of another room's composer, and is back when its thread is", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("for the thread only");
+    // Switching rooms closes the thread and brings up that room's (empty) draft.
+    closeThread();
+    AppState.set("currentRoomId", "!other:x");
+    send.reject(new Error("offline"));
+    await sent;
+    expect(input.getValue()).toBe("");
+
+    AppState.set("currentRoomId", ROOM);
+    await openThread("$root");
+    expect(input.getValue()).toBe("for the thread only");
+    expect(bannerText()).toMatch(/Replying in thread/);
+  });
+
+  it("stays out of the room's own composer once its thread is closed", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("for the thread only");
+    closeThread();
+    send.reject(new Error("offline"));
+    await sent;
+    expect(input.getValue()).toBe("");
+
+    await sendMessage("to the room");
+    expect(ipcSendMessage).toHaveBeenCalledWith(ROOM, "to the room", undefined, undefined);
+  });
+
+  it("does not overwrite what was typed since", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("first try");
+    input.setValue("something new");
+    send.reject(new Error("offline"));
+    await sent;
+    expect(input.getValue()).toBe("something new");
   });
 });

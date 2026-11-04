@@ -763,7 +763,11 @@ unfolds in the gap, with everything else greyed back:
   the room.
 - **Rendering.** The panel shows the root once as its header (the backend
   returns it with the replies; it is not drawn or counted as one) and opens
-  scrolled to the newest reply. It follows new replies only while the reader is
+  scrolled to the newest reply. The header stands in for the root's row, which
+  is hidden while the thread is open, so it is drawn from the room's copy of
+  the root — its latest edit applied, its reactions as they stand, and edits
+  that land while the thread is open. The backend's copy, with no edits applied
+  and no reactions, is used only for a root the room has not loaded. It follows new replies only while the reader is
   at the bottom (or the reply is their own). Re-opening the open thread (its
   indicator, `⌥` on the hover bar) keeps the panel as it is rather than
   rebuilding it at the top. Every in-thread reply gets the main timeline's reply
@@ -783,6 +787,11 @@ unfolds in the gap, with everything else greyed back:
   panel (`_sendingReplies` in `threads.ts`), so a thread closed and reopened
   while they queue behind a rate limit still shows them, and one that lands
   meanwhile appears — its sync echo, being our own, is suppressed.
+- **Failed sends.** A reply that fails goes back to its own thread's composer,
+  with the message it quoted: at once if the composer is showing that thread
+  and is empty, else the next time the thread is opened. It never goes into
+  another room's composer, or the room's own once the thread is closed, where
+  one Enter would post it in the wrong place.
 - **Modal-ish, not a modal.** The panel is not a `DialogBase`: the composer has
   to stay live. It is a panel (`activePanel === "thread"`) with its own
   registered nav — `j`/`k`/`gg`/`G` move within it, `k` from the top of the

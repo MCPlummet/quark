@@ -75,9 +75,13 @@ export class ReplyPreview {
     this._el.appendChild(this._closeBtn);
 
     // ── Keyboard handling ─────────────────────────────────────────────────
+    // With focus on the bar, its Esc is the [x]: one layer. Left to bubble,
+    // the same press also ran the document's Esc — the thread panel's close —
+    // and peeled a second.
     this._el.addEventListener("keydown", (e) => {
       if (e.key === "Escape" || (e.ctrlKey && e.key === "[")) {
         e.preventDefault();
+        e.stopPropagation();
         this._onDismiss?.();
       }
     });

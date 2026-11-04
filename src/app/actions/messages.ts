@@ -23,7 +23,7 @@ import {
   _downloadInlineEmoji,
   resolveDisplayName,
 } from "./context.js";
-import { sendThreadReply, closeThread, isInOpenThread } from "./threads.js";
+import { sendThreadReply, closeThread, isInOpenThread, applyEditToOpenThread } from "./threads.js";
 import {
   armReply,
   disarmReply,
@@ -420,11 +420,15 @@ export async function editMessage(eventId: string, newBody: string): Promise<voi
     // Suppress the sync echo so it doesn't double-apply the update.
     _ownSentEventIds.add(editEventId);
     // Optimistically update the DOM immediately without waiting for sync.
-    const { timeline } = getComponents();
+    const { timeline, threadView } = getComponents();
     timeline.updateMessageBody(eventId, body, formattedBody);
+    applyEditToOpenThread(eventId, body, formattedBody);
     // The re-rendered body may contain custom-emoji <img>s whose mxc:// src was
     // stashed in data-mxc; download and swap them in, as the send path does.
-    if (formattedBody) _downloadInlineEmoji(timeline);
+    if (formattedBody) {
+      _downloadInlineEmoji(timeline);
+      if (threadView) _downloadInlineEmoji(threadView);
+    }
     showSuccess("Message edited");
   } catch (err) {
     showError(`Failed to edit: ${err instanceof Error ? err.message : String(err)}`);

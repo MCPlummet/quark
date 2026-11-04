@@ -34,6 +34,13 @@ export function armReply(label: ReplyPreviewData): void {
   refreshComposeBanner();
 }
 
+/** The armed reply's banner label, or null when no reply is armed. */
+export function armedReply(): ReplyPreviewData | null {
+  const replyTo = AppState.get("replyToEventId");
+  if (!replyTo) return null;
+  return _reply?.eventId === replyTo ? _reply : { eventId: replyTo, senderName: "", snippet: "" };
+}
+
 /** Drop the armed reply, if any. */
 export function disarmReply(): void {
   _reply = null;
@@ -69,8 +76,7 @@ export function refreshComposeBanner(): void {
   if (AppState.get("editingEventId")) {
     replyPreview.showEdit(_editSnippet);
   } else if (replyTo) {
-    const label = _reply?.eventId === replyTo ? _reply : { eventId: replyTo, senderName: "", snippet: "" };
-    replyPreview.show(label, { inThread: threadRoot !== null });
+    replyPreview.show(armedReply()!, { inThread: threadRoot !== null });
   } else if (threadRoot) {
     replyPreview.showThread(_threadSnippet);
   } else {

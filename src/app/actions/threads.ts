@@ -23,10 +23,12 @@ import {
   replyPreviewFor,
   stripReplyFallback,
   timelineEventToThreadMessage,
+  _applyEdits,
   _downloadMessageImages,
   _downloadInlineEmoji,
 } from "./context.js";
-import { disarmReply, refreshComposeBanner, setThreadSnippet } from "./compose_target.js";
+import { armReply, armedReply, disarmReply, refreshComposeBanner, setThreadSnippet } from "./compose_target.js";
+import type { ReplyPreviewData } from "../../ui/ReplyPreview.js";
 
 /** Class on `.quark-layout` while a thread is open: dims everything but the
  *  thread panel and the compose box, and freezes the room timeline. */
@@ -51,6 +53,15 @@ let _threadEvents: TimelineEvent[] = [];
 const _sendingReplies = new Map<string, { rootId: string; msg: ThreadMessageData }>();
 /** Keeps provisional IDs apart when two sends share a millisecond. */
 let _sendSeq = 0;
+
+/**
+ * Thread replies that failed to send, by thread root, until that thread's
+ * composer can take them back. A failure can come long after the send, behind
+ * a rate limit; putting the text into whatever composer was current by then
+ * put it in another room's, or the room's own once the thread was closed — one
+ * Enter from posting it there, with no thread banner to say otherwise.
+ */
+const _unsentReplies = new Map<string, { bodies: string[]; quote: ReplyPreviewData | null }>();
 
 /** The open thread's own events, root first. Empty when no thread is open. */
 export function openThreadEvents(): readonly TimelineEvent[] {
@@ -78,6 +89,18 @@ export function isInOpenThread(eventId: string): boolean {
   if (AppState.get("currentTimeline").some((e) => e.event_id === eventId && e.thread_root === root)) return true;
   // Rows only the panel knows about: our own reply between send and confirm.
   return getComponents().threadView?.hasMessage(eventId) ?? false;
+}
+
+/**
+ * The room's copy of an event, as the room draws it: its latest edit applied
+ * (edits sit in the buffer as events of their own) and the reactions it has
+ * gathered live. Undefined when the room has not loaded it.
+ */
+function roomCopy(eventId: string): TimelineEvent | undefined {
+  const own = AppState.get("currentTimeline").filter(
+    (e) => e.event_id === eventId || (e.is_edit && e.relates_to_event_id === eventId),
+  );
+  return _applyEdits(own).find((e) => e.event_id === eventId);
 }
 
 function rootSnippet(e: TimelineEvent | undefined): string {
@@ -129,13 +152,16 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
   // contain, so drop it — the banner is about to say "thread", not "reply".
   disarmReply();
 
-  const rootEvent = findLoadedEvent(eventId);
+  // The header stands in for the root's row in the room, so it is drawn from
+  // the room's copy of the root.
+  const rootEvent = roomCopy(eventId);
   _threadEvents = rootEvent ? [rootEvent] : [];
   setThreadSnippet(rootSnippet(rootEvent));
   AppState.set("threadRootEventId", eventId);
   threadView.open(rootData(eventId, rootEvent));
   setThreadFocus(true);
   refreshComposeBanner();
+  restoreUnsentReply(eventId);
 
   let events: TimelineEvent[];
   try {
@@ -152,7 +178,10 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
 
   // The backend returns the root along with its replies; it is the panel's
   // header, not one of the replies (it used to be drawn twice and counted).
-  let root = events.find((e) => e.event_id === eventId) ?? rootEvent;
+  // The room's copy stays the header when there is one: the backend's has no
+  // edits applied and no reactions, and swapping it in put an edited root back
+  // to its first wording.
+  let root = rootEvent ?? events.find((e) => e.event_id === eventId);
   const replies = events.filter((e) => e.event_id !== eventId && !e.is_edit);
   if (!root) {
     // The backend could not read it with the replies: try once more alone.
@@ -202,6 +231,24 @@ export function closeThread(): void {
 }
 
 /**
+ * Show an edit in the open thread, when it edits one of the thread's messages.
+ * The root's row in the room is hidden behind the panel's header while the
+ * thread is open, so an edit that reached only that row went unseen.
+ */
+export function applyEditToOpenThread(eventId: string, body: string, htmlBody?: string): void {
+  const { threadView } = getComponents();
+  if (!threadView?.hasMessage(eventId)) return;
+  threadView.updateMessageBody(eventId, body, htmlBody);
+  _threadEvents = _threadEvents.map((e) =>
+    e.event_id === eventId ? { ...e, body, formatted_body: htmlBody ?? null, was_edited: true } : e,
+  );
+  if (eventId === AppState.get("threadRootEventId")) {
+    setThreadSnippet(body.slice(0, 80));
+    refreshComposeBanner();
+  }
+}
+
+/**
  * Send a message into the open thread — as a reply to `replyToEventId` when one
  * of the thread's messages is quoted, else as a plain thread message. Uses a
  * text-clone fly animation from the compose field to the new row.
@@ -237,7 +284,14 @@ export async function sendThreadReply(
   };
   threadView.appendReply(optimistic);
   _sendingReplies.set(optimisticId, { rootId: threadRootId, msg: optimistic });
-  // The quoted message is consumed by this send, as a main-timeline reply is.
+  // The quoted message is consumed by this send, as a main-timeline reply is —
+  // unless the send fails, when the quote goes back with the text.
+  const armed = armedReply();
+  const quote: ReplyPreviewData | null = !replyToEventId
+    ? null
+    : armed?.eventId === replyToEventId
+      ? armed
+      : { eventId: replyToEventId, senderName: "", snippet: "" };
   if (replyToEventId) disarmReply();
 
   const fieldEl = input.getFieldElement();
@@ -322,8 +376,42 @@ export async function sendThreadReply(
   } catch (err) {
     _sendingReplies.delete(optimisticId);
     threadView.removeMessage(optimisticId);
-    // Hand the text back rather than lose it, unless something new was typed.
-    if (input.getValue().trim().length === 0) input.setValue(body);
-    showError(`Failed to send thread reply: ${err instanceof Error ? err.message : String(err)}`);
+    // Hand the text back rather than lose it — to its own thread's composer.
+    holdUnsentReply(threadRootId, body, quote);
+    const back = restoreUnsentReply(threadRootId);
+    const reason = err instanceof Error ? err.message : String(err);
+    showError(
+      back
+        ? `Failed to send thread reply: ${reason}`
+        : `Failed to send thread reply: ${reason}. It will be back in the composer when you open the thread.`,
+    );
   }
+}
+
+function holdUnsentReply(rootId: string, body: string, quote: ReplyPreviewData | null): void {
+  const held = _unsentReplies.get(rootId);
+  if (!held) {
+    _unsentReplies.set(rootId, { bodies: [body], quote });
+    return;
+  }
+  held.bodies.push(body);
+  // Several replies come back as one draft; no one quote fits them all.
+  held.quote = null;
+}
+
+/**
+ * Put the thread's failed replies back in the composer, if the composer is
+ * showing that thread and holds nothing else — anything typed since is not
+ * overwritten. Returns whether it did; otherwise they wait for the next time
+ * the thread is opened.
+ */
+function restoreUnsentReply(rootId: string): boolean {
+  const held = _unsentReplies.get(rootId);
+  const { input } = getComponents();
+  if (!held || AppState.get("threadRootEventId") !== rootId) return false;
+  if (input.getValue().trim().length > 0) return false;
+  _unsentReplies.delete(rootId);
+  input.setValue(held.bodies.join("\n"));
+  if (held.quote && !AppState.get("replyToEventId") && !AppState.get("editingEventId")) armReply(held.quote);
+  return true;
 }

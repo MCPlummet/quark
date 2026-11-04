@@ -23,7 +23,7 @@ import {
 } from "./context.js";
 import { appendRoomTimelineCache, bumpRoomActivity } from "./rooms.js";
 import { homeViewHandleMessage } from "./home.js";
-import { openThreadEvents } from "./threads.js";
+import { applyEditToOpenThread, openThreadEvents } from "./threads.js";
 
 /**
  * Record a live event everywhere that tracks a room's recent history, whether
@@ -119,9 +119,14 @@ export function renderLiveEvent(event: TimelineEvent, timeline: Timeline, thread
       event.body,
       event.formatted_body ?? undefined,
     );
+    // …and in the thread panel, whose header stands in for the root's row.
+    applyEditToOpenThread(event.relates_to_event_id, event.body, event.formatted_body ?? undefined);
     // An edit can introduce custom (MSC2545) emoji that were not in the
     // original body — resolve their mxc:// srcs like the append path.
-    if (event.formatted_body) resolveInlineEmojiForTimeline(timeline);
+    if (event.formatted_body) {
+      resolveInlineEmojiForTimeline(timeline);
+      resolveInlineEmojiForTimeline(threadView);
+    }
     return true;
   }
 

@@ -445,6 +445,20 @@ export class ThreadView {
     if (img) img.src = dataUrl;
   }
 
+  /** Apply an edit to a text row (the root included), buffer and DOM alike, as
+   *  Timeline's `updateMessageBody` does. */
+  updateMessageBody(eventId: string, body: string, htmlBody?: string): void {
+    const msg = this._items().find((m) => m.id === eventId);
+    if (!msg || (msg.type ?? "text") !== "text") return;
+    msg.body = body;
+    msg.htmlBody = htmlBody;
+    const bodyEl = this.getMessageEl(eventId)?.querySelector<HTMLElement>(":scope > .thread-view__message-body");
+    if (!bodyEl) return;
+    bodyEl.replaceChildren();
+    if (htmlBody) renderFormattedBody(bodyEl, htmlBody);
+    else appendLinkifiedText(bodyEl, body);
+  }
+
   updateMessageReactions(eventId: string, reactions: ReactionGroup[]): void {
     const msg = this._items().find((m) => m.id === eventId);
     const el = this.getMessageEl(eventId);
