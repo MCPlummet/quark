@@ -752,7 +752,8 @@ unfolds in the gap, with everything else greyed back:
   the thread, the banner's `[x]` — and `Esc` — first cancel that reply (back
   to "replying in thread"), and a second press closes the thread. In vim mode
   the `Esc` that leaves Insert or Visual inside a thread only changes mode
-  (`escapeRunsPanelClose`): opening a thread lands in Insert, so otherwise its
+  (the panel registers `closeFromNormalOnly`; see `escapeRunsPanelClose`):
+  opening a thread lands in Insert, so otherwise its
   rows could never be reached, and a reflexive `Esc` mid-reply would retarget
   the draft at the room.
 - **Replying.** A reply to one of the thread's messages (its root included) —
@@ -803,7 +804,14 @@ unfolds in the gap, with everything else greyed back:
   registered nav — `j`/`k`/`gg`/`G` move within it, `k` from the top of the
   composer lands on its newest reply, `nav-down` past it drops into the
   composer. The dimmed side columns stay clickable: they are navigation, and
-  navigating away closes the thread.
+  navigating away closes the thread. What sets a panel apart is declared in
+  its registration (`PanelNavCallbacks` in `state.ts`), not asked of its
+  name at each key: `closeFromNormalOnly`, `composeBelow`, and which message
+  actions it supports. Message actions (`r`, `y`, `dd`, reacting) act on the
+  active panel's selection when it holds messages, else the timeline's; edit,
+  text select and the image viewer need the panel's `selectedMessage`, which
+  the thread panel leaves out. Our own reply still being sent is never a
+  selection message actions see — it has no event yet.
 - **Freezing the room.** `ThreadView` is mounted inside `.timeline-wrap`
   beside the scroller — never inside it. Its backdrop takes pointer, wheel and
   touch over the room, and `.quark-layout--thread-focus .timeline` drops the

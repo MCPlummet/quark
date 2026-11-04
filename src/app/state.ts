@@ -62,7 +62,23 @@ export type StateChangeListener<K extends StateChangeKey = StateChangeKey> = (
 
 // ── Panel nav callback registry ──────────────────────────────────────────────
 
-interface PanelNavCallbacks {
+/** What message actions need of a selected message beyond its ID. */
+export interface SelectedMessage {
+  id: string;
+  body: string;
+  isOwn?: boolean;
+  type?: string;
+  mediaUrl?: string;
+  mediaAlt?: string;
+}
+
+/**
+ * A panel's part in keyboard handling. What sets a panel apart — Esc, the
+ * compose box below it, which message actions it supports — is declared here
+ * rather than asked of its name at each key: a growing set of "is this the
+ * thread?" checks in keyboard.ts was the alternative.
+ */
+export interface PanelNavCallbacks {
   /** Move selection down. May return true if it moved / false at the bottom
    *  boundary, so the caller can hand focus to a vertical neighbour (#15). */
   navDown: () => void | boolean;
@@ -76,9 +92,20 @@ interface PanelNavCallbacks {
   focusActive?: () => void;
   /** Clear selection / cancel reply / close thread for this panel. No-op if absent. */
   close?: () => void;
-  /** The message this panel has selected, for message actions (r, e, y, dd).
-   *  Absent on panels that don't hold messages. */
+  /** In vim mode, Esc runs `close` only from Normal: the Esc that leaves
+   *  Insert or Visual just changes mode (see `escapeRunsPanelClose`). */
+  closeFromNormalOnly?: boolean;
+  /** At its last item, nav-down carries on into the compose box below (#15). */
+  composeBelow?: boolean;
+  /** The message this panel has selected, for message actions (r, y, dd, and
+   *  reacting). Absent on panels that don't hold messages. */
   selectedMessageId?: () => string | null;
+  /** The selected message, for the actions that need more than its ID: edit,
+   *  text select (o) and the image viewer (Enter). A panel whose messages
+   *  those don't apply to leaves it out, and they do nothing there. */
+  selectedMessage?: () => SelectedMessage | null;
+  /** The selected message's body element, for text select (o). */
+  selectedBodyElement?: () => HTMLElement | null;
 }
 
 // ── AppState class ───────────────────────────────────────────────────────────
@@ -195,14 +222,19 @@ class AppStateManager {
     this._panelNavCallbacks.get(this._state.activePanel)?.close?.();
   }
 
+  /** The active panel's registration, if it has one. */
+  activePanelNav(): Readonly<PanelNavCallbacks> | undefined {
+    return this._panelNavCallbacks.get(this._state.activePanel);
+  }
+
   /**
-   * The message selected in the active panel, `null` if it holds messages but
-   * none is selected, or `undefined` if the active panel holds no messages at
-   * all (the caller then falls back to the timeline's selection, so `r` from
-   * the room list still replies to the message selected in the timeline).
+   * The panel message actions act on: the active panel when it holds messages,
+   * else the timeline — so `r` from the room list still replies to the message
+   * selected in the timeline.
    */
-  selectedMessageId(): string | null | undefined {
-    return this._panelNavCallbacks.get(this._state.activePanel)?.selectedMessageId?.();
+  messagePanelNav(): Readonly<PanelNavCallbacks> | undefined {
+    const active = this.activePanelNav();
+    return active?.selectedMessageId ? active : this._panelNavCallbacks.get("timeline");
   }
 
   // ── User status cache ─────────────────────────────────────────────────────

@@ -182,6 +182,18 @@ describe("ThreadView", () => {
       view.close();
       expect(view.selectedMessageId).toBeNull();
     });
+
+    // A reply still being sent has no event to react to or redact (its row
+    // has no action bar for that reason), but the keyboard could still select
+    // it and `e` / `dd` sent its placeholder ID to the server.
+    it("offers message actions no event for our reply still being sent", () => {
+      view.appendReply(msg({ id: "local-thread-1", isOwn: true, pending: true }));
+      view.selectLast();
+      expect(view.selectedMessageId).toBe("local-thread-1");
+      expect(view.selectedEventId).toBeNull();
+      view.selectPrev();
+      expect(view.selectedEventId).toBe("$b");
+    });
   });
 
   it("promotes a provisional row to its real ID and gives it actions", () => {

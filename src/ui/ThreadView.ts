@@ -516,6 +516,14 @@ export class ThreadView {
     return this._items()[this._selectedIndex]?.id ?? null;
   }
 
+  /** The selected message's event, for message actions — null for none, and
+   *  for our own reply still being sent: there is no event yet to react to,
+   *  reply to or redact, which is why its row has no action bar either. */
+  get selectedEventId(): string | null {
+    const id = this.selectedMessageId;
+    return id && !isProvisional(id) ? id : null;
+  }
+
   /** Move down. False at the newest reply, so the caller can hand focus to
    *  the compose box below — as the timeline does (#15). */
   selectNext(): boolean {
