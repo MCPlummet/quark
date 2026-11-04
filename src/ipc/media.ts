@@ -1,7 +1,7 @@
 // Media IPC calls
 
 import { invoke } from "./invoke.js";
-import { inSendOrder } from "./send_order.js";
+import { afterEarlierSends } from "./send_order.js";
 import type { ClipboardFiles, MediaDownload, MessageTarget, SentMessage, UrlPreview } from "./types.js";
 
 export type { MediaDownload, MessageTarget, SentMessage, UrlPreview };
@@ -154,7 +154,7 @@ export async function uploadMedia(filePath: string): Promise<string> {
 export async function sendFile(
   send: AttachmentSend & { fileSize?: number },
 ): Promise<SentMessage> {
-  return inSendOrder(send.roomId, () => invoke<SentMessage>("send_file", {
+  return afterEarlierSends(send.roomId, () => invoke<SentMessage>("send_file", {
     ...attachmentArgs(send),
     fileSize: send.fileSize ?? null,
   }));
@@ -205,7 +205,7 @@ export async function sendVideo(
     fileSize?: number;
   },
 ): Promise<SentMessage> {
-  return inSendOrder(send.roomId, () => invoke<SentMessage>("send_video", {
+  return afterEarlierSends(send.roomId, () => invoke<SentMessage>("send_video", {
     ...attachmentArgs(send),
     width: send.width ?? null,
     height: send.height ?? null,
@@ -335,7 +335,7 @@ export async function openMediaExternally(
  * `:shortcode:` (#84).
  */
 export async function sendPastedImage(send: AttachmentSend): Promise<SentMessage> {
-  return inSendOrder(send.roomId, () => invoke<SentMessage>("send_pasted_image", attachmentArgs(send)));
+  return afterEarlierSends(send.roomId, () => invoke<SentMessage>("send_pasted_image", attachmentArgs(send)));
 }
 
 // ─── Attachment upload progress ──────────────────────────────────────────────

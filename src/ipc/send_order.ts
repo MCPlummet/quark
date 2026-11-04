@@ -25,3 +25,16 @@ export function inSendOrder<T>(roomId: string, send: () => Promise<T>): Promise<
   });
   return run;
 }
+
+/**
+ * Run `send` once every send queued for `roomId` before it has finished, but
+ * without holding up any queued after it. For sends whose slow part comes
+ * before their event: an attachment's upload (minutes, for a large video) or a
+ * GIF's download (which nothing times out). Queued with {@link inSendOrder},
+ * either held every message typed after it until it finished — or for good.
+ * It still lands after what was sent before it; what is typed during the upload
+ * goes out meanwhile, as it did before sends were queued.
+ */
+export function afterEarlierSends<T>(roomId: string, send: () => Promise<T>): Promise<T> {
+  return (tails.get(roomId) ?? Promise.resolve()).then(send);
+}

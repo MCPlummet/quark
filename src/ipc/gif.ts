@@ -1,7 +1,7 @@
 // GIF search IPC calls
 
 import { invoke } from "./invoke.js";
-import { inSendOrder } from "./send_order.js";
+import { afterEarlierSends } from "./send_order.js";
 import type { GifResult } from "./types.js";
 import type { MessageTarget } from "./types.js";
 
@@ -48,7 +48,7 @@ export async function sendGif(
   height: number,
   target: MessageTarget = {},
 ): Promise<string> {
-  return inSendOrder(roomId, () => invoke<string>("send_gif", {
+  return afterEarlierSends(roomId, () => invoke<string>("send_gif", {
     roomId,
     gifUrl,
     title,

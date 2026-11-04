@@ -1212,13 +1212,16 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       cleartext; a thread's `is_falling_back` pointer is not a reply. Clicking
       the banner jumps to the original — scrolling if loaded, else loading its
       context, else opening its thread if it is a thread reply
-- [x] Sending in order — a room's messages (text, thread replies, attachments,
-      stickers, GIFs) go out one at a time, in the order they were sent
-      (`src/ipc/send_order.ts`). Sent concurrently, they were scrambled by the
-      homeserver's rate limit: Synapse allows a burst of ten events and one every
-      few seconds after, answering the rest with 429s that matrix-sdk retries
-      each on its own, so they landed in whichever order their retries won.
-      Reactions are not queued — their order carries no meaning
+- [x] Sending in order — a room's messages (text, thread replies, stickers) go
+      out one at a time, in the order they were sent (`src/ipc/send_order.ts`).
+      Sent concurrently, they were scrambled by the homeserver's rate limit:
+      Synapse allows a burst of ten events and one every few seconds after,
+      answering the rest with 429s that matrix-sdk retries each on its own, so
+      they landed in whichever order their retries won. Attachments and GIFs
+      wait for the sends before them but hold up none after: their slow part is
+      the upload (or the GIF's download), and queued like a message one held
+      every message typed after it until the upload finished. Reactions are not
+      queued — their order carries no meaning
 - [x] Reactions (m.annotation) — Unicode + custom emoji
 - [x] Message editing & redaction — an edit re-runs the outgoing formatter, so
       `m.new_content` keeps the HTML `formatted_body` and custom emoji survive
