@@ -329,9 +329,10 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "get_thread_timeline": {
       // Root plus replies, oldest first — the backend's shape.
       const root = args?.threadRootEventId as string ?? "";
-      return MOCK_TIMELINE
+      const events = MOCK_TIMELINE
         .filter((e) => e.event_id === root || e.thread_root === root)
         .sort((a, b) => a.timestamp - b.timestamp);
+      return { events, complete: true };
     }
     case "create_room": {
       const opts = args?.options as { name?: string; invite?: string[]; is_direct?: boolean } | undefined;

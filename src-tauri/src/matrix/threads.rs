@@ -1,5 +1,7 @@
 use crate::matrix::timeline::{convert_raw_message_like, TimelineEvent};
+use futures_util::future::join_all;
 use matrix_sdk::{
+    config::RequestConfig,
     room::MessagesOptions,
     ruma::{
         api::{client::relations::get_relating_events_with_rel_type, Direction},
@@ -112,6 +114,16 @@ const THREAD_PAGE_SIZE: u32 = 100;
 /// anything the panel is meant to hold.
 const MAX_THREAD_PAGES: usize = 50;
 
+/// A thread as loaded for the panel: the root (when it could be read), then its
+/// replies oldest first. `complete` is false when not all of it could be read
+/// — a page kept failing, or the thread runs past `MAX_THREAD_PAGES` — and the
+/// replies are then the newest ones, since pages are read newest first.
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadTimeline {
+    pub events: Vec<TimelineEvent>,
+    pub complete: bool,
+}
+
 /// Get the full timeline of a thread (root + replies), oldest first.
 ///
 /// The replies are the root's `m.thread` relations, read page by page to the
@@ -122,7 +134,7 @@ pub async fn get_thread_timeline(
     client: &Client,
     room_id: &str,
     thread_root_event_id: &str,
-) -> Result<Vec<TimelineEvent>, String> {
+) -> Result<ThreadTimeline, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let root_id = EventId::parse(thread_root_event_id)
         .map_err(|e| format!("Invalid event ID: {e}"))?;
@@ -131,10 +143,15 @@ pub async fn get_thread_timeline(
         .get_room(&room_id)
         .ok_or_else(|| format!("Room {} not found", room_id))?;
 
-    // The root is not one of its own relations. A root that cannot be read
-    // (redacted, before our history) still leaves a thread to show; the
-    // frontend draws the root it already has.
-    let root = match room.event(&root_id, None).await {
+    // The root is not one of its own relations, so it is fetched on its own —
+    // alongside the first page rather than ahead of it.
+    let (root, first) = tokio::join!(
+        room.event(&root_id, None),
+        thread_page(client, &room, &root_id, None),
+    );
+    // A root that cannot be read (redacted, before our history) still leaves a
+    // thread to show; the frontend draws the root it already has.
+    let root = match root {
         Ok(ev) => Some(ev.raw().clone()),
         Err(e) => {
             warn!(thread_root = %root_id, "Could not fetch thread root: {e}");
@@ -142,31 +159,85 @@ pub async fn get_thread_timeline(
         }
     };
 
-    let mut replies = Vec::new();
-    let mut from = None;
-    for _ in 0..MAX_THREAD_PAGES {
-        let mut request = get_relating_events_with_rel_type::v1::Request::new(
-            room_id.clone(),
-            root_id.clone(),
-            RelationType::Thread,
-        );
-        request.dir = Direction::Backward;
-        request.from = from.take();
-        request.limit = Some(UInt::from(THREAD_PAGE_SIZE));
-        let page = client
-            .send(request, None)
-            .await
-            .map_err(|e| format!("Failed to fetch thread: {e}"))?;
-        for event in page.chunk {
-            replies.push(decrypted(&room, event.cast()).await);
-        }
-        match page.next_batch {
-            Some(token) => from = Some(token),
-            None => break,
-        }
+    let (replies, complete) = read_thread_pages(
+        first,
+        |from| thread_page(client, &room, &root_id, Some(from)),
+        MAX_THREAD_PAGES,
+    )
+    .await
+    .map_err(|e| format!("Failed to fetch thread: {e}"))?;
+    if !complete {
+        warn!(thread_root = %root_id, replies = replies.len(), "Thread not read to its end; showing its newest replies");
     }
 
-    Ok(assemble_thread(root, replies, thread_root_event_id))
+    Ok(ThreadTimeline { events: assemble_thread(root, replies, thread_root_event_id), complete })
+}
+
+/// One page of a listing, as `read_thread_pages` walks it.
+struct Page<T> {
+    items: Vec<T>,
+    next: Option<String>,
+}
+
+/// One page of the root's `m.thread` relations, newest first, decrypted where
+/// we hold the keys. Decryption runs across the page at once rather than one
+/// reply after another. The request retries a network failure a few times:
+/// matrix-sdk on its own retries a rate limit but not a timeout.
+async fn thread_page(
+    client: &Client,
+    room: &Room,
+    root_id: &EventId,
+    from: Option<String>,
+) -> Result<Page<Raw<AnySyncTimelineEvent>>, matrix_sdk::HttpError> {
+    let mut request = get_relating_events_with_rel_type::v1::Request::new(
+        room.room_id().to_owned(),
+        root_id.to_owned(),
+        RelationType::Thread,
+    );
+    request.dir = Direction::Backward;
+    request.from = from;
+    request.limit = Some(UInt::from(THREAD_PAGE_SIZE));
+    let page = client.send(request, Some(RequestConfig::short_retry())).await?;
+    let items = join_all(page.chunk.into_iter().map(|event| decrypted(room, event.cast()))).await;
+    Ok(Page { items, next: page.next_batch })
+}
+
+/// Walk a paged listing from its `first` page to the end, or as far as it
+/// goes: `(items, true)` for all of it; `(items, false)` for the pages read
+/// before one failed, or before `max_pages` ran out. Only a failed first page
+/// is an error — one failed page used to throw away every page already read,
+/// and the frontend closed the thread.
+async fn read_thread_pages<T, E, F, Fut>(
+    first: Result<Page<T>, E>,
+    mut fetch: F,
+    max_pages: usize,
+) -> Result<(Vec<T>, bool), E>
+where
+    E: std::fmt::Display,
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Page<T>, E>>,
+{
+    let mut items = Vec::new();
+    let mut next = first;
+    let mut pages_read = 0;
+    let complete = loop {
+        let page = match next {
+            Ok(page) => page,
+            Err(e) if pages_read == 0 => return Err(e),
+            Err(e) => {
+                warn!(pages_read, "A thread page failed: {e}");
+                break false;
+            }
+        };
+        pages_read += 1;
+        items.extend(page.items);
+        match page.next {
+            None => break true,
+            Some(_) if pages_read >= max_pages => break false,
+            Some(token) => next = fetch(token).await,
+        }
+    };
+    Ok((items, complete))
 }
 
 /// The event as its sender wrote it, when we hold the key; otherwise the
@@ -283,6 +354,48 @@ pub async fn send_thread_reply(
 
 #[cfg(test)]
 mod tests {
+    // ── Walking the pages ────────────────────────────────────────────────────
+
+    fn page(items: &[u32], next: Option<&str>) -> Result<Page<u32>, String> {
+        Ok(Page { items: items.to_vec(), next: next.map(str::to_owned) })
+    }
+
+    /// Serves later pages by token: "p2" → [3, 4] then "p3", and so on.
+    fn pages(token: String) -> std::future::Ready<Result<Page<u32>, String>> {
+        std::future::ready(match token.as_str() {
+            "p2" => page(&[3, 4], Some("p3")),
+            "p3" => page(&[5], None),
+            "bad" => Err("timed out".to_owned()),
+            other => panic!("unexpected token {other}"),
+        })
+    }
+
+    #[tokio::test]
+    async fn reads_every_page_to_the_end() {
+        let read = read_thread_pages(page(&[1, 2], Some("p2")), pages, 50).await.unwrap();
+        assert_eq!(read, (vec![1, 2, 3, 4, 5], true));
+    }
+
+    // One failed page used to throw away every page already read, and the
+    // frontend closed the thread.
+    #[tokio::test]
+    async fn keeps_the_pages_read_before_one_fails() {
+        let read = read_thread_pages(page(&[1, 2], Some("bad")), pages, 50).await.unwrap();
+        assert_eq!(read, (vec![1, 2], false));
+    }
+
+    #[tokio::test]
+    async fn fails_when_the_first_page_does() {
+        let read = read_thread_pages(Err::<Page<u32>, _>("offline".to_owned()), pages, 50).await;
+        assert_eq!(read, Err("offline".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn stops_at_the_page_limit_and_says_so() {
+        let read = read_thread_pages(page(&[1, 2], Some("p2")), pages, 2).await.unwrap();
+        assert_eq!(read, (vec![1, 2, 3, 4], false));
+    }
+
     use super::*;
     use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
 

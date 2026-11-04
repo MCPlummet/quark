@@ -607,7 +607,8 @@ body.quark-mobile .room-list__header-btn {
   padding: 4px 0 2px;
 }
 
-.thread-view__status {
+.thread-view__status,
+.thread-view__notice {
   padding: 10px;
   color: var(--msg-timestamp);
   font-family: var(--font-family);

@@ -2227,7 +2227,7 @@ pub async fn get_thread_timeline(
     state: State<'_, MatrixState>,
     room_id: String,
     thread_root_event_id: String,
-) -> Result<Vec<TimelineEvent>, String> {
+) -> Result<crate::matrix::threads::ThreadTimeline, String> {
     let client = get_client(&state)?;
     crate::matrix::threads::get_thread_timeline(&client, &room_id, &thread_root_event_id).await
 }

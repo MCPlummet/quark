@@ -388,6 +388,14 @@ export interface SpaceChild {
 // ─── Threads ──────────────────────────────────────────────────────────────────
 
 /** A thread root message — matches matrix::threads::ThreadRoot */
+/** A thread as loaded for the panel: the root (when it could be read), then
+ *  its replies oldest first. `complete` is false when not all of it could be
+ *  read, and the replies are then the newest ones. */
+export interface ThreadTimeline {
+  events: TimelineEvent[];
+  complete: boolean;
+}
+
 export interface ThreadRoot {
   event_id: string;
   sender: string;

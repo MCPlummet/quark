@@ -11,7 +11,7 @@ import { AppState } from "../state.js";
 import { isMobile, closeDrawer } from "../mobile.js";
 
 import { getEvent, getThreadTimeline, sendThreadReplyIpc } from "../../ipc/index.js";
-import type { TimelineEvent } from "../../ipc/types.js";
+import type { ThreadTimeline, TimelineEvent } from "../../ipc/types.js";
 import type { ThreadMessageData, ThreadRootData } from "../../ui/ThreadView.js";
 
 import { showError } from "../../ui/NotificationToast.js";
@@ -163,9 +163,9 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
   refreshComposeBanner();
   restoreUnsentReply(eventId);
 
-  let events: TimelineEvent[];
+  let loaded: ThreadTimeline;
   try {
-    events = await getThreadTimeline(roomId, eventId);
+    loaded = await getThreadTimeline(roomId, eventId);
   } catch (err) {
     // Leave the thread entirely. Keeping `threadRootEventId` set with nothing
     // on screen is how a failed load used to swallow every later message.
@@ -175,6 +175,7 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
   }
   // Closed, switched or the room changed while loading.
   if (AppState.get("threadRootEventId") !== eventId || AppState.get("currentRoomId") !== roomId) return;
+  const { events, complete } = loaded;
 
   // The backend returns the root along with its replies; it is the panel's
   // header, not one of the replies (it used to be drawn twice and counted).
@@ -197,14 +198,16 @@ export async function openThread(eventId: string, opts: { focusEventId?: string 
   }
   threadView.setReplies(
     replies.map((e) => timelineEventToThreadMessage(e, _threadEvents, AppState.get("currentTimeline"))),
+    { olderMissing: !complete },
   );
   // Ours still on their way, after the ones that have landed.
   for (const sending of _sendingReplies.values()) {
     if (sending.rootId === eventId) threadView.appendReply(sending.msg);
   }
   // The whole thread is here now; the room only ever counted the replies in
-  // its loaded window.
-  timeline.setThreadReplies(eventId, replies.map((e) => e.event_id));
+  // its loaded window. Not so when only its newest replies could be read: the
+  // room's count, from the server's summary, is then the better number.
+  if (complete) timeline.setThreadReplies(eventId, replies.map((e) => e.event_id));
   _downloadMessageImages(events, {
     updateMessageMedia: (id: string, url: string) => threadView.updateMessageMedia(id, url),
   });

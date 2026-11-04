@@ -17,8 +17,10 @@ const ipcSendMessage = vi.fn<
   (roomId: string, body: string, html?: string, replyTo?: string) => Promise<string>
 >();
 const getThumbnail = vi.fn();
+let threadComplete = true;
 vi.mock("../../ipc/index.js", () => ({
-  getThreadTimeline: (...a: [string, string]) => getThreadTimeline(...a),
+  // The tests fake the events; whether they are the whole thread is a switch.
+  getThreadTimeline: async (...a: [string, string]) => ({ events: await getThreadTimeline(...a), complete: threadComplete }),
   sendThreadReplyIpc: (...a: [string, string, string, string?, string?]) => sendThreadReplyIpc(...a),
   sendMessage: (...a: [string, string, string?, string?]) => ipcSendMessage(...a),
   getEvent: vi.fn(async () => null),
@@ -142,6 +144,7 @@ beforeEach(() => {
     currentTimeline: [ROOT_EV, MAIN_EV, T1],
   });
   getThreadTimeline.mockResolvedValue([ROOT_EV, T1, T2]);
+  threadComplete = true;
   sendThreadReplyIpc.mockResolvedValue("$sent-in-thread");
   ipcSendMessage.mockResolvedValue("$sent-in-room");
   mount();
@@ -167,6 +170,8 @@ describe("opening a thread", () => {
   it("draws the root once, as the header — not again as the first reply", async () => {
     await openThread("$root");
     expect(threadRowIds()).toEqual(["$t1", "$t2"]);
+    // Read to its end: no notice about missing replies.
+    expect(threadView.getElement().querySelector<HTMLElement>(".thread-view__notice")!.style.display).toBe("none");
   });
 
   // #131: "thread jumps to the top if you click to reply in a thread". Every
@@ -582,4 +587,20 @@ it("anchors the reaction picker to the thread's row of the root, not the room's"
   const anchor = quickReactPicker.show.mock.calls[0][1] as HTMLElement;
   expect(anchor).toBe(threadView.getMessageEl("$root"));
   expect(threadView.getElement().contains(anchor)).toBe(true);
+});
+
+// One failed /relations page used to throw away the whole thread, and the panel
+// closed. Now the replies that loaded — the newest — are shown, with a notice
+// above them, and the room keeps its count: a partial thread is not the whole.
+it("shows the newest replies of a thread it could not read to the end", async () => {
+  threadComplete = false;
+  timeline.setMessages([
+    { id: "$root", senderName: "Alice", timestamp: "2024-01-01T12:00:00Z", body: "the root", isThreadRoot: true, threadReplyCount: 900 },
+  ]);
+  await openThread("$root");
+  expect(threadRowIds()).toEqual(["$t1", "$t2"]);
+  const notice = threadView.getElement().querySelector<HTMLElement>(".thread-view__notice")!;
+  expect(notice.style.display).toBe("");
+  expect(notice.textContent).toMatch(/Older replies couldn't be loaded/);
+  expect(timeline.getMessageElementById("$root")!.querySelector(".message__thread-indicator")!.textContent).toBe("⌥ 900 replies");
 });

@@ -85,6 +85,9 @@ export class ThreadView {
   private _dividerEl: HTMLElement;
   private _listEl: HTMLElement;
   private _statusEl: HTMLElement;
+  /** Says the oldest replies are missing, above the ones that loaded. */
+  private _noticeEl: HTMLElement;
+  private _olderMissing = false;
 
   private _root: ThreadRootData | null = null;
   private _messages: ThreadMessageData[] = [];
@@ -171,6 +174,11 @@ export class ThreadView {
     this._dividerEl.className = "thread-view__divider";
     this._dividerEl.setAttribute("role", "separator");
     this._scrollEl.appendChild(this._dividerEl);
+
+    this._noticeEl = document.createElement("div");
+    this._noticeEl.className = "thread-view__notice";
+    this._noticeEl.style.display = "none";
+    this._scrollEl.appendChild(this._noticeEl);
 
     this._listEl = document.createElement("div");
     this._listEl.className = "thread-view__timeline";
@@ -312,6 +320,7 @@ export class ThreadView {
     this._rootEl.replaceChildren(this._buildRow(root, true));
     this._listEl.replaceChildren();
     this._loading = true;
+    this._olderMissing = false;
     this._renderChrome();
     this._el.style.display = "";
     this._split?.open(root.id);
@@ -319,9 +328,12 @@ export class ThreadView {
 
   /** Replace the replies (the thread's own events, root excluded). Scrolls to
    *  the newest reply — a thread is read from its latest message, and opening
-   *  it at the oldest left a long one scrolled to the top (#131). */
-  setReplies(replies: ThreadMessageData[]): void {
+   *  it at the oldest left a long one scrolled to the top (#131).
+   *  `olderMissing`: only the newest replies could be loaded, and the panel
+   *  says so above them. */
+  setReplies(replies: ThreadMessageData[], opts: { olderMissing?: boolean } = {}): void {
     if (!this._root) return;
+    this._olderMissing = opts.olderMissing ?? false;
     // A reply that arrived live while the thread was loading is kept: the
     // fetch may have been answered before it was sent.
     const live = this._messages.filter((m) => !replies.some((r) => r.id === m.id));
@@ -399,6 +411,7 @@ export class ThreadView {
     this._messages = [];
     this._selectedIndex = -1;
     this._loading = false;
+    this._olderMissing = false;
     const hide = () => {
       this._el.classList.remove("thread-view--closing");
       this._rootEl.replaceChildren();
@@ -623,6 +636,10 @@ export class ThreadView {
         : "No replies yet — what you send now starts the thread.";
     this._statusEl.textContent = status;
     this._statusEl.style.display = status ? "" : "none";
+    this._noticeEl.textContent = this._olderMissing
+      ? "Older replies couldn't be loaded — reopen the thread to try again."
+      : "";
+    this._noticeEl.style.display = this._olderMissing ? "" : "none";
   }
 
   private _announceUnresolved(msgs: readonly ThreadMessageData[]): void {

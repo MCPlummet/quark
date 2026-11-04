@@ -1224,8 +1224,13 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       banner, fallback stripped. The thread timeline is the root plus its
       `m.thread` relations (`/relations`, paged to the end), in server order,
       undecryptable replies kept as such. It used to be the last 100 room
-      events filtered to the thread, which lost every reply further back (see
-      *Threads* under UI Design for the interaction model)
+      events filtered to the thread, which lost every reply further back. The
+      root is fetched alongside the first page and each page is decrypted at
+      once; a page retries a network failure a few times. If one still fails
+      (or the thread runs past 50 pages), the pages already read — the newest
+      replies — are shown with a notice above them, and the room keeps its
+      count; only a failed first page fails the load (see *Threads* under UI
+      Design for the interaction model)
 - [x] Rich replies (m.in_reply_to) — every reply gets its banner, even when the
       original is outside the loaded window: the preview is looked up in the
       page, then the whole buffer, then a cache of fetched originals, and

@@ -2,7 +2,7 @@
 
 import { invoke } from "./invoke.js";
 import { inSendOrder } from "./send_order.js";
-import type { TimelineEvent, ThreadRoot } from "./types.js";
+import type { ThreadRoot, ThreadTimeline } from "./types.js";
 
 export type { ThreadRoot };
 
@@ -15,14 +15,14 @@ export async function getThreadRoots(roomId: string): Promise<ThreadRoot[]> {
 }
 
 /**
- * Get the full timeline of a thread (root + replies).
- * Matches the Rust `get_thread_timeline` command.
+ * Get the full timeline of a thread (root + replies), and whether all of it
+ * could be read. Matches the Rust `get_thread_timeline` command.
  */
 export async function getThreadTimeline(
   roomId: string,
   threadRootEventId: string,
-): Promise<TimelineEvent[]> {
-  return invoke<TimelineEvent[]>("get_thread_timeline", {
+): Promise<ThreadTimeline> {
+  return invoke<ThreadTimeline>("get_thread_timeline", {
     roomId,
     threadRootEventId,
   });
