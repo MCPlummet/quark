@@ -919,7 +919,7 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Global        | `S`           | Set your presence status      |
 | Global        | `?`           | Open settings                 |
 | Timeline      | `r`           | Reply to selected message     |
-| Timeline      | `e`           | React to selected message     |
+| Timeline      | `e`           | React to selected message (opens the emoji picker) |
 | Timeline      | `t`           | Reply in thread (again: close)|
 | Timeline      | `dd`          | Redact own message            |
 | Timeline      | `E` / `c`     | Edit own message              |
@@ -937,7 +937,16 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Insert        | `Enter`       | Send (see send-key behaviour) |
 | Insert        | `:word:`      | Autocomplete :shortcode:      |
 | Picker        | `j/k/h/l`     | Navigate grid                 |
-| Picker        | `Enter`       | Select emoji/sticker/GIF      |
+| Picker        | `gg` / `G`    | First / last cell             |
+| Picker        | `Enter` / `o` | Select emoji/sticker/GIF      |
+| Picker        | `/`           | Focus the search field        |
+| Picker        | `[` / `]`     | Previous / next emoji category|
+| Picker        | `Tab`         | Search field → grid; from the grid, next tab (emoji ↔ sticker ↔ GIF) |
+| Picker        | `Shift-Enter` | Reactions: react with the typed text as-is |
+
+In the emoji picker's search field only its structural keys act (`Enter`,
+`Tab`/`↓`, `Esc`): every other key is typed, so a query can hold the letters
+the grid binds. See [Emoji Picker](#emoji-picker).
 
 Modifier chords are ordinary bindings: they resolve atomically rather than
 through the multi-key sequence grammar, and `Meta` folds onto `Ctrl` so a macOS
@@ -977,10 +986,11 @@ tmap k     scroll-down          " timeline: scroll down
 tmap l     scroll-up            " timeline: scroll up
 rmap k     room-next            " room list: next room
 rmap l     room-prev            " room list: prev room
-pmap k     picker-down          " picker: move down
-pmap l     picker-up            " picker: move up
-pmap j     picker-left          " picker: move left
-pmap ;     picker-right         " picker: move right
+pmap k     nav-down             " picker: move down
+pmap l     nav-up               " picker: move up
+pmap j     nav-left             " picker: move left
+pmap ;     nav-right            " picker: move right
+pmap }     picker-next-section  " picker: next emoji category (default ])
 
 " Multi-key sequences
 nmap gg    jump-top
@@ -1011,7 +1021,10 @@ set home_dm_limit=12          " chats shown on the Home canvas
 - `imap` — insert mode mapping
 - `tmap` — timeline-scoped mapping (normal mode, timeline focused)
 - `rmap` — room list-scoped mapping (normal mode, room list focused)
-- `pmap` — picker-scoped mapping (emoji/sticker/GIF picker)
+- `pmap` — picker-scoped mapping (emoji/sticker/GIF picker). Beyond the
+  `nav-*`, `jump-*`, `select` and `close` actions, pickers resolve
+  `picker-search` (`/`), `picker-prev-section` (`[`) and `picker-next-section`
+  (`]`)
 - `cmap` — command mode mapping
 - `vmap` — visual mode mapping
 - `nunmap`, `iunmap`, etc. — remove a mapping
@@ -1286,20 +1299,24 @@ Full compatibility with Cinny, FluffyChat, Nheko, and SchildiChat.
 - Packs distinguish emoji (`usage: ["emoticon"]`) from stickers (`usage: ["sticker"]`)
 
 **Sending custom emoji in messages:**
-- User types `:shortcode:` → autocomplete resolves from available packs
+- User types `:shortcode:` → autocomplete resolves from available packs; the
+  emoji picker inserts the same `:shortcode:` text
 - Sent as `formatted_body` HTML: `<img data-mx-emoticon height="32" src="mxc://..." alt=":shortcode:" title=":shortcode:" />`
 - Plain `body` contains `:shortcode:` as fallback
 - Format field: `org.matrix.custom.html`
 
 **Sending stickers:**
-- Sticker picker (keyboard-navigable grid) sourced from packs with `usage: ["sticker"]`
+- The emoji picker's Stickers tab (compose box only; keyboard-navigable grid) sourced from packs with `usage: ["sticker"]`
 - Sent as `m.sticker` event with `url` (mxc://), `body`, and `info` (mimetype, dimensions, thumbnail)
 - Rendered in timeline at larger size than emoji, standalone (not inline with text)
 
 **Custom emoji in reactions:**
-- Reaction key is `:shortcode:`
-- Client resolves the mxc:// URL from loaded packs for display
-- Falls back to text `:shortcode:` if pack not available
+- Reaction key is the emoji's `mxc://` URL — the convention MSC2545-aware
+  clients such as Cinny use
+- The chip resolves the image from the shared thumbnail cache; an mxc key whose
+  image is not loaded is downloaded for display
+- A custom emoji with no `mxc://` source (a pack storing a plain URL) reacts
+  with its `:shortcode:` as text
 
 **Custom emoji in replies:**
 - Reply preview renders custom emoji images inline
@@ -1332,6 +1349,71 @@ Discord-style integrated GIF search, accessible from insert mode or command bar.
 - Rust backend handles API calls to Klipy/Giphy (API keys stored in config)
 - Downloads selected GIF, uploads to homeserver via media API
 - Caches recent search results and thumbnails locally
+
+### Emoji Picker
+
+One picker serves both places an emoji is chosen: the compose box (`Ctrl-e`,
+`:emoji`, the compose bar's emoji button, `:stickers` for its Stickers tab) and
+reactions (`e`, the hover bar's and long-press sheet's **React**). There is one
+`EmojiPicker` instance; each opener hands it an `EmojiPickerContext`, and that
+interface is the complete list of what the two may differ in:
+
+| | Compose box | Reaction |
+| --- | --- | --- |
+| A pick | inserted at the caret: the glyph, or `:shortcode: ` for a custom emoji (the outgoing formatter turns it into `<img data-mx-emoticon>`) | sent as an `m.annotation`: the glyph, or the custom emoji's `mxc://` URL |
+| Tabs | Emoji, Stickers, GIF | Emoji only |
+| Free text | — | `Enter` on a query nothing matches, or `Shift-Enter` on any query, reacts with the text as typed (a reaction key may be any string) |
+| Desktop placement | docked above the compose bar | beside the message, flipped above it when there is no room below |
+
+Everything else is shared and lives in one place each: the emoji model in
+`emoji_catalog.ts`, the panel (search field, category bar, grid, keys) in
+`EmojiBrowser.ts`, and the room's custom emoji in `actions/custom_emoji.ts`,
+which `:shortcode` autocomplete reads too.
+
+**Why it is built this way.** The compose and reaction pickers were two
+components that had been "unified" more than once by copying logic across, and
+drifted apart each time. The compose picker built its entries from the emoji
+categories (keywords and aliases included) one category at a time; the reaction
+picker built its own list from the autocomplete table — one row per alias, so it
+needed a glyph dedupe and never matched an alias or a keyword — with its own
+category sets, its own custom-emoji loader keyed differently, and its own
+navigation. `emoji_picker.test.ts` and `EmojiPicker.test.ts` now open both
+contexts and require the same listing, the same search results and the same
+keyboard walk, and pin the context's fields, so a behaviour specific to one
+context has to be added to `EmojiPickerContext` on purpose.
+
+**Listing.** The grid scrolls through every section under its own header:
+*Common* (👍 👎 ❤️ 😂 🎉 🚀 👀 🤔 💯 ✅ 😮 😢, pinned in that order), then each
+custom pack of the room and the account (one section per pack, its first emoji
+as the category icon), then the built-in categories in Unicode order. Each glyph
+is listed once, compared with variation selectors stripped; the common ones also
+appear in their home category. The category bar jumps to a section and follows
+the scroll.
+
+**Search.** The query is split on whitespace and every term must match; a
+leading `:` or `/` and a trailing `:` are ignored, so `:joy:` and `joy` are one
+search. A term matches, best first: the primary shortcode exactly; an alias or
+the glyph exactly (variation selectors ignored either side); a CLDR keyword
+exactly; the start of a shortcode or alias; anywhere in one; the start of a
+keyword. An entry ranks by its worst-matching term, ties in listing order.
+Custom emoji match on shortcode (case-insensitively) and the words of their
+`body`. `Enter` in the field picks the first result, which is marked while the
+field has focus.
+
+**Keys.** The search field owns its typing: only `Enter`, `Tab`/`↓` (into the
+grid) and `Esc` (close) act there. In the grid every key resolves through
+`keymapManager.resolveKey(key, "picker")`, so `pmap` rebinds it: `nav-*` move
+by rows that respect the section headers (up off the first row returns to the
+search field), `jump-top`/`jump-bottom`, `select` (`Enter`, `o`),
+`picker-search` (`/`), `picker-prev-section`/`picker-next-section` (`[`/`]`) and
+`close`. `Tab` from the grid moves to the next tab in the compose box and back
+to the search field for a reaction; `Shift-Tab` returns to the search field.
+`Esc` closes the picker from anywhere in it.
+
+**Opening and mobile.** Both contexts open on the search field, so typing finds
+an emoji at once. In mobile mode both open as a bottom sheet with nothing
+focused that would raise the soft keyboard — the search field is a tap away —
+with larger cells and no key hint.
 
 ### Emoji Shortcode Preview
 
@@ -1884,8 +1966,11 @@ quark/
 │   │   ├── thread_split.ts   # Parts the room around the thread panel (paint only)
 │   │   ├── Reactions.ts      # Reaction bar
 │   │   ├── Input.ts          # Compose bar with mode indicator
-│   │   ├── EmojiPicker.ts    # Keyboard-navigable emoji/sticker picker
-│   │   ├── StickerPicker.ts  # Sticker grid browser
+│   │   ├── EmojiPicker.ts    # The emoji picker overlay (compose + reactions; sticker/GIF tabs)
+│   │   ├── EmojiBrowser.ts   # Its emoji panel: search, category bar, grid, keys
+│   │   ├── emoji_catalog.ts  # Emoji model: sections, dedupe, search, pick output
+│   │   ├── grid_nav.ts       # Up/down in a grid of sections
+│   │   ├── StickerPicker.ts  # Re-exports StickerEntry (the tab lives in EmojiPicker)
 │   │   ├── GifPicker.ts      # GIF search overlay
 │   │   ├── ShortcodePreview.ts # Inline emoji preview popup
 │   │   ├── MemberList.ts     # Room member sidebar
