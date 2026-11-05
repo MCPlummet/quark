@@ -1276,6 +1276,21 @@ permits acting on yourself, so a room where everyone sits at the default offers
 nothing — a button the homeserver will refuse is worse than no button, because
 the user cannot tell a permission problem from a bug.
 
+**Fields save themselves** (`src/ui/settings/commit_field.ts`) in the Settings
+tab and in space settings: a text field on Enter or when focus leaves it, a
+select as soon as it changes, each with its own status line underneath
+(unsaved / saving / saved / the error). Esc in an edited field undoes the edit;
+in an unedited one it closes the dialog. There used to be a `[save]` per section
+— three in this tab — and Enter did nothing, so a new nickname typed, "saved"
+with the nearest button (which belonged to the section above) and closed saved
+nothing and said nothing. The Access selects show the room's current join rule
+and history visibility (read from its state), where they used to show defaults
+and their `[save]` wrote both — so changing one could quietly change the other.
+Closing a dialog blurs its focused field first, so a pending edit commits even
+where clicking the close button does not take focus (macOS WebKit). The
+Permissions tab keeps one `[save]`: power levels are a batch you apply
+together.
+
 **Your name in this room** is your own `m.room.member` `displayname`, which
 starts as your global name and may differ per room (`:myroomnick` does the
 same). Clearing it writes the global name back rather than dropping the field —

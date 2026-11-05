@@ -4771,6 +4771,51 @@ body.quark-mobile .profile-edit-dialog__panel {
 }
 
 /* Muted explanatory line under a setting (status readouts, OS pointers). */
+/* A field that saves itself (settings/commit_field.ts) and the line under it
+ * saying what is happening: unsaved, saving, saved, or why it failed. */
+.settings-dialog__field .settings-dialog__text-input,
+.settings-dialog__field .settings-dialog__select {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-dialog__field-status {
+  height: 1.3em;
+  line-height: 1.3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 0 0 110px;
+  font-size: calc(var(--font-size) - 2px);
+  color: var(--roomlist-muted);
+}
+
+.settings-dialog__field-status--dirty {
+  color: var(--accent-secondary);
+}
+
+.settings-dialog__field-status--saved {
+  color: var(--accent-success);
+}
+
+.settings-dialog__field-status--error {
+  color: var(--accent-error);
+}
+
+body.quark-mobile .settings-dialog__field-status {
+  padding-left: 0;
+}
+
+/* An error can be longer than one line; let it wrap rather than hide. */
+.settings-dialog__field-status--error {
+  height: auto;
+  white-space: normal;
+}
+
+.settings-dialog__hint--lead {
+  margin-bottom: 10px;
+}
+
 .settings-dialog__hint {
   color: var(--roomlist-muted);
   font-size: calc(var(--font-size) - 2px);

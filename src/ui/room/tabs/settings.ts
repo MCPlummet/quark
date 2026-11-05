@@ -11,44 +11,81 @@ import {
   setRoomTopic,
   setRoomJoinRule,
   setRoomHistoryVisibility,
+  getRoomStateEvents,
 } from "../../../ipc/room_settings.js";
 import { getRoomNickname } from "../../../ipc/rooms.js";
-import { showError } from "../../NotificationToast.js";
 import { applyLocalRoomMeta, setRoomDirectness, setOwnRoomNickname } from "../../../app/actions.js";
+import { commitSelectRow, commitTextRow } from "../../settings/commit_field.js";
+
+const JOIN_RULES: Array<[string, string]> = [
+  ["public", "Public — anyone can join"],
+  ["invite", "Invite — require invitation"],
+  ["knock", "Knock — users request to join"],
+  ["private", "Private — closed"],
+];
+
+const HISTORY: Array<[string, string]> = [
+  ["world_readable", "World readable — anyone can read"],
+  ["shared", "Shared — visible since join"],
+  ["invited", "Invited — visible since invite"],
+  ["joined", "Joined — visible since join"],
+];
+
+/** A state event's content field, from the raw events the debug viewer also reads. */
+function stateField(
+  events: Array<{ event_type: string; state_key: string; content_json: string }>,
+  type: string,
+  field: string,
+): string | null {
+  const ev = events.find((e) => e.event_type === type && e.state_key === "");
+  if (!ev) return null;
+  try {
+    const value = (JSON.parse(ev.content_json) as Record<string, unknown>)[field];
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 export const settingsTab: RoomTab = {
   id: "settings",
   label: "Settings",
-  build(ctx) {
+  async build(ctx) {
     const { content, controls, room, roomId } = ctx;
+
+    // Every field here saves itself (commit_field.ts): text on Enter or when
+    // you leave it, choices as soon as they change. There used to be a [save]
+    // per section, and Enter did nothing.
+    const how = document.createElement("div");
+    how.className = "settings-dialog__hint settings-dialog__hint--lead";
+    how.textContent = "Changes save on Enter or when you leave a field · Esc undoes an edit";
+    content.appendChild(how);
 
     // ── Identity ─────────────────────────────────────────────────────────
     content.appendChild(controls.sectionTitle("Identity"));
 
-    const initial = { name: room?.name ?? "", topic: room?.topic ?? "" };
-    let draft = { ...initial };
+    content.appendChild(commitTextRow({
+      label: "name",
+      value: room?.name ?? "",
+      placeholder: "Room name",
+      ariaLabel: "Room name",
+      save: async (v) => {
+        await setRoomName(roomId, v.trim());
+        // Reflect it in the cache + header now rather than on the next sync.
+        applyLocalRoomMeta(roomId, { name: v.trim() });
+      },
+    }).row);
 
-    content.appendChild(
-      controls.textRow("name", draft.name, "Room name", (v) => { draft = { ...draft, name: v }; }),
-    );
-    content.appendChild(
-      controls.textRow("topic", draft.topic, "Room topic", (v) => { draft = { ...draft, topic: v }; }),
-    );
-
-    const identityActions = document.createElement("div");
-    identityActions.className = "settings-dialog__actions";
-    identityActions.appendChild(controls.saveButton(async () => {
-      const tasks: Promise<void>[] = [];
-      if (draft.name !== initial.name) tasks.push(setRoomName(roomId, draft.name));
-      if (draft.topic !== initial.topic) tasks.push(setRoomTopic(roomId, draft.topic));
-      await Promise.all(tasks);
-      // Reflect the change in the cache + header immediately rather than
-      // waiting for the next sync round-trip.
-      if (tasks.length > 0) {
-        applyLocalRoomMeta(roomId, { name: draft.name, topic: draft.topic });
-      }
-    }));
-    content.appendChild(identityActions);
+    content.appendChild(commitTextRow({
+      label: "topic",
+      value: room?.topic ?? "",
+      placeholder: "Room topic",
+      ariaLabel: "Room topic",
+      save: async (v) => {
+        await setRoomTopic(roomId, v.trim());
+        applyLocalRoomMeta(roomId, { topic: v.trim() });
+      },
+    }).row);
 
     // ── Your name in this room ───────────────────────────────────────────
     // Your own member event's display name: starts as your global name, and
@@ -56,33 +93,17 @@ export const settingsTab: RoomTab = {
     // with no argument does the same).
     content.appendChild(controls.sectionTitle("Your name in this room"));
 
-    let nickDraft = "";
-    const nickRow = controls.textRow("nickname", "", "your global display name", (v) => { nickDraft = v; });
-    const nickInput = nickRow.querySelector("input");
-    nickInput?.setAttribute("aria-label", "Your nickname in this room");
-    content.appendChild(nickRow);
+    const nick = commitTextRow({
+      label: "nickname",
+      value: "",
+      placeholder: "your global display name",
+      ariaLabel: "Your nickname in this room",
+      save: (v) => setOwnRoomNickname(roomId, v.trim() || null),
+    });
+    content.appendChild(nick.row);
     void getRoomNickname(roomId)
-      .then((nick) => {
-        // Don't clobber anything typed while this was loading.
-        if (nickInput && nickDraft === "") {
-          nickInput.value = nick ?? "";
-          nickDraft = nick ?? "";
-        }
-      })
-      .catch(() => { /* leave the field empty; saving still works */ });
-
-    const nickActions = document.createElement("div");
-    nickActions.className = "settings-dialog__actions";
-    nickActions.appendChild(controls.saveButton(async () => {
-      try {
-        await setOwnRoomNickname(roomId, nickDraft.trim() || null);
-      } catch (err) {
-        // The button only says [error]; say why.
-        showError(`Failed to set your room nickname: ${err instanceof Error ? err.message : String(err)}`);
-        throw err;
-      }
-    }));
-    content.appendChild(nickActions);
+      .then((current) => nick.setSavedValue(current ?? ""))
+      .catch(() => { /* leave it empty; saving still works */ });
 
     // ── Conversation type ────────────────────────────────────────────────
     // The `:converttodm` / `:converttoroom` pair as a single contextual button,
@@ -129,38 +150,32 @@ export const settingsTab: RoomTab = {
     });
 
     // ── Access ───────────────────────────────────────────────────────────
+    // Shows the room's current settings (it used to show defaults, and its
+    // [save] wrote both — so saving one could quietly change the other).
     content.appendChild(controls.sectionTitle("Access"));
+    const events = await getRoomStateEvents(roomId).catch(() => []);
+    const joinRule = stateField(events, "m.room.join_rules", "join_rule") ?? "invite";
+    const history = stateField(events, "m.room.history_visibility", "history_visibility") ?? "shared";
 
-    let joinRule = "invite";
-    let historyVis = "shared";
+    const withCurrent = (options: Array<[string, string]>, current: string): Array<[string, string]> =>
+      options.some(([v]) => v === current)
+        ? options
+        : [...options, [current, current === "restricted" ? "Restricted — members of a space" : current]];
 
-    content.appendChild(controls.selectRow("join rule", joinRule, [
-      ["public", "Public — anyone can join"],
-      ["invite", "Invite — require invitation"],
-      ["knock", "Knock — users request to join"],
-      ["private", "Private — closed"],
-    ], (v) => { joinRule = v; }));
+    content.appendChild(commitSelectRow({
+      label: "join rule",
+      value: joinRule,
+      options: withCurrent(JOIN_RULES, joinRule),
+      ariaLabel: "Join rule",
+      save: (v) => setRoomJoinRule(roomId, v),
+    }).row);
 
-    content.appendChild(controls.selectRow("history", historyVis, [
-      ["world_readable", "World readable — anyone can read"],
-      ["shared", "Shared — visible since join"],
-      ["invited", "Invited — visible since invite"],
-      ["joined", "Joined — visible since join"],
-    ], (v) => { historyVis = v; }));
-
-    const note = document.createElement("div");
-    note.className = "settings-dialog__hint";
-    note.textContent = "These show defaults, not the room's current settings.";
-    content.appendChild(note);
-
-    const accessActions = document.createElement("div");
-    accessActions.className = "settings-dialog__actions";
-    accessActions.appendChild(controls.saveButton(async () => {
-      await Promise.all([
-        setRoomJoinRule(roomId, joinRule),
-        setRoomHistoryVisibility(roomId, historyVis),
-      ]);
-    }));
-    content.appendChild(accessActions);
+    content.appendChild(commitSelectRow({
+      label: "history",
+      value: history,
+      options: withCurrent(HISTORY, history),
+      ariaLabel: "History visibility",
+      save: (v) => setRoomHistoryVisibility(roomId, v),
+    }).row);
   },
 };

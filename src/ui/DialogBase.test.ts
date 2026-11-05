@@ -3,6 +3,24 @@ import { DialogBase, isEditableTarget } from "./DialogBase.js";
 import { keymapManager } from "../vim/keybindings.js";
 import { registerDefaultBindings } from "../app/registry.js";
 
+/** Like the room / settings dialogs: its own handler, delegating to routeKey. */
+class OverridingDialog extends DialogBase {
+  input: HTMLInputElement;
+  constructor() {
+    super({ prefix: "settings-dialog", ariaLabel: "Overriding" });
+    this.input = document.createElement("input");
+    this.content.appendChild(this.input);
+  }
+  show(): void {
+    this.reveal();
+  }
+  protected override handleKeydown(e: KeyboardEvent): void {
+    e.stopPropagation();
+    if (e.key === "Tab") return;
+    this.routeKey(e);
+  }
+}
+
 class TestDialog extends DialogBase {
   input: HTMLInputElement;
   constructor() {
@@ -48,6 +66,15 @@ describe("DialogBase key routing", () => {
   it("still closes on Escape from inside a field", () => {
     press(dialog.input, "Escape");
     expect(dialog.isVisible()).toBe(false);
+  });
+
+  it("closes on Escape from a field in a dialog that overrides handleKeydown", () => {
+    const d = new OverridingDialog();
+    document.body.appendChild(d.getElement());
+    d.show();
+    press(d.input, "Escape");
+    expect(d.isVisible()).toBe(false);
+    d.getElement().remove();
   });
 
   it("still treats g as the start of a sequence outside a field", () => {
