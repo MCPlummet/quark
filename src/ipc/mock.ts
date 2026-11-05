@@ -1,7 +1,7 @@
 // Mock IPC layer for browser-only dev mode (no Tauri backend)
 // Provides fake data so the UI renders and can be interacted with
 
-import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember, SentMessage } from "./types.js";
+import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember, SentMessage, InviteInfo, SpaceChild } from "./types.js";
 
 export interface CacheStats {
   total_size_bytes: number;
@@ -18,6 +18,42 @@ const MOCK_ROOMS: RoomInfo[] = [
   { room_id: "!dm-alice:matrix.org", name: "Alice", topic: null, avatar_url: null, unread_count: 1, notification_count: 0, is_direct: true, is_encrypted: true, member_count: 2, last_activity_ts: _now - 10 * 60_000, muted: false },
   { room_id: "!dm-bob:matrix.org", name: "Bob", topic: null, avatar_url: null, unread_count: 0, notification_count: 0, is_direct: true, is_encrypted: true, member_count: 2, last_activity_ts: _now - 3 * 60 * 60_000, muted: false },
 ];
+
+// ── Mock invites and spaces ──────────────────────────────────────────────────
+// Mutable, so accepting/declining invites, creating spaces and reordering a
+// space's rooms all behave believably in browser dev mode.
+
+const MOCK_INVITES: InviteInfo[] = [
+  { room_id: "!invite-rust:matrix.org", name: "rust-lang", topic: "The Rust programming language", avatar_url: null, canonical_alias: "#rust:matrix.org", inviter_id: "@carol:matrix.org", inviter_name: "Carol", is_direct: false, is_space: false, is_encrypted: false },
+  { room_id: "!invite-dm-dave:matrix.org", name: null, topic: null, avatar_url: null, canonical_alias: null, inviter_id: "@dave:matrix.org", inviter_name: "Dave", is_direct: true, is_space: false, is_encrypted: true },
+  { room_id: "!invite-space:matrix.org", name: "Book Club", topic: "Monthly reads", avatar_url: null, canonical_alias: null, inviter_id: "@alice:matrix.org", inviter_name: "Alice", is_direct: false, is_space: true, is_encrypted: false },
+];
+
+/** Push a fake invite (dev/test hook — the mock has no sync to deliver one). */
+export function mockAddInvite(invite: InviteInfo): void {
+  MOCK_INVITES.push(invite);
+}
+
+const MOCK_SPACES: SpaceChild[] = [
+  { room_id: "!space1:matrix.org", name: "Work", avatar_url: null, is_space: true, topic: null, member_count: 5, order: null, canonical_alias: null },
+  { room_id: "!space2:matrix.org", name: "Gaming", avatar_url: null, is_space: true, topic: null, member_count: 10, order: null, canonical_alias: null },
+];
+
+/** Each mock space's children, in listing order. */
+const MOCK_SPACE_CHILDREN: Record<string, string[]> = {
+  "!space1:matrix.org": ["!general:matrix.org", "!dev:matrix.org", "!random:matrix.org"],
+  "!space2:matrix.org": ["!random:matrix.org"],
+};
+
+function mockSpaceChildren(spaceId: string): SpaceChild[] {
+  return (MOCK_SPACE_CHILDREN[spaceId] ?? []).flatMap((id, i) => {
+    const room = MOCK_ROOMS.find((r) => r.room_id === id);
+    const space = MOCK_SPACES.find((s) => s.room_id === id);
+    if (space) return [{ ...space, order: String(i + 1).padStart(3, "0") }];
+    if (!room) return [];
+    return [{ room_id: id, name: room.name, avatar_url: room.avatar_url, is_space: false, topic: room.topic, member_count: room.member_count, order: String(i + 1).padStart(3, "0"), canonical_alias: null }];
+  });
+}
 
 let msgCounter = 100;
 
@@ -335,24 +371,79 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       return { events, complete: true };
     }
     case "create_room": {
-      const opts = args?.options as { name?: string; invite?: string[]; is_direct?: boolean } | undefined;
+      const opts = args?.options as { name?: string | null; topic?: string | null; invite?: string[]; is_direct?: boolean; is_space?: boolean; enable_encryption?: boolean } | undefined;
       const roomId = `!mock-${Date.now()}:matrix.org`;
       const inviteUser = opts?.invite?.[0];
       const name = opts?.name ?? (inviteUser ? inviteUser.slice(1, inviteUser.indexOf(":")) : "New Room");
+      if (opts?.is_space) {
+        MOCK_SPACES.push({ room_id: roomId, name, avatar_url: null, is_space: true, topic: opts?.topic ?? null, member_count: 1, order: null, canonical_alias: null });
+        MOCK_SPACE_CHILDREN[roomId] = [];
+      }
       MOCK_ROOMS.push({
         room_id: roomId,
         name,
-        topic: null,
+        topic: opts?.topic ?? null,
         avatar_url: null,
         unread_count: 0,
         notification_count: 0,
         is_direct: opts?.is_direct ?? false,
-        is_encrypted: true,
+        is_encrypted: opts?.enable_encryption ?? true,
         member_count: opts?.is_direct ? 2 : 1,
         last_activity_ts: Date.now(),
         muted: false,
       });
       return roomId;
+    }
+    case "get_invites":
+      return [...MOCK_INVITES];
+    case "accept_invite": {
+      const roomId = args?.roomId as string;
+      const idx = MOCK_INVITES.findIndex((i) => i.room_id === roomId);
+      if (idx < 0) throw new Error(`No pending invite for ${roomId}`);
+      const [inv] = MOCK_INVITES.splice(idx, 1);
+      if (inv.is_space) {
+        MOCK_SPACES.push({ room_id: roomId, name: inv.name, avatar_url: null, is_space: true, topic: inv.topic, member_count: 3, order: null, canonical_alias: null });
+        MOCK_SPACE_CHILDREN[roomId] = [];
+      }
+      MOCK_ROOMS.push({
+        room_id: roomId,
+        name: inv.name ?? inv.inviter_name ?? roomId,
+        topic: inv.topic,
+        avatar_url: null,
+        unread_count: 0,
+        notification_count: 0,
+        is_direct: inv.is_direct,
+        is_encrypted: inv.is_encrypted,
+        member_count: inv.is_direct ? 2 : 12,
+        last_activity_ts: Date.now(),
+        muted: false,
+      });
+      return roomId;
+    }
+    case "decline_invite": {
+      const roomId = args?.roomId as string;
+      const idx = MOCK_INVITES.findIndex((i) => i.room_id === roomId);
+      if (idx >= 0) MOCK_INVITES.splice(idx, 1);
+      return null;
+    }
+    case "get_room_nickname":
+      return "you";
+    case "set_room_nickname":
+      return null;
+    case "reorder_space_children": {
+      const spaceId = args?.spaceRoomId as string;
+      const roomIds = args?.roomIds as string[];
+      const current = MOCK_SPACE_CHILDREN[spaceId] ?? [];
+      const listed = new Set(roomIds);
+      const next = [...roomIds];
+      MOCK_SPACE_CHILDREN[spaceId] = current.map((id) => (listed.has(id) ? next.shift() ?? id : id));
+      return 1;
+    }
+    case "add_space_child": {
+      const spaceId = args?.spaceRoomId as string;
+      const childId = args?.childRoomId as string;
+      (MOCK_SPACE_CHILDREN[spaceId] ??= []).push(childId);
+      return null;
     }
     case "join_room":
     case "leave_room":
@@ -368,17 +459,11 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "set_display_name":
       return null;
     case "get_user_spaces":
-      return [
-        { room_id: "!space1:matrix.org", name: "Work", avatar_url: null, is_space: true, topic: null, member_count: 5, order: null, canonical_alias: null },
-        { room_id: "!space2:matrix.org", name: "Gaming", avatar_url: null, is_space: true, topic: null, member_count: 10, order: null, canonical_alias: null },
-      ];
+      return [...MOCK_SPACES];
     case "get_space_hierarchy":
-      return [
-        { room_id: "!general:matrix.org", name: "general", avatar_url: null, is_space: false, topic: "General discussion", member_count: 42, order: "1", canonical_alias: null },
-        { room_id: "!dev:matrix.org", name: "dev", avatar_url: null, is_space: false, topic: "Development talk", member_count: 18, order: "2", canonical_alias: null },
-      ];
+      return mockSpaceChildren(args?.spaceRoomId as string);
     case "get_space_children":
-      return MOCK_ROOMS.slice(0, 2).map((r, i) => ({ room_id: r.room_id, name: r.name, avatar_url: r.avatar_url, is_space: false, topic: r.topic, member_count: r.member_count, order: String(i + 1), canonical_alias: null }));
+      return mockSpaceChildren(args?.spaceRoomId as string);
     case "load_quarkrc":
       // No rc file in mock mode — return empty parsed result
       return { directives: [], errors: [] };

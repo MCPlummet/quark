@@ -2,6 +2,7 @@
 
 import { attachResizeHandle } from "./ResizeHandle.js";
 import { attachLongPress } from "../app/long_press.js";
+import { attachRoomDrag, reorderedIds } from "./room_list_drag.js";
 
 export interface RoomEntry {
   id: string;
@@ -19,7 +20,10 @@ export interface RoomSection {
   /** Section label (empty string = no label) */
   label: string;
   rooms: RoomEntry[];
-  /** Space room ID for subspace section labels (enables right-click → space settings) */
+  /**
+   * The space whose children this section lists. Enables right-click → space
+   * settings on a labelled section, and reordering the section's rooms.
+   */
   spaceId?: string;
 }
 
@@ -33,8 +37,9 @@ export class RoomList {
   private _onSelect: ((id: string) => void) | null = null;
   private _onContextMenu: ((roomId: string, x: number, y: number) => void) | null = null;
   private _onSectionContextMenu: ((spaceId: string, x: number, y: number) => void) | null = null;
-  private _directoryBtnEl: HTMLButtonElement;
-  private _onDirectoryClick: (() => void) | null = null;
+  private _createBtnEl: HTMLButtonElement;
+  private _onCreateClick: ((x: number, y: number) => void) | null = null;
+  private _onReorder: ((spaceId: string, roomIds: string[], movedRoomId: string) => void) | null = null;
 
   constructor() {
     this._el = document.createElement("div");
@@ -48,16 +53,25 @@ export class RoomList {
     headerLabel.textContent = "Rooms";
     this._headerEl.appendChild(headerLabel);
 
-    // Joining a room was `:join` or `:directory` and nothing else — the
-    // directory dialog had no affordance anywhere in the UI (#102).
-    this._directoryBtnEl = document.createElement("button");
-    this._directoryBtnEl.type = "button";
-    this._directoryBtnEl.className = "room-list__header-btn";
-    this._directoryBtnEl.textContent = "+";
-    this._directoryBtnEl.title = "Browse the room directory (:directory)";
-    this._directoryBtnEl.setAttribute("aria-label", "Browse the room directory");
-    this._directoryBtnEl.addEventListener("click", () => this._onDirectoryClick?.());
-    this._headerEl.appendChild(this._directoryBtnEl);
+    // The header's `+` opens the create menu: new room, new space, browse the
+    // directory. It used to open the directory outright — joining was the only
+    // thing the UI could do (#102) — and creating a room had no affordance at
+    // all (#14).
+    this._createBtnEl = document.createElement("button");
+    this._createBtnEl.type = "button";
+    this._createBtnEl.className = "room-list__header-btn";
+    this._createBtnEl.textContent = "+";
+    this._createBtnEl.title = "New room, new space, or browse the directory";
+    this._createBtnEl.setAttribute("aria-label", "Create or join a room");
+    this._createBtnEl.setAttribute("aria-haspopup", "menu");
+    this._createBtnEl.addEventListener("click", (e) => {
+      // A click on the drawer header closes the drawer on mobile; this one
+      // opens a menu instead.
+      e.stopPropagation();
+      const rect = this._createBtnEl.getBoundingClientRect();
+      this._onCreateClick?.(rect.left, rect.bottom);
+    });
+    this._headerEl.appendChild(this._createBtnEl);
 
     this._el.appendChild(this._headerEl);
 
@@ -90,6 +104,16 @@ export class RoomList {
 
     // Drag-to-resize handle at the right edge
     attachResizeHandle(this._el, "--room-list-width", "right", 120, 500);
+
+    // Drag a room within its space section to reorder it (mouse only).
+    attachRoomDrag({
+      container: this._scrollEl,
+      onDrop: (spaceId, roomId, beforeRoomId) => {
+        const ids = this._sectionIds(spaceId);
+        const next = ids && reorderedIds(ids, roomId, beforeRoomId);
+        if (next) this._onReorder?.(spaceId, next, roomId);
+      },
+    });
   }
 
   /** Header element exposed so callers can wire mobile drawer-close behaviour. */
@@ -97,9 +121,59 @@ export class RoomList {
     return this._headerEl;
   }
 
-  /** Wire the header's room-directory button. */
-  onDirectoryClick(handler: () => void): void {
-    this._onDirectoryClick = handler;
+  /** Wire the header's `+` (opens the create menu at the given point). */
+  onCreateClick(handler: (x: number, y: number) => void): void {
+    this._onCreateClick = handler;
+  }
+
+  /** Wire drag-to-reorder: the section's new order, and the room that moved. */
+  onReorder(handler: (spaceId: string, roomIds: string[], movedRoomId: string) => void): void {
+    this._onReorder = handler;
+  }
+
+  /**
+   * The orderable section `roomId` is listed in — the space it belongs to and
+   * that section's rooms in order — or null in a pseudo-space, which sorts by
+   * activity and has no order to change. When a room is listed in more than
+   * one section, the one holding keyboard focus wins.
+   */
+  getSectionFor(roomId: string): { spaceId: string; roomIds: string[] } | null {
+    const focused = document.activeElement;
+    const focusedSection =
+      focused instanceof HTMLElement && this._scrollEl.contains(focused) && focused.dataset.roomId === roomId
+        ? focused.dataset.section
+        : undefined;
+    const section =
+      (focusedSection && this._sections?.find((s) => s.spaceId === focusedSection)) ||
+      this._sections?.find((s) => s.spaceId && s.rooms.some((r) => r.id === roomId));
+    if (!section?.spaceId) return null;
+    return { spaceId: section.spaceId, roomIds: section.rooms.map((r) => r.id) };
+  }
+
+  /**
+   * Re-order one section's rooms locally, ahead of the server confirming it,
+   * keeping scroll position and keyboard focus.
+   */
+  applySectionOrder(spaceId: string, roomIds: string[]): void {
+    const section = this._sections?.find((s) => s.spaceId === spaceId);
+    if (!section) return;
+    const byId = new Map(section.rooms.map((r) => [r.id, r]));
+    const reordered = roomIds.flatMap((id) => {
+      const r = byId.get(id);
+      return r ? [r] : [];
+    });
+    if (reordered.length !== section.rooms.length) return;
+    section.rooms = reordered;
+    const focusedId = this.getFocusedRoomId();
+    const scrollTop = this._scrollEl.scrollTop;
+    this.setSections(this._sections!);
+    this._scrollEl.scrollTop = scrollTop;
+    if (focusedId) this.focusRoom(focusedId, spaceId);
+  }
+
+  private _sectionIds(spaceId: string): string[] | null {
+    const section = this._sections?.find((s) => s.spaceId === spaceId);
+    return section ? section.rooms.map((r) => r.id) : null;
   }
 
   getElement(): HTMLElement {
@@ -204,7 +278,7 @@ export class RoomList {
           this._scrollEl.appendChild(label);
         }
         for (const room of section.rooms) {
-          this._scrollEl.appendChild(this._createItem(room));
+          this._scrollEl.appendChild(this._createItem(room, section.spaceId));
         }
       }
     } else {
@@ -238,13 +312,15 @@ export class RoomList {
     this.updateRoomBadge(id, entry.unreadCount ?? 0, entry.mentionCount ?? 0);
   }
 
-  private _createItem(room: RoomEntry): HTMLElement {
+  private _createItem(room: RoomEntry, sectionSpaceId?: string): HTMLElement {
     const el = document.createElement("div");
     el.className = "room-list__item";
     el.setAttribute("role", "option");
     el.setAttribute("tabindex", "0");
     el.setAttribute("aria-label", room.name);
     el.dataset.roomId = room.id;
+    // Rows of a space's section can be dragged to reorder (room_list_drag.ts).
+    if (sectionSpaceId) el.dataset.section = sectionSpaceId;
 
     if (room.muted) {
       el.classList.add("room-list__item--muted");
@@ -308,11 +384,17 @@ export class RoomList {
     return focused.closest<HTMLElement>(".room-list__item")?.dataset.roomId ?? null;
   }
 
-  /** Focus the list item for `id`, if present (without scrolling it into view). */
-  focusRoom(id: string): void {
-    this._scrollEl
-      .querySelector<HTMLElement>(`[data-room-id="${CSS.escape(id)}"]`)
-      ?.focus({ preventScroll: true });
+  /**
+   * Focus the list item for `id`, if present (without scrolling it into view).
+   * `sectionSpaceId` picks the row in that section when the room is listed in
+   * more than one.
+   */
+  focusRoom(id: string, sectionSpaceId?: string): void {
+    const sel = `[data-room-id="${CSS.escape(id)}"]`;
+    const inSection = sectionSpaceId
+      ? this._scrollEl.querySelector<HTMLElement>(`${sel}[data-section="${CSS.escape(sectionSpaceId)}"]`)
+      : null;
+    (inSection ?? this._scrollEl.querySelector<HTMLElement>(sel))?.focus({ preventScroll: true });
   }
 
   /**

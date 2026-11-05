@@ -12,6 +12,7 @@ import {
   setRoomJoinRule,
   setRoomHistoryVisibility,
 } from "../../../ipc/room_settings.js";
+import { getRoomNickname, setRoomNickname } from "../../../ipc/rooms.js";
 import { applyLocalRoomMeta, setRoomDirectness } from "../../../app/actions.js";
 
 export const settingsTab: RoomTab = {
@@ -47,6 +48,39 @@ export const settingsTab: RoomTab = {
       }
     }));
     content.appendChild(identityActions);
+
+    // ── Your name in this room ───────────────────────────────────────────
+    // Your own member event's display name: starts as your global name, and
+    // can differ per room. Empty puts it back to the global one (`:myroomnick`
+    // with no argument does the same).
+    content.appendChild(controls.sectionTitle("Your name in this room"));
+
+    let nickInitial = "";
+    let nickDraft = "";
+    const nickRow = controls.textRow("nickname", "", "your global display name", (v) => { nickDraft = v; });
+    const nickInput = nickRow.querySelector("input");
+    nickInput?.setAttribute("aria-label", "Your nickname in this room");
+    content.appendChild(nickRow);
+    void getRoomNickname(roomId)
+      .then((nick) => {
+        nickInitial = nick ?? "";
+        // Don't clobber anything typed while this was loading.
+        if (nickInput && nickDraft === "") {
+          nickInput.value = nickInitial;
+          nickDraft = nickInitial;
+        }
+      })
+      .catch(() => { /* leave the field empty; saving still works */ });
+
+    const nickActions = document.createElement("div");
+    nickActions.className = "settings-dialog__actions";
+    nickActions.appendChild(controls.saveButton(async () => {
+      const next = nickDraft.trim();
+      if (next === nickInitial) return;
+      await setRoomNickname(roomId, next || null);
+      nickInitial = next;
+    }));
+    content.appendChild(nickActions);
 
     // ── Conversation type ────────────────────────────────────────────────
     // The `:converttodm` / `:converttoroom` pair as a single contextual button,

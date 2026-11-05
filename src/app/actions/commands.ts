@@ -16,6 +16,7 @@ import {
   banUser as ipcBanUser,
   unbanUser as ipcUnbanUser,
   setDisplayName as ipcSetDisplayName,
+  setRoomNickname as ipcSetRoomNickname,
   setRoomTopic,
 } from "../../ipc/index.js";
 
@@ -58,6 +59,8 @@ import { setupCrossSigning } from "./crypto.js";
 import { startVerification } from "./verification.js";
 import { openEmojiPicker, openStickerPicker, openGifPicker } from "./gif.js";
 import { runUpdateCheck } from "../update_check.js";
+import { openInvites } from "./invites.js";
+import { openCreateRoom } from "./space_edit.js";
 
 /**
  * Commands that accept a room ID as their first argument, and so can run with
@@ -379,6 +382,34 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       } catch (err) {
         showError(`Failed to set display name: ${err instanceof Error ? err.message : String(err)}`);
       }
+      break;
+    }
+
+    case "set-room-nick": {
+      // Bare `:myroomnick` puts the room back on your global display name.
+      const nick = parsed.args.join(" ").trim();
+      try {
+        await ipcSetRoomNickname(roomId, nick || null);
+        showSuccess(nick ? `Your name in this room is now "${nick}"` : "Using your global display name in this room");
+      } catch (err) {
+        showError(`Failed to set room nickname: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      break;
+    }
+
+    case "open-invites": {
+      openInvites();
+      break;
+    }
+
+    case "create-room":
+    case "create-space": {
+      // The dialog, prefilled — a typed name alone is not enough to decide
+      // access, encryption and parent space for the user.
+      await openCreateRoom({
+        kind: entry.id === "create-space" ? "space" : "room",
+        name: parsed.args.join(" ") || undefined,
+      });
       break;
     }
 

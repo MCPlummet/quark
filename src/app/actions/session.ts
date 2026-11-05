@@ -41,18 +41,18 @@ async function _loadOwnProfile(): Promise<void> {
     AppState.set("ownUserId", profile.user_id);
     AppState.set("ownDisplayName", profile.display_name);
 
-    // Render the user's avatar in the space-strip profile button. Mxc URLs
-    // need downloading; the initial fallback works without network. Both
-    // the space strip's own renderer handles either case.
+    // Render the user's avatar on the status line's profile button. Mxc URLs
+    // need downloading; the initial fallback works without network, and the
+    // status bar's renderer handles either case.
     const initialSource = profile.display_name || profile.user_id.replace(/^@/, "");
-    const { spaceStrip } = getComponents();
-    spaceStrip.setOwnProfile(initialSource, null);
+    const { statusBar } = getComponents();
+    statusBar.setOwnProfile(initialSource, null);
 
     if (profile.avatar_url?.startsWith("mxc://")) {
       try {
         const dl = await downloadMedia(profile.avatar_url);
         const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
-        spaceStrip.setOwnProfile(initialSource, dataUrl);
+        statusBar.setOwnProfile(initialSource, dataUrl);
       } catch {
         // Network or media error — leave the initial fallback in place.
       }

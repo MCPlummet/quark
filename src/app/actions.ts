@@ -141,3 +141,16 @@ export { toggleMemberList } from "./actions/members.js";
 
 // Status bar.
 export { setupStatusBar, editStatus } from "./actions/status.js";
+
+// Invites.
+export { openInvites, acceptInvite, declineInvite, refreshInvites } from "./actions/invites.js";
+
+// Creating rooms and spaces; reordering a space's rooms.
+export {
+  openCreateRoom,
+  createRoomFromForm,
+  applySpaceOrder,
+  moveRoomInSpace,
+  canMoveRoom,
+  roomForReorder,
+} from "./actions/space_edit.js";

@@ -6,6 +6,7 @@ use matrix_sdk::{
     Client,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
@@ -200,6 +201,56 @@ async fn read_child_events(space: &matrix_sdk::Room) -> Result<Vec<ChildEvent>, 
     Ok(out)
 }
 
+/// Order strings this process has written but sync has not yet echoed back,
+/// by space and then child.
+///
+/// A reorder is several `m.space.child` writes, and the local store only learns
+/// of them when sync returns them. Until then a read of the space would list
+/// the old order — a refresh landing in that window put a just-moved room back
+/// where it came from for a second — and a second move made in quick
+/// succession would be computed from orders already overwritten. Reads layer
+/// these on top of the store; each entry goes once the store agrees, or after
+/// [`PENDING_ORDER_TTL`] if the echo never comes.
+static PENDING_ORDERS: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<String, HashMap<String, (String, std::time::Instant)>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+const PENDING_ORDER_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Reorders of one process run one at a time, so each is computed from the
+/// writes of the one before it.
+static REORDER_TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn note_pending_order(space_id: &str, child_id: &str, order: &str) {
+    if let Ok(mut pending) = PENDING_ORDERS.lock() {
+        pending
+            .entry(space_id.to_owned())
+            .or_default()
+            .insert(child_id.to_owned(), (order.to_owned(), std::time::Instant::now()));
+    }
+}
+
+/// The order to list `child_id` by: a pending write if there is one the store
+/// has not caught up with, else what the store holds.
+fn effective_order(space_id: &str, child_id: &str, stored: Option<String>) -> Option<String> {
+    let Ok(mut pending) = PENDING_ORDERS.lock() else { return stored };
+    let Some(children) = pending.get_mut(space_id) else { return stored };
+    let result = match children.get(child_id) {
+        Some((order, at)) if at.elapsed() < PENDING_ORDER_TTL && stored.as_deref() != Some(order) => {
+            Some(order.clone())
+        }
+        Some(_) => {
+            children.remove(child_id);
+            stored
+        }
+        None => stored,
+    };
+    if children.is_empty() {
+        pending.remove(space_id);
+    }
+    result
+}
+
 /// The joined space room for `space_room_id`, or `None` when this account is
 /// not in it (an unjoined subspace, say), whose state we do not hold.
 fn joined_space(client: &Client, space_room_id: &RoomId) -> Option<matrix_sdk::Room> {
@@ -231,11 +282,12 @@ pub async fn get_space_children(
 
     let mut children = Vec::new();
     for event in read_child_events(&space).await? {
-        let order = event
+        let stored = event
             .content
             .get("order")
             .and_then(|v| v.as_str())
             .map(str::to_owned);
+        let order = effective_order(space_room_id, &event.room_id, stored);
         let known = RoomId::parse(&event.room_id).ok().and_then(|id| client.get_room(&id));
         let child = match known {
             Some(room) => SpaceChild {
@@ -281,6 +333,7 @@ pub async fn reorder_space_children(
 ) -> Result<usize, String> {
     let space_id = RoomId::parse(space_room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let space = joined_space(client, &space_id).ok_or("You are not in this space")?;
+    let _turn = REORDER_TURN.lock().await;
 
     let children = get_space_children(client, space_room_id).await?;
     let keys: Vec<ChildKey> = children.iter().map(child_key).collect();
@@ -321,6 +374,7 @@ pub async fn reorder_space_children(
             .send_state_event_raw("m.space.child", room_id, serde_json::Value::Object(content))
             .await
             .map_err(|e| format!("Failed to reorder the space: {e}"))?;
+        note_pending_order(space_room_id, room_id, order);
     }
     info!(space = %space_room_id, writes = updates.len(), "Reordered space children");
     Ok(updates.len())
@@ -394,4 +448,26 @@ pub async fn get_user_spaces(client: &Client) -> Result<Vec<SpaceChild>, String>
         .collect();
 
     Ok(spaces)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pending_order_wins_until_the_store_catches_up() {
+        let space = "!pending-test-space:x";
+        note_pending_order(space, "!a:x", "m");
+        // Sync has not echoed the write yet: the pending order is listed.
+        assert_eq!(effective_order(space, "!a:x", Some("c".into())).as_deref(), Some("m"));
+        // Now it has: the store's value is used and the entry is dropped.
+        assert_eq!(effective_order(space, "!a:x", Some("m".into())).as_deref(), Some("m"));
+        assert_eq!(effective_order(space, "!a:x", Some("z".into())).as_deref(), Some("z"));
+    }
+
+    #[test]
+    fn children_without_pending_writes_read_the_store() {
+        assert_eq!(effective_order("!other-space:x", "!b:x", None), None);
+        assert_eq!(effective_order("!other-space:x", "!b:x", Some("q".into())).as_deref(), Some("q"));
+    }
 }

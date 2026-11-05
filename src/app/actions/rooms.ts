@@ -67,6 +67,7 @@ import {
   setMediaCacheLimit,
 } from "./context.js";
 import { closeThread, openThread, openThreadEvents } from "./threads.js";
+import { refreshInvites } from "./invites.js";
 import { cancelReply, cancelEdit } from "./messages.js";
 import { openRoomSettings } from "./dialogs.js";
 import { openProfileForUser } from "./profile.js";
@@ -1012,69 +1013,12 @@ export async function selectSpace(
 
   // Room IDs shown for this space, in display order — used to restore the
   // space's last-active chat (or open its first room) into the timeline (#11).
-  let orderedIds: string[] = [];
-
-  const pseudo = getPseudoSpace(spaceId);
-  if (pseudo) {
-    const allRooms = AppState.get("roomListCache");
-    const spaceRoomIds = new Set(AppState.get("spaceRoomIds"));
-    const filtered = sortByRecency(allRooms.filter((r) => pseudo.filter(r, spaceRoomIds)));
-    roomList.setRooms(filtered.map(roomInfoToEntry));
-    orderedIds = filtered.map((r) => r.room_id);
-  } else {
-    try {
-      const children = await getSpaceChildren(spaceId);
-      // The backend already sorts by m.space.child order field (then alphabetically).
-      const cache = AppState.get("roomListCache");
-      const cacheById = new Map(cache.map((r) => [r.room_id, r]));
-
-      // Check if there are any subspaces — if so, render as categories
-      const subspaces = children.filter((c) => c.is_space);
-      const topRooms = children.filter((c) => !c.is_space);
-
-      if (subspaces.length > 0) {
-        // Build sections: top-level rooms first (unlabeled), then each subspace as a category
-        const sections: RoomSection[] = [];
-
-        // Top-level rooms (not in any subspace) — unlabeled section
-        const topEntries = topRooms.flatMap((c) => {
-          const r = cacheById.get(c.room_id);
-          return r ? [roomInfoToEntry(r)] : [];
-        });
-        if (topEntries.length > 0) {
-          sections.push({ label: "", rooms: topEntries });
-        }
-
-        // Each subspace becomes a labeled category
-        await Promise.all(subspaces.map(async (sub) => {
-          try {
-            const subChildren = await getSpaceChildren(sub.room_id);
-            const subRooms = subChildren
-              .filter((c) => !c.is_space)
-              .flatMap((c) => {
-                const r = cacheById.get(c.room_id);
-                return r ? [roomInfoToEntry(r)] : [];
-              });
-            sections.push({ label: sub.name ?? sub.room_id, rooms: subRooms, spaceId: sub.room_id });
-          } catch {
-            // Skip subspace on error
-          }
-        }));
-
-        roomList.setSections(sections);
-        orderedIds = sections.flatMap((s) => s.rooms.map((e) => e.id));
-      } else {
-        const ordered = topRooms.flatMap((c) => {
-          const r = cacheById.get(c.room_id);
-          return r ? [roomInfoToEntry(r)] : [];
-        });
-        roomList.setRooms(ordered);
-        orderedIds = ordered.map((e) => e.id);
-      }
-    } catch (err) {
-      showError(`Failed to load space: ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
+  let orderedIds: string[];
+  try {
+    orderedIds = await renderSpaceView(spaceId);
+  } catch (err) {
+    showError(`Failed to load space: ${err instanceof Error ? err.message : String(err)}`);
+    return;
   }
 
   // Selecting a space is a "browse rooms" action: focus the room list, then load
@@ -1088,6 +1032,84 @@ export async function selectSpace(
   if (!opts.skipRoomRestore && !isMobile()) {
     await restoreSpaceRoom(spaceId, orderedIds);
   }
+}
+
+/**
+ * Fill the room list for `spaceId` from the cached room list, in that space's
+ * order, and return the listed room IDs.
+ *
+ * A pseudo-space filters and recency-sorts the cache. A real space lists its
+ * joined children in `m.space.child` order; with subspaces, its own rooms come
+ * first, unlabelled, then one labelled section per subspace. Every section
+ * carries the space it lists (`RoomSection.spaceId`), which is what lets a
+ * room be reordered within it.
+ *
+ * Used both by `selectSpace` and by `refreshRooms`, so a room joined, left or
+ * moved while a space is open shows up in that space without re-selecting it.
+ */
+export async function renderSpaceView(spaceId: string): Promise<string[]> {
+  const { roomList } = getComponents();
+  const pseudo = getPseudoSpace(spaceId);
+  if (pseudo) {
+    const allRooms = AppState.get("roomListCache");
+    const spaceRoomIds = new Set(AppState.get("spaceRoomIds"));
+    const filtered = sortByRecency(allRooms.filter((r) => pseudo.filter(r, spaceRoomIds)));
+    roomList.setRooms(filtered.map(roomInfoToEntry));
+    return filtered.map((r) => r.room_id);
+  }
+
+  const children = await getSpaceChildren(spaceId);
+  // The backend already sorts by m.space.child order field (then by name).
+  const cacheById = new Map(AppState.get("roomListCache").map((r) => [r.room_id, r]));
+  const entriesFor = (list: typeof children) =>
+    list.flatMap((c) => {
+      const r = cacheById.get(c.room_id);
+      return r && !c.is_space ? [roomInfoToEntry(r)] : [];
+    });
+
+  const subspaces = children.filter((c) => c.is_space);
+  const sections: RoomSection[] = [];
+  const topEntries = entriesFor(children);
+  if (topEntries.length > 0 || subspaces.length === 0) {
+    sections.push({ label: "", rooms: topEntries, spaceId });
+  }
+  // Each subspace becomes a labelled category, in the parent's order.
+  const subSections = await Promise.all(subspaces.map(async (sub): Promise<RoomSection | null> => {
+    try {
+      const subRooms = entriesFor(await getSpaceChildren(sub.room_id));
+      return { label: sub.name ?? sub.room_id, rooms: subRooms, spaceId: sub.room_id };
+    } catch {
+      return null; // Skip a subspace we cannot read
+    }
+  }));
+  for (const section of subSections) if (section) sections.push(section);
+
+  // A refresh can land after the user has moved on to another space.
+  if (AppState.get("currentSpaceId") !== spaceId) return sections.flatMap((s) => s.rooms.map((e) => e.id));
+
+  roomList.setSections(sections);
+  return sections.flatMap((s) => s.rooms.map((e) => e.id));
+}
+
+/**
+ * Re-render whichever room list is showing, keeping scroll position and — only
+ * if it was already inside the list — keyboard focus.
+ */
+async function rerenderCurrentView(): Promise<void> {
+  if (AppState.get("homeViewActive")) return; // the Home canvas refreshes itself
+  const { roomList } = getComponents();
+  const spaceId = AppState.get("currentSpaceId") ?? "__home__";
+  const focusedId = roomList.getFocusedRoomId();
+  const scrollEl = roomList.getScrollElement();
+  const scrollTop = scrollEl.scrollTop;
+  try {
+    await renderSpaceView(spaceId);
+  } catch (err) {
+    console.warn(`Failed to refresh space ${spaceId}:`, err);
+    return;
+  }
+  scrollEl.scrollTop = scrollTop;
+  if (focusedId) roomList.focusRoom(focusedId);
 }
 
 /**
@@ -1409,16 +1431,49 @@ export function resortPseudoSpaceView(): void {
   if (focusedId) roomList.focusRoom(focusedId);
 }
 
+// ── Room list refresh ────────────────────────────────────────────────────────
+//
+// Refreshes are serialized and coalesced: one runs at a time, and any number
+// requested while it runs collapse into a single follow-up. Every caller gets a
+// promise that settles once a refresh *started after its call* has finished,
+// which is what `joinRoom → refreshRooms → selectRoom` needs — overlapping runs
+// used to let an older, slower response overwrite a newer one.
+
+let _refreshRunning: Promise<void> | null = null;
+let _refreshQueued: Promise<void> | null = null;
+
 /**
- * Refresh the room list from the backend.
+ * Refresh the room list, spaces and invites from the backend, and re-render
+ * the visible list.
  */
-export async function refreshRooms(): Promise<void> {
-  const { roomList, spaceStrip } = getComponents();
+export function refreshRooms(): Promise<void> {
+  if (_refreshQueued) return _refreshQueued;
+  if (_refreshRunning) {
+    _refreshQueued = _refreshRunning.then(() => {
+      _refreshQueued = null;
+      return _startRefresh();
+    });
+    return _refreshQueued;
+  }
+  return _startRefresh();
+}
+
+function _startRefresh(): Promise<void> {
+  const run = _doRefreshRooms().finally(() => {
+    if (_refreshRunning === run) _refreshRunning = null;
+  });
+  _refreshRunning = run;
+  return run;
+}
+
+async function _doRefreshRooms(): Promise<void> {
+  const { spaceStrip } = getComponents();
 
   try {
     const [rooms, userSpaces] = await Promise.all([
       getRooms(),
       getUserSpaces().catch(() => [] as Awaited<ReturnType<typeof getUserSpaces>>),
+      refreshInvites(),
     ]);
     AppState.set("roomListCache", rooms);
 
@@ -1472,16 +1527,21 @@ export async function refreshRooms(): Promise<void> {
       }
     }
 
-    // Refresh the current pseudo-space view with fresh data. Real spaces are
-    // refreshed by their own getSpaceChildren flow when re-selected. The Home
-    // canvas owns its own refresh, so leave the (hidden) room list alone.
+    // A space that is gone (left from another client) can't stay selected.
     const spaceId = AppState.get("currentSpaceId");
-    const pseudo = getPseudoSpace(spaceId ?? "__home__");
-    if (pseudo && !AppState.get("homeViewActive")) {
-      const spaceRoomIdsSet = new Set(AppState.get("spaceRoomIds"));
-      const filtered = sortByRecency(rooms.filter((r) => pseudo.filter(r, spaceRoomIdsSet)));
-      roomList.setRooms(filtered.map(roomInfoToEntry));
+    if (spaceId && !getPseudoSpace(spaceId) && !userSpaces.some((s) => s.room_id === spaceId)) {
+      await selectSpace("__home__", { skipRoomRestore: true });
     }
+
+    // Likewise the open room: left, kicked or banned elsewhere.
+    const roomId = AppState.get("currentRoomId");
+    if (roomId && !rooms.some((r) => r.room_id === roomId)) {
+      clearActiveRoom();
+    }
+
+    // Re-render the visible list — real spaces included, so a room joined or
+    // moved while a space is open appears without re-selecting the space.
+    await rerenderCurrentView();
   } catch (err) {
     showError(`Failed to load rooms: ${err instanceof Error ? err.message : String(err)}`);
   }

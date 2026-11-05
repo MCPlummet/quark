@@ -55,7 +55,9 @@ export type MenuSurface =
    * carried the only pointer affordance for search and pinned messages, so
    * this surface is where that chrome went (#99).
    */
-  | "overflow";
+  | "overflow"
+  /** The room list header's `+`: new room, new space, browse the directory. */
+  | "create";
 
 /**
  * Non-menu places an action has a dedicated on-screen control. Declaring it
@@ -269,7 +271,7 @@ const ACTION_LITERALS = [
     description: "Search rooms and commands",
     requires: ["session"],
     bindings: [{ sequence: "Ctrl-k", context: "global" }],
-    chrome: ["space-strip"],
+    chrome: ["status-bar"],
     palette: false,
   },
 
@@ -485,7 +487,7 @@ const ACTION_LITERALS = [
     requires: ["session"],
     command: { name: "profile" },
     bindings: [{ sequence: "P", context: "global" }],
-    chrome: ["space-strip"],
+    chrome: ["status-bar"],
   },
   {
     id: "open-settings",
@@ -493,7 +495,7 @@ const ACTION_LITERALS = [
     requires: ["session"],
     command: { name: "settings" },
     bindings: [{ sequence: "?", context: "global" }],
-    chrome: ["space-strip"],
+    chrome: ["status-bar"],
   },
   {
     id: "open-room-info",
@@ -542,7 +544,14 @@ const ACTION_LITERALS = [
     description: "Browse the public room directory",
     requires: ["session"],
     command: { name: "directory" },
-    chrome: ["drawer"],
+    menus: [{ surface: "create", label: "Browse room directory", group: 2, order: 1 }],
+  },
+  {
+    id: "open-invites",
+    description: "Show pending room invites",
+    requires: ["session"],
+    command: { name: "invites" },
+    chrome: ["status-bar"],
   },
   {
     // The room requirement describes the bare form, which dumps the open room's
@@ -663,6 +672,55 @@ const ACTION_LITERALS = [
     description: "Set the room topic",
     requires: ["room"],
     command: { name: "topic", args: "<text>" },
+  },
+  {
+    // Bare `:myroomnick` puts it back to the global display name.
+    id: "set-room-nick",
+    description: "Set your display name in this room",
+    requires: ["room"],
+    command: { name: "myroomnick", aliases: ["roomnick"], args: "[name]" },
+    chrome: ["settings"],
+  },
+  {
+    id: "create-room",
+    description: "Create a room",
+    requires: ["session"],
+    command: { name: "createroom", aliases: ["mkroom"], args: "[name]" },
+    menus: [
+      { surface: "create", label: "New room", group: 1, order: 1 },
+      { surface: "space", label: "New room in this space", group: 2, order: 1 },
+      { surface: "section", label: "New room in this space", group: 2, order: 1 },
+    ],
+  },
+  {
+    id: "create-space",
+    description: "Create a space",
+    requires: ["session"],
+    command: { name: "createspace", aliases: ["mkspace"], args: "[name]" },
+    menus: [
+      { surface: "create", label: "New space", group: 1, order: 2 },
+      { surface: "space", label: "New subspace", group: 2, order: 2 },
+    ],
+    chrome: ["space-strip"],
+  },
+  {
+    // Within the room's section of a space's list. Pseudo-spaces (Home, DMs,
+    // Groups) sort by activity and have no order to change; the menu rows are
+    // only offered where a move is possible.
+    id: "move-room-up",
+    description: "Move the room up in its space",
+    requires: ["room"],
+    bindings: [{ sequence: "K", context: "roomlist" }],
+    menus: [{ surface: "room", label: "Move up", group: 3, order: 3 }],
+    palette: true,
+  },
+  {
+    id: "move-room-down",
+    description: "Move the room down in its space",
+    requires: ["room"],
+    bindings: [{ sequence: "J", context: "roomlist" }],
+    menus: [{ surface: "room", label: "Move down", group: 3, order: 4 }],
+    palette: true,
   },
 
   // ── Membership ─────────────────────────────────────────────────────────
