@@ -712,6 +712,40 @@ than absorbing every new action nobody got round to giving a home.
 
 All panels, borders, and text use monospace rendering. Colors, borders, and glyph styles are controlled by themes.
 
+### Status line
+
+The foot of the space strip and room list is one horizontal row:
+
+```
+┌────┬───────────────────────────┐
+│ ⌂  │ ROOMS                   + │
+│ ── │ #general                  │
+│ W  │ #dev                      │
+│ G  │                           │
+│ +  │                           │
+│ ── │                           │
+│ ✉  │                           │
+│ #  │                           │
+├────┴───────────────────────────┤
+│ (Y•) set status…     ⇩3  ⌕  ⚙ │
+└────────────────────────────────┘
+```
+
+- **Left — you.** Your avatar opens your profile (`P`); the dot on its corner is
+  the connection state (green connected, red offline, and the avatar dims).
+  Beside it, your presence status — click it, or press `S`, to edit inline.
+- **Right — the app.** Pending **invites** (an inbox tray with a count, lit when
+  any are waiting; `:invites`), **search** rooms and commands (the palette,
+  `Ctrl+K`), and **settings** (`?`).
+
+These used to stack vertically at the bottom of the space strip, under the
+spaces, where a long list pushed them off screen. The strip now holds spaces
+alone. On desktop the row is fixed over the two columns, which reserve
+`--status-bar-height` of bottom padding for it; on mobile `App.ts` reparents it
+to the foot of the room-list drawer, with finger-sized targets. The old status
+bar's encryption indicator was dropped: nothing ever set it, so it always read
+"not encrypted" (the room header carries the real one).
+
 ### Threads
 
 A thread opens **in the timeline, at its root**: the room parts there — the
@@ -858,6 +892,7 @@ The room list has a two-column layout inspired by Cinny:
 - Narrow vertical strip showing space icons (avatar images or first-letter fallback)
 - A "Home" icon at the top for rooms not in any space, and a "DMs" icon
 - Spaces display their avatar/icon; this is the only place icons appear in the room list
+- The space list ends in a `+` that creates a space (see *Creating rooms and spaces*)
 - `j/k` (or rebound keys) to navigate spaces, `Enter` to select
 - Selecting a space filters the room list to show only that space's children
 - Each space remembers its own last-active chat: switching to a space loads that
@@ -867,8 +902,8 @@ The room list has a two-column layout inspired by Cinny:
 **Right column — Room list (text only, no icons):**
 - Rooms listed by name in a **fixed, deterministic order** (not sorted by activity):
   - Order follows the `m.space.child` state event `order` field if set
-  - Fallback: alphabetical by room name
-  - User can pin rooms to top via `:pin` command
+  - Fallback: alphabetical by room name, then room ID
+  - The user can **reorder** a room within its section — see below
 - No room avatars or icons — text only, matching the CLI aesthetic
 - Unread indicators via color (theme-configurable) and optional badge count.
   Two counters, and they are not interchangeable: the SDK's *notification* count
@@ -890,6 +925,71 @@ The room list has a two-column layout inspired by Cinny:
 - Categories/sections within a space rendered as visual dividers (using `m.space.child` ordering)
 
 This mirrors Cinny's approach: spaces have visual identity through icons, but the channel list itself is clean text in a stable order, so rooms don't jump around based on activity.
+
+**Reading a space.** A joined space's children come from its `m.space.child`
+state in the local store (`get_space_children`) — no HTTP, current with sync. A
+child event with an empty or missing `via` is a removed child and is skipped.
+`/hierarchy` is only the fallback for a space this account has not joined. It
+used to serve every read, and the room list reads every space's children on
+every refresh: a server round-trip per space per room-list change, which also
+lagged a reorder until the server's own view caught up. One consequence: a
+child this account knows nothing about (an unjoined subspace) has only its ID,
+so its section is not drawn — the room list lists joined rooms anyway.
+
+**Keeping up with other clients.** The backend emits `quark://sync/rooms` when a
+sync response touches the room list (`matrix/room_list_watch.rs`): any invite,
+leave or knock section; in a joined room, our *own* `m.room.member` or a state
+event that changes a row or a space's shape (`m.room.name`, `avatar`,
+`canonical_alias`, `topic`, `create`, `encryption`, `tombstone`,
+`m.space.child`, `m.space.parent`); or `m.direct` / `m.push_rules` account data.
+Other members' joins and leaves do not count — most state traffic in a busy room
+is exactly that. The event is a bare signal; the frontend debounces it (250ms)
+into `refreshRooms`, which re-reads rooms, spaces and invites and re-renders
+whichever list is showing — **real spaces included**. Before #14 nothing emitted
+the event at all, and a refresh only redrew pseudo-spaces, so a room joined or
+left from another client did not appear until restart. A refresh that finds the
+open room gone (left, kicked) clears the timeline; one that finds the selected
+space gone returns to Home. Refreshes are serialized and coalesced — every
+caller's promise settles after a run that *started after its call*, so
+`join → refresh → select` never races an older response.
+
+**Reordering.** In a space's list (not the activity-sorted pseudo-spaces), a room
+moves within its section: **Move up / Move down** on its menu (long press on
+touch), `K` / `J` in the room list, or drag it with the mouse
+(`src/ui/room_list_drag.ts` — pointer events, not HTML5 drag-and-drop, which
+Tauri's file-drop handling intercepts; touch keeps vertical drags for
+scrolling). Moving between sections (spaces) is not supported. The list
+updates at once; `reorder_space_children` then writes the fewest
+`m.space.child` events that produce the new order
+(`matrix/space_order.rs`): it keeps the longest run of existing `order` strings
+already in sequence and fills the gaps with midpoint strings (spec alphabet
+`\x20`–`\x7E`, ≤ 50 chars), and an unordered tail already in name order stays
+unordered. Moving one room in a space ordered before is one event; a homeserver
+rate-limits state events like messages, so renumbering a whole space per move
+would take minutes. Each write rewrites only `order`, keeping `via`,
+`suggested` and anything else. Writes not yet echoed by sync are layered over
+the store for reads (so a refresh in between doesn't put the room back), and
+reorders run one at a time, each computed from the last. A refused write shows
+the error and redraws the server's order. Rooms the list doesn't show (unjoined
+children, subspaces) keep their slots.
+
+**Creating rooms and spaces.** The room list header's `+` opens a menu — **New
+room**, **New space**, **Browse room directory** — and the space strip's `+`, a
+space's menu (**New room in this space**, **New subspace**), a subspace
+section's menu, `:createroom [name]` and `:createspace [name]` open the same
+dialog: kind, name, topic, address (`#local:server`, optional), parent space,
+access, encryption and invites. Defaults are the safe ones: private and
+encrypted; a room defaults into the space being viewed, a space to the top
+level. With a parent space, access offers **members of <space>** (the
+`restricted` join rule) and selects it by default. A public room with no
+address takes one suggested from its name, since otherwise it can only be
+joined by room ID; public rooms default to unencrypted until the user chooses.
+A space is never encrypted. Encryption goes in the creation request's
+`initial_state`, so the room is never briefly unencrypted, and so does the new
+room's `m.space.parent`. Listing it in the parent (`add_space_child`, appended
+after the ordered children) is a separate write: if that fails — no permission
+in the space — the room exists and the dialog closes with a warning, while a
+failed creation keeps the dialog open with the error inline.
 
 ### Vim-Style Navigation
 
@@ -918,6 +1018,7 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Global        | `I`           | Open room info                |
 | Global        | `S`           | Set your presence status      |
 | Global        | `?`           | Open settings                 |
+| Room list     | `J` / `K`     | Move the room down / up in its space |
 | Timeline      | `r`           | Reply to selected message     |
 | Timeline      | `e`           | React to selected message     |
 | Timeline      | `t`           | Reply in thread (again: close)|
@@ -1056,6 +1157,9 @@ handler is now a compile error, not a silent no-op.
 :pinned                                        Show pinned messages
 :search [query]                                Search messages in this room
 :directory                                     Browse the public room directory
+:invites                                       Show pending room invites
+:createroom / :mkroom [name]                   Create a room (opens the dialog)
+:createspace / :mkspace [name]                 Create a space (opens the dialog)
 :debug [cache|$eventId]                        Open the debug viewer
 :help                                          Show commands and keybindings
 :join <room-id|alias>                          Join a room or space
@@ -1067,6 +1171,7 @@ handler is now a compile error, not a silent no-op.
 :converttodm / :convert-to-dm [room-id]        Mark this room as a direct message
 :converttoroom / :convert-to-room [room-id]    Unmark this room as a direct message
 :topic <text>                                  Set the room topic
+:myroomnick / :roomnick [name]                 Set your name in this room (bare: back to global)
 :invite <user-id>                              Invite a user to this room
 :kick <user-id> [reason]                       Remove a user from this room
 :ban <user-id> [reason]                        Ban a user from this room
@@ -1086,7 +1191,7 @@ Arguments follow one grammar: `<required>` and `[optional]`. The command palette
 reads it to decide whether a row can run outright or must prefill the command
 bar for the user to finish — a palette row cannot supply `@user:server`.
 
-**The command palette** (`Ctrl+K`, the search (magnifier) button in the space strip, or a
+**The command palette** (`Ctrl+K`, the search (magnifier) button on the status line, or a
 pull-down from the top of the open drawer on mobile) searches rooms and actions
 together. A leading `:` drops the rooms. A row that needs an argument prefills
 the command bar; a row whose action is irreversible goes through the same
@@ -1127,7 +1232,8 @@ what the action means.
 ### Room Dialog
 
 One tabbed dialog covers everything about a room: **Info** (read-only facts,
-mute, raw state, leave), **Settings** (name, topic, conversation type, access),
+mute, raw state, leave), **Settings** (name, topic, your name in this room,
+conversation type, access),
 **Members** (invite, and kick/ban where your power level permits) and
 **Permissions** (power levels). `:info` and `:roomsettings` are two doors into
 it; on mobile it shows the tab list first, like the settings dialog.
@@ -1141,6 +1247,29 @@ unconditionally. Matrix requires strictly greater power to kick or ban and never
 permits acting on yourself, so a room where everyone sits at the default offers
 nothing — a button the homeserver will refuse is worse than no button, because
 the user cannot tell a permission problem from a bug.
+
+**Your name in this room** is your own `m.room.member` `displayname`, which
+starts as your global name and may differ per room (`:myroomnick` does the
+same). Clearing it writes the global name back rather than dropping the field —
+a member event with no `displayname` shows as the bare user-ID localpart.
+
+### Invites
+
+Pending invites (rooms in the invited state) are listed by `get_invites` from
+the stripped state the inviting server shared — name, topic, avatar, address,
+the inviter, and the invite's own `is_direct` flag — with no HTTP. They refresh
+with the room list on every `quark://sync/rooms`, into `AppState.invites`, which
+drives the status line's count and an open dialog, so an invite answered on
+another device disappears here too. One that arrives while the app runs raises
+a toast ("Carol invited you to rust-lang", "Dave wants to chat", or "3 new
+invites"); the first load after starting is never announced.
+
+The **invites dialog** (status line button, `:invites`, the palette) lists each
+with **[accept]** and **[decline]**; `j`/`k` move, `Enter` accepts, `x` declines.
+A nameless DM invite is shown as its inviter. Accepting joins (the SDK marks a
+DM invite as direct in `m.direct` as it joins), refreshes, and goes there — the
+room, or for a space, the space — closing the dialog. Declining leaves the room
+and keeps the dialog open on the rest. A failed answer leaves the row usable.
 
 ### Settings Dialog
 
@@ -1213,7 +1342,10 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
     toast names the requester, and the request opens when the dialog closes, if it is still waiting.
   - An incoming request dismisses the startup "verify this session" prompt and the device picker; the
     prompt is not shown while a flow is live.
-- [x] Room creation, join, leave, invite, kick, ban
+- [x] Room and space creation (in a space, with access/encryption), join, leave, invite, kick, ban
+- [x] Pending invites: list, accept, decline, live count and new-invite toast
+- [x] Per-room display name (`:myroomnick`)
+- [x] Reordering rooms within a space (`m.space.child` `order`, minimal writes)
 - [x] Room directory & federated room search
 - [x] In-room message search — header search box (`:search`) with four tiers: loaded window (instant) · local cache (matrix-sdk event cache, offline) · back-to-date · entire history. Server tiers stream results one page at a time (bounded memory) and are cancelable.
 - [x] Spaces: hierarchy display, space-scoped room lists, restricted joins
