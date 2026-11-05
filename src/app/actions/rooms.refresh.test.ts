@@ -15,6 +15,8 @@ vi.mock("../../ipc/index.js", async (importOriginal) => {
     getSpaceChildren: vi.fn(async () => [] as SpaceChild[]),
     getInvites: vi.fn(async () => []),
     reorderSpaceChildren: vi.fn(async () => 1),
+    setRoomNickname: vi.fn(async () => {}),
+    getRoomMembers: vi.fn(async () => []),
   };
 });
 vi.mock("../../ui/NotificationToast.js", async (importOriginal) => {
@@ -22,7 +24,7 @@ vi.mock("../../ui/NotificationToast.js", async (importOriginal) => {
   return { ...actual, showError: vi.fn(), showSuccess: vi.fn(), showToast: vi.fn() };
 });
 
-const { refreshRooms } = await import("./rooms.js");
+const { refreshRooms, setOwnRoomNickname } = await import("./rooms.js");
 const { applySpaceOrder, moveRoomInSpace } = await import("./space_edit.js");
 const { setComponents } = await import("./context.js");
 const { AppState } = await import("../state.js");
@@ -44,6 +46,7 @@ function child(id: string, over: Partial<SpaceChild> = {}): SpaceChild {
 const SPACE = child("!work:x", { is_space: true, name: "Work" });
 
 let roomList: InstanceType<typeof RoomList>;
+let timeline: { setMessages: ReturnType<typeof vi.fn>; updateSenderName: ReturnType<typeof vi.fn> };
 const spaceStrip = { setSpaces: vi.fn(), setActiveSpace: vi.fn(), hasResolvedAvatar: () => true };
 const listed = () =>
   Array.from(roomList.getElement().querySelectorAll<HTMLElement>(".room-list__item")).map((e) => e.dataset.roomId);
@@ -52,7 +55,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   roomList = new RoomList();
   document.body.appendChild(roomList.getElement());
-  const timeline = { setMessages: vi.fn() };
+  timeline = { setMessages: vi.fn(), updateSenderName: vi.fn() };
   const roomHeader = { setRoom: vi.fn() };
   const input = { setAttachmentRoom: vi.fn() };
   setComponents({ roomList, spaceStrip, timeline, roomHeader, input } as never);
@@ -172,5 +175,42 @@ describe("reordering a space", () => {
     roomList.setRooms([{ id: "!a:x", name: "a" }]);
     await moveRoomInSpace("!a:x", 1);
     expect(showError).toHaveBeenCalledWith(expect.stringContaining("inside a space"));
+  });
+});
+
+describe("setOwnRoomNickname", () => {
+  beforeEach(() => {
+    AppState.patch({ currentRoomId: "!a:x", ownUserId: "@me:x", ownDisplayName: "Global Me" });
+  });
+
+  it("shows the new name in the open room at once, then re-reads members", async () => {
+    vi.useFakeTimers();
+    try {
+      await setOwnRoomNickname("!a:x", "  room me  ");
+      expect(ipc.setRoomNickname).toHaveBeenCalledWith("!a:x", "room me");
+      expect(timeline.updateSenderName).toHaveBeenCalledWith("@me:x", "room me");
+      expect(ipc.getRoomMembers).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(ipc.getRoomMembers).toHaveBeenCalledWith("!a:x");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes back to the global name when cleared", async () => {
+    await setOwnRoomNickname("!a:x", "   ");
+    expect(ipc.setRoomNickname).toHaveBeenCalledWith("!a:x", null);
+    expect(timeline.updateSenderName).toHaveBeenCalledWith("@me:x", "Global Me");
+  });
+
+  it("leaves the open room's names alone when setting another room's", async () => {
+    await setOwnRoomNickname("!other:x", "elsewhere");
+    expect(timeline.updateSenderName).not.toHaveBeenCalled();
+  });
+
+  it("throws when the server refuses, changing nothing", async () => {
+    vi.mocked(ipc.setRoomNickname).mockRejectedValueOnce(new Error("M_FORBIDDEN"));
+    await expect(setOwnRoomNickname("!a:x", "nope")).rejects.toThrow("M_FORBIDDEN");
+    expect(timeline.updateSenderName).not.toHaveBeenCalled();
   });
 });

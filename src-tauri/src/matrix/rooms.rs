@@ -1017,6 +1017,13 @@ pub async fn set_room_nickname(
         .filter(|c| c.membership == MembershipState::Join)
         .unwrap_or_else(|| RoomMemberEventContent::new(MembershipState::Join));
     content.displayname = nickname;
+    // Fields that describe how we *joined*, not who we are. Re-sending them in
+    // a join→join update is at best noise, and `join_authorised_via_users_server`
+    // is worse: in a room joined through a restricted (space-members) rule, the
+    // homeserver rejects the event unless the authorising server signed it —
+    // which it did for the original join, not for this one.
+    content.join_authorized_via_users_server = None;
+    content.third_party_invite = None;
     content.reason = None;
 
     room.send_state_event_for_key(&own, content)

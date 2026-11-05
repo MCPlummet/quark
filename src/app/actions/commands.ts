@@ -16,7 +16,6 @@ import {
   banUser as ipcBanUser,
   unbanUser as ipcUnbanUser,
   setDisplayName as ipcSetDisplayName,
-  setRoomNickname as ipcSetRoomNickname,
   setRoomTopic,
 } from "../../ipc/index.js";
 
@@ -40,6 +39,7 @@ import {
   convertRoomDirectness,
   markRoomAsRead,
   setRoomMuted,
+  setOwnRoomNickname,
 } from "./rooms.js";
 import { logout } from "./session.js";
 import { loadTheme } from "./theme.js";
@@ -389,7 +389,7 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       // Bare `:myroomnick` puts the room back on your global display name.
       const nick = parsed.args.join(" ").trim();
       try {
-        await ipcSetRoomNickname(roomId, nick || null);
+        await setOwnRoomNickname(roomId, nick || null);
         showSuccess(nick ? `Your name in this room is now "${nick}"` : "Using your global display name in this room");
       } catch (err) {
         showError(`Failed to set room nickname: ${err instanceof Error ? err.message : String(err)}`);

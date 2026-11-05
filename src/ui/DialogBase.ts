@@ -52,6 +52,19 @@ export interface DialogBaseOptions {
  */
 export type DialogKeyOutcome = "handled" | "ignored";
 
+/** Whether keys sent to `target` are text input rather than commands. */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target instanceof HTMLInputElement) {
+    // Buttons and toggles take no typing; everything else (text, search,
+    // number, password, url…) does.
+    return !["button", "submit", "reset", "checkbox", "radio", "range", "color", "file", "image"].includes(target.type);
+  }
+  return false;
+}
+
 export abstract class DialogBase implements Modal {
   /** Root overlay element appended to document.body by App. */
   protected readonly root: HTMLElement;
@@ -258,6 +271,12 @@ export abstract class DialogBase implements Modal {
    * decide whether to fall through to other behaviour.
    */
   protected routeKey(e: KeyboardEvent): DialogKeyOutcome {
+    // A key typed into a text field is text. Routing it through the picker
+    // keymap swallowed the first `g` of every "g" typed (it starts the `gg`
+    // sequence), so typing "gg" was needed to get one — in every text field of
+    // every dialog that delegates here. Escape and Ctrl+[ are handled before
+    // this, so the dialog still closes from inside a field.
+    if (isEditableTarget(e.target)) return "ignored";
     const result = keymapManager.resolveKey(e.key, "picker");
     if (result.kind === "action" && result.action === "close") {
       e.preventDefault();

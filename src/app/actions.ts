@@ -65,6 +65,7 @@ export {
   openOrCreateDm,
   loadRoomMembers,
   applyReadReceiptVisibility,
+  setOwnRoomNickname,
 } from "./actions/rooms.js";
 
 // Message composition & lifecycle.

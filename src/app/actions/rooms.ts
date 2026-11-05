@@ -12,6 +12,7 @@ import {
   getSpaceChildren,
   getUserSpaces,
   getRooms,
+  setRoomNickname as ipcSetRoomNickname,
   joinRoom as ipcJoinRoom,
   leaveRoom as ipcLeaveRoom,
   createRoom,
@@ -1552,14 +1553,22 @@ async function _doRefreshRooms(): Promise<void> {
 }
 
 /**
- * Refresh the member list for the current room (e.g. after a sync event).
+ * Refresh the member list for the current room (e.g. after a sync event),
+ * including the sender names already drawn in its timeline.
  */
 export async function loadRoomMembers(roomId: string): Promise<void> {
   const { memberList, timeline } = getComponents();
   try {
     const members = await getRoomMembers(roomId);
+    if (AppState.get("currentRoomId") !== roomId) {
+      _putRoomMembers(roomId, members);
+      return;
+    }
     for (const m of members) {
-      if (m.display_name) _memberDisplayName.set(m.user_id, m.display_name);
+      if (m.display_name) {
+        _memberDisplayName.set(m.user_id, m.display_name);
+        timeline.updateSenderName(m.user_id, m.display_name);
+      }
       if (m.avatar_url) _memberAvatarMxc.set(m.user_id, m.avatar_url);
     }
     _putRoomMembers(roomId, members);
@@ -1568,4 +1577,29 @@ export async function loadRoomMembers(roomId: string): Promise<void> {
   } catch {
     // Non-critical — member list may just stay empty
   }
+}
+
+/** How long to give sync to deliver our own member event before re-reading. */
+const NICKNAME_ECHO_MS = 2500;
+
+/**
+ * Set this account's display name in one room (`null` = back to the global
+ * name), shared by `:myroomnick` and the room dialog's field.
+ *
+ * Names in the timeline and member list come from the room's member list,
+ * which nothing re-reads when our own member event changes — so a nickname
+ * that saved fine still looked like it had done nothing until the room was
+ * reopened. The open room's view is updated straight away, then re-read once
+ * the server's copy has had time to arrive. Throws on failure.
+ */
+export async function setOwnRoomNickname(roomId: string, nickname: string | null): Promise<void> {
+  const nick = nickname?.trim() || null;
+  await ipcSetRoomNickname(roomId, nick);
+
+  const ownUserId = AppState.get("ownUserId");
+  if (!ownUserId || AppState.get("currentRoomId") !== roomId) return;
+  const shown = nick ?? AppState.get("ownDisplayName") ?? ownUserId;
+  _memberDisplayName.set(ownUserId, shown);
+  getComponents().timeline.updateSenderName(ownUserId, shown);
+  setTimeout(() => void loadRoomMembers(roomId), NICKNAME_ECHO_MS);
 }
