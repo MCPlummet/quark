@@ -230,6 +230,17 @@ fn note_pending_order(space_id: &str, child_id: &str, order: &str) {
     }
 }
 
+fn forget_pending_order(space_id: &str, child_id: &str) {
+    if let Ok(mut pending) = PENDING_ORDERS.lock() {
+        if let Some(children) = pending.get_mut(space_id) {
+            children.remove(child_id);
+            if children.is_empty() {
+                pending.remove(space_id);
+            }
+        }
+    }
+}
+
 /// The order to list `child_id` by: a pending write if there is one the store
 /// has not caught up with, else what the store holds.
 fn effective_order(space_id: &str, child_id: &str, stored: Option<String>) -> Option<String> {
@@ -259,6 +270,34 @@ fn joined_space(client: &Client, space_room_id: &RoomId) -> Option<matrix_sdk::R
         .filter(|room| room.state() == matrix_sdk::RoomState::Joined)
 }
 
+/// `/hierarchy` answers for spaces this account has not joined, by space ID.
+///
+/// The room list re-reads a space's children on every room-list change, and a
+/// space can have subspaces this account never joined; without this, each of
+/// those was a (possibly federated) server request per refresh — the shape of
+/// load this app has put on a homeserver before. Their children change rarely
+/// and are only used to draw sections, so a few minutes stale is fine.
+type HierarchyCache = HashMap<String, (std::time::Instant, Vec<SpaceChild>)>;
+static HIERARCHY_CACHE: std::sync::LazyLock<std::sync::Mutex<HierarchyCache>> =
+    std::sync::LazyLock::new(Default::default);
+
+const HIERARCHY_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+async fn hierarchy_cached(client: &Client, space_room_id: &str) -> Result<Vec<SpaceChild>, String> {
+    if let Ok(cache) = HIERARCHY_CACHE.lock() {
+        if let Some((at, children)) = cache.get(space_room_id) {
+            if at.elapsed() < HIERARCHY_TTL {
+                return Ok(children.clone());
+            }
+        }
+    }
+    let children = get_space_hierarchy(client, space_room_id, Some(1)).await?;
+    if let Ok(mut cache) = HIERARCHY_CACHE.lock() {
+        cache.insert(space_room_id.to_owned(), (std::time::Instant::now(), children.clone()));
+    }
+    Ok(children)
+}
+
 /// The direct children of a space, in listing order.
 ///
 /// Read from the local store whenever this account has joined the space — no
@@ -277,7 +316,7 @@ pub async fn get_space_children(
 ) -> Result<Vec<SpaceChild>, String> {
     let space_id = RoomId::parse(space_room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let Some(space) = joined_space(client, &space_id) else {
-        return get_space_hierarchy(client, space_room_id, Some(1)).await;
+        return hierarchy_cached(client, space_room_id).await;
     };
 
     let mut children = Vec::new();
@@ -370,11 +409,16 @@ pub async fn reorder_space_children(
             .map(|e| e.content.clone())
             .ok_or_else(|| format!("{room_id} is no longer a child of this space"))?;
         content.insert("order".into(), serde_json::Value::String(order.clone()));
-        space
+        // Noted before the write rather than after it, so a refresh that lands
+        // while the request is in flight already lists the new order.
+        note_pending_order(space_room_id, room_id, order);
+        if let Err(e) = space
             .send_state_event_raw("m.space.child", room_id, serde_json::Value::Object(content))
             .await
-            .map_err(|e| format!("Failed to reorder the space: {e}"))?;
-        note_pending_order(space_room_id, room_id, order);
+        {
+            forget_pending_order(space_room_id, room_id);
+            return Err(format!("Failed to reorder the space: {e}"));
+        }
     }
     info!(space = %space_room_id, writes = updates.len(), "Reordered space children");
     Ok(updates.len())
@@ -391,10 +435,14 @@ pub async fn add_space_child(client: &Client, space_id: &str, child_id: &str) ->
 
     // Append after every child that has an order, so the new room lands at the
     // end of the ordered run instead of jumping to wherever its name sorts.
+    // Through the pending overlay, so a reorder sync hasn't echoed yet counts.
     let last_order = read_child_events(&space)
         .await?
         .iter()
-        .filter_map(|e| sanitize_order(e.content.get("order").and_then(|v| v.as_str())))
+        .filter_map(|e| {
+            let stored = e.content.get("order").and_then(|v| v.as_str()).map(str::to_owned);
+            sanitize_order(effective_order(space_id, &e.room_id, stored).as_deref())
+        })
         .max();
     let mut content = serde_json::json!({ "via": via });
     if let Some(last) = last_order {
@@ -463,6 +511,14 @@ mod tests {
         // Now it has: the store's value is used and the entry is dropped.
         assert_eq!(effective_order(space, "!a:x", Some("m".into())).as_deref(), Some("m"));
         assert_eq!(effective_order(space, "!a:x", Some("z".into())).as_deref(), Some("z"));
+    }
+
+    #[test]
+    fn a_failed_write_is_forgotten() {
+        let space = "!forget-test-space:x";
+        note_pending_order(space, "!a:x", "m");
+        forget_pending_order(space, "!a:x");
+        assert_eq!(effective_order(space, "!a:x", Some("c".into())).as_deref(), Some("c"));
     }
 
     #[test]

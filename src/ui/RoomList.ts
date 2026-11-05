@@ -171,6 +171,18 @@ export class RoomList {
     if (focusedId) this.focusRoom(focusedId, spaceId);
   }
 
+  /**
+   * Update a room's entry in the flat list *and* in every section listing it,
+   * so a later re-render from the sections (a reorder) draws the current
+   * badge and muted state rather than the ones it was first given.
+   */
+  private _patchRoom(id: string, patch: Partial<RoomEntry>): void {
+    this._rooms = this._rooms.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    for (const section of this._sections ?? []) {
+      section.rooms = section.rooms.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    }
+  }
+
   private _sectionIds(spaceId: string): string[] | null {
     const section = this._sections?.find((s) => s.spaceId === spaceId);
     return section ? section.rooms.map((r) => r.id) : null;
@@ -227,7 +239,7 @@ export class RoomList {
   updateRoomBadge(id: string, unreadCount: number, mentionCount: number): void {
     const idx = this._rooms.findIndex((r) => r.id === id);
     if (idx < 0) return;
-    this._rooms[idx] = { ...this._rooms[idx], unreadCount, mentionCount };
+    this._patchRoom(id, { unreadCount, mentionCount });
 
     const el = this._scrollEl.querySelector<HTMLElement>(`[data-room-id="${CSS.escape(id)}"]`);
     if (!el) return;
@@ -302,7 +314,7 @@ export class RoomList {
   updateRoomMuted(id: string, muted: boolean): void {
     const idx = this._rooms.findIndex((r) => r.id === id);
     if (idx < 0) return;
-    this._rooms[idx] = { ...this._rooms[idx], muted };
+    this._patchRoom(id, { muted });
 
     const el = this._scrollEl.querySelector<HTMLElement>(`[data-room-id="${CSS.escape(id)}"]`);
     if (!el) return;

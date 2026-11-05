@@ -1528,8 +1528,12 @@ async function _doRefreshRooms(): Promise<void> {
     }
 
     // A space that is gone (left from another client) can't stay selected.
+    // "Gone" means not joined at all: a space created or accepted a moment ago
+    // is joined before sync has delivered its m.room.create, so it is missing
+    // from `userSpaces` (which needs the room type) but not from `rooms`.
     const spaceId = AppState.get("currentSpaceId");
-    if (spaceId && !getPseudoSpace(spaceId) && !userSpaces.some((s) => s.room_id === spaceId)) {
+    if (spaceId && !getPseudoSpace(spaceId) && !userSpaces.some((s) => s.room_id === spaceId)
+        && !rooms.some((r) => r.room_id === spaceId)) {
       await selectSpace("__home__", { skipRoomRestore: true });
     }
 

@@ -966,12 +966,20 @@ already in sequence and fills the gaps with midpoint strings (spec alphabet
 `\x20`–`\x7E`, ≤ 50 chars), and an unordered tail already in name order stays
 unordered. Moving one room in a space ordered before is one event; a homeserver
 rate-limits state events like messages, so renumbering a whole space per move
-would take minutes. Each write rewrites only `order`, keeping `via`,
+would take minutes. The trade-off: the rooms left unordered sort by name here,
+but by when they were added in clients that follow the spec's tie-break
+(Element), so those clients can show that tail differently. The rooms the user
+placed are ordered everywhere. Each write rewrites only `order`, keeping `via`,
 `suggested` and anything else. Writes not yet echoed by sync are layered over
 the store for reads (so a refresh in between doesn't put the room back), and
 reorders run one at a time, each computed from the last. A refused write shows
 the error and redraws the server's order. Rooms the list doesn't show (unjoined
 children, subspaces) keep their slots.
+
+`/hierarchy` answers for unjoined subspaces are cached for five minutes
+(`HIERARCHY_CACHE`, `matrix/spaces.rs`): the open space is re-read on every
+room-list change, and without the cache each unjoined subspace in it cost a
+possibly-federated server request per refresh.
 
 **Creating rooms and spaces.** The room list header's `+` opens a menu — **New
 room**, **New space**, **Browse room directory** — and the space strip's `+`, a

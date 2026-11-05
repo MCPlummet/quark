@@ -3,14 +3,18 @@ import type { InviteInfo } from "../../ipc/types.js";
 
 vi.mock("../../ipc/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../ipc/index.js")>();
-  return { ...actual, getInvites: vi.fn(async () => []) };
+  return {
+    ...actual,
+    getInvites: vi.fn(async () => []),
+    declineInvite: vi.fn(async () => {}),
+  };
 });
 vi.mock("../../ui/NotificationToast.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../ui/NotificationToast.js")>();
   return { ...actual, showToast: vi.fn() };
 });
 
-const { newInvitesMessage, refreshInvites } = await import("./invites.js");
+const { newInvitesMessage, refreshInvites, declineInvite } = await import("./invites.js");
 const { getInvites } = await import("../../ipc/index.js");
 const { showToast } = await import("../../ui/NotificationToast.js");
 const { AppState } = await import("../state.js");
@@ -63,5 +67,20 @@ describe("refreshInvites", () => {
     vi.mocked(getInvites).mockRejectedValueOnce(new Error("offline"));
     await refreshInvites();
     expect(AppState.get("invites").map((i) => i.room_id)).toEqual(["!kept"]);
+  });
+});
+
+describe("answering an invite", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("keeps a declined invite gone even if a stale read still lists it", async () => {
+    vi.mocked(getInvites).mockResolvedValueOnce([invite("!x")]);
+    await refreshInvites();
+    expect(await declineInvite("!x")).toBe(true);
+    expect(AppState.get("invites")).toEqual([]);
+    // A refresh that read the list before the decline landed.
+    vi.mocked(getInvites).mockResolvedValueOnce([invite("!x")]);
+    await refreshInvites();
+    expect(AppState.get("invites")).toEqual([]);
   });
 });

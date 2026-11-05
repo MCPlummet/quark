@@ -50,6 +50,9 @@ export function attachRoomDrag(opts: RoomDragOptions): () => void {
 
   let pressed: { row: HTMLElement; section: string; startY: number; pointerId: number } | null = null;
   let dragging = false;
+  /** Escape ended the drag while the button is still down: the release must
+   *  still be swallowed, or it would open the room. */
+  let cancelled = false;
   let marked: { row: HTMLElement | null; cls: string } | null = null;
 
   const sectionRows = (section: string): HTMLElement[] =>
@@ -74,13 +77,25 @@ export function attachRoomDrag(opts: RoomDragOptions): () => void {
     document.body.classList.remove("quark-room-dragging");
     document.removeEventListener("pointermove", onMove, true);
     document.removeEventListener("pointerup", onUp, true);
+    document.removeEventListener("pointercancel", onCancel, true);
     document.removeEventListener("keydown", onKey, true);
     pressed = null;
     dragging = false;
+    cancelled = false;
+  };
+
+  /** Drop the drag visuals but keep tracking the press until it is released. */
+  const abandon = (): void => {
+    clearMark();
+    pressed?.row.classList.remove("room-list__item--dragging");
+    document.body.classList.remove("quark-room-dragging");
+    dragging = false;
+    cancelled = true;
   };
 
   // A drag ends with a click on the row it started on; that click must not
-  // also open the room.
+  // also open the room. Armed at the release, so it covers exactly the click
+  // that release produces.
   const swallowNextClick = (): void => {
     const swallow = (e: Event): void => {
       e.stopPropagation();
@@ -92,7 +107,7 @@ export function attachRoomDrag(opts: RoomDragOptions): () => void {
   };
 
   function onMove(e: PointerEvent): void {
-    if (!pressed || e.pointerId !== pressed.pointerId) return;
+    if (!pressed || e.pointerId !== pressed.pointerId || cancelled) return;
     if (!dragging) {
       if (Math.abs(e.clientY - pressed.startY) < DRAG_THRESHOLD_PX) return;
       dragging = true;
@@ -113,6 +128,11 @@ export function attachRoomDrag(opts: RoomDragOptions): () => void {
 
   function onUp(e: PointerEvent): void {
     if (!pressed || e.pointerId !== pressed.pointerId) return;
+    if (cancelled) {
+      swallowNextClick();
+      finish();
+      return;
+    }
     if (dragging) {
       const rows = sectionRows(pressed.section);
       const before = dropTarget(rows, e.clientY);
@@ -130,18 +150,25 @@ export function attachRoomDrag(opts: RoomDragOptions): () => void {
     if (e.key === "Escape" && dragging) {
       e.preventDefault();
       e.stopPropagation();
-      swallowNextClick();
-      finish();
+      abandon();
     }
+  }
+
+  // The browser took the pointer (a native drag or selection began): no
+  // release is coming, so stop tracking rather than drop on the next one.
+  function onCancel(e: PointerEvent): void {
+    if (pressed && e.pointerId === pressed.pointerId) finish();
   }
 
   const onDown = (e: PointerEvent): void => {
     if (e.button !== 0 || e.pointerType !== "mouse") return;
     const row = (e.target as HTMLElement | null)?.closest<HTMLElement>(".room-list__item[data-section]");
     if (!row || !container.contains(row) || !row.dataset.section) return;
+    if (pressed) finish();
     pressed = { row, section: row.dataset.section, startY: e.clientY, pointerId: e.pointerId };
     document.addEventListener("pointermove", onMove, true);
     document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onCancel, true);
     document.addEventListener("keydown", onKey, true);
   };
 

@@ -205,6 +205,20 @@ describe("RoomList", () => {
       expect(roomList.getFocusedRoomId()).toBe("!c:s");
     });
 
+    it("keeps badges and muting changed since render when it re-orders", () => {
+      roomList.setSections([
+        { label: "", spaceId: "!work:s", rooms: [{ id: "!a:s", name: "a", unreadCount: 4 }, { id: "!b:s", name: "b" }] },
+      ]);
+      roomList.updateRoomBadge("!a:s", 0, 0);
+      roomList.updateRoomMuted("!b:s", true);
+      roomList.applySectionOrder("!work:s", ["!b:s", "!a:s"]);
+      const a = roomList.getElement().querySelector('[data-room-id="!a:s"]')!;
+      const b = roomList.getElement().querySelector('[data-room-id="!b:s"]')!;
+      expect(a.querySelector(".room-list__item-badge")).toBeNull();
+      expect(a.classList.contains("room-list__item--unread")).toBe(false);
+      expect(b.classList.contains("room-list__item--muted")).toBe(true);
+    });
+
     it("ignores an order that doesn't match the section's rooms", () => {
       roomList.setSections(sections());
       roomList.applySectionOrder("!work:s", ["!c:s", "!a:s"]);

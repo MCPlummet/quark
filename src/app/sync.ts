@@ -431,4 +431,9 @@ export function stopSync(): void {
     unlisten();
   }
   _unlisteners = [];
+  // A refresh scheduled by the last session must not run against the next.
+  if (_roomListRefreshTimer) {
+    clearTimeout(_roomListRefreshTimer);
+    _roomListRefreshTimer = null;
+  }
 }

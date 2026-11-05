@@ -90,6 +90,23 @@ describe("refreshRooms", () => {
     expect(AppState.get("currentRoomId")).toBeNull();
   });
 
+  it("doesn't eject the user from a space joined a moment ago", async () => {
+    // Created or accepted: joined, but sync hasn't delivered its m.room.create
+    // yet, so get_user_spaces (which needs the room type) doesn't list it.
+    AppState.set("currentSpaceId", "!fresh:x");
+    vi.mocked(ipc.getUserSpaces).mockResolvedValue([SPACE]);
+    vi.mocked(ipc.getRooms).mockResolvedValue([room("!fresh:x")]);
+    await refreshRooms();
+    expect(AppState.get("currentSpaceId")).toBe("!fresh:x");
+  });
+
+  it("returns to Home when the space being viewed was left elsewhere", async () => {
+    AppState.set("currentSpaceId", "!gone:x");
+    vi.mocked(ipc.getRooms).mockResolvedValue([room("!a:x")]);
+    await refreshRooms();
+    expect(AppState.get("currentSpaceId")).toBe("__home__");
+  });
+
   it("coalesces overlapping calls into one follow-up run", async () => {
     let release!: () => void;
     vi.mocked(ipc.getRooms).mockImplementationOnce(

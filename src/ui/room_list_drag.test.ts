@@ -126,12 +126,29 @@ describe("attachRoomDrag", () => {
     expect(onDrop).not.toHaveBeenCalled();
   });
 
-  it("cancels on Escape", () => {
+  it("cancels on Escape, and the release that follows doesn't open the room", () => {
+    const onClick = vi.fn();
+    container.addEventListener("click", onClick);
     pointer("pointerdown", rows[2], { clientY: 50 });
     pointer("pointermove", document, { clientY: 5 });
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(rows[0].classList.contains("room-list__item--drop-before")).toBe(false);
+    // Still holding the button; moving further does not restart the drag.
+    pointer("pointermove", document, { clientY: 25 });
+    expect(rows[2].classList.contains("room-list__item--dragging")).toBe(false);
+    pointer("pointerup", document, { clientY: 5 });
+    rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onDrop).not.toHaveBeenCalled();
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("stops tracking when the browser cancels the pointer", () => {
+    pointer("pointerdown", rows[2], { clientY: 50 });
+    pointer("pointermove", document, { clientY: 5 });
+    pointer("pointercancel", document, { clientY: 5 });
+    expect(rows[2].classList.contains("room-list__item--dragging")).toBe(false);
+    // A later, unrelated release is not a drop.
     pointer("pointerup", document, { clientY: 5 });
     expect(onDrop).not.toHaveBeenCalled();
-    expect(rows[0].classList.contains("room-list__item--drop-before")).toBe(false);
   });
 });

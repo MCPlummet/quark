@@ -24,6 +24,22 @@ import { refreshRooms, selectRoom, selectSpace } from "./rooms.js";
  */
 let _known: Set<string> | null = null;
 
+/**
+ * Invites answered here in the last few seconds. A refresh that read the list
+ * before the answer reached the server would otherwise put the row back until
+ * the next sync.
+ */
+const _answered = new Map<string, number>();
+const ANSWERED_TTL_MS = 15_000;
+
+function stillPending(invite: InviteInfo, now: number): boolean {
+  const until = _answered.get(invite.room_id);
+  if (until === undefined) return true;
+  if (until > now) return false;
+  _answered.delete(invite.room_id);
+  return true;
+}
+
 /** The one-line announcement for invites that just arrived. */
 export function newInvitesMessage(fresh: InviteInfo[]): string | null {
   if (fresh.length === 0) return null;
@@ -47,6 +63,8 @@ export async function refreshInvites(): Promise<void> {
     console.warn("Failed to load invites:", err);
     return;
   }
+  const now = Date.now();
+  invites = invites.filter((i) => stillPending(i, now));
   const fresh = _known ? invites.filter((i) => !_known!.has(i.room_id)) : [];
   _known = new Set(invites.map((i) => i.room_id));
   AppState.set("invites", invites);
@@ -57,6 +75,7 @@ export async function refreshInvites(): Promise<void> {
 
 
 function dropInvite(roomId: string): void {
+  _answered.set(roomId, Date.now() + ANSWERED_TTL_MS);
   _known?.delete(roomId);
   AppState.set("invites", AppState.get("invites").filter((i) => i.room_id !== roomId));
 }
@@ -78,6 +97,8 @@ export async function acceptInvite(roomId: string): Promise<boolean> {
     joined = await ipcAcceptInvite(roomId);
   } catch (err) {
     showError(`Failed to accept invite: ${err instanceof Error ? err.message : String(err)}`);
+    // The invite may be gone server-side (rescinded, or answered elsewhere).
+    void refreshInvites();
     return false;
   }
   dropInvite(roomId);
@@ -95,6 +116,7 @@ export async function declineInvite(roomId: string): Promise<boolean> {
     await ipcDeclineInvite(roomId);
   } catch (err) {
     showError(`Failed to decline invite: ${err instanceof Error ? err.message : String(err)}`);
+    void refreshInvites();
     return false;
   }
   dropInvite(roomId);

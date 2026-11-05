@@ -92,9 +92,13 @@ pub fn between(lo: Option<&str>, hi: Option<&str>) -> Option<String> {
             return String::from_utf8(out).ok();
         }
         if ca == below_min {
-            // `lo` has ended and `hi` has the lowest character here; match it
-            // and look for room further along.
+            // `lo` has ended and `hi` has the lowest character here; match it.
+            // If `hi` goes on past this point, `out` is now a proper prefix of
+            // it — above `lo`, below `hi` — and is itself an answer.
             out.push(ORDER_MIN);
+            if bound.is_some_and(|b| b.len() > out.len()) {
+                return String::from_utf8(out).ok();
+            }
         } else {
             out.push(ca as u8);
             if cb > ca {
@@ -270,6 +274,13 @@ mod tests {
         // Nothing sorts between a string and the same string plus a space.
         assert_eq!(between(Some("a"), Some("a ")), None);
         assert_eq!(between(None, Some(" ")), None);
+    }
+
+    #[test]
+    fn between_finds_a_proper_prefix_of_the_upper_bound() {
+        // "a " sorts after "a" and before "a  ".
+        assert_eq!(between(Some("a"), Some("a  ")).as_deref(), Some("a "));
+        assert_eq!(between(None, Some("  ")).as_deref(), Some(" "));
     }
 
     #[test]
