@@ -1,5 +1,3 @@
-import { readFileSync, readdirSync } from "fs";
-import { resolve } from "path";
 import { parse } from "smol-toml";
 
 import { BUILTIN_THEME_MAP } from "./builtins.js";
@@ -16,7 +14,12 @@ import {
   type CompleteTheme,
 } from "./share.js";
 
-const THEMES_DIR = resolve(__dirname, "../../themes");
+/** themes/*.toml by file name, e.g. `nord.toml`. */
+const THEME_FILES: Record<string, string> = Object.fromEntries(
+  Object.entries(
+    import.meta.glob<string>("../../themes/*.toml", { query: "?raw", import: "default", eager: true }),
+  ).map(([path, text]) => [path.split("/").pop()!, text]),
+);
 const phosphor = BUILTIN_THEME_MAP.phosphor as CompleteTheme;
 
 /** Dotted paths of every leaf value in a nested object. */
@@ -29,9 +32,9 @@ describe("THEME_SCHEMA", () => {
   const schemaPaths = THEME_FIELDS.map((f) => f.path).sort();
 
   it("covers exactly the fields of every themes/*.toml file", () => {
-    for (const file of readdirSync(THEMES_DIR).filter((f) => f.endsWith(".toml"))) {
-      const parsed = parse(readFileSync(resolve(THEMES_DIR, file), "utf8"));
-      expect(leafPaths(parsed).sort(), file).toEqual(schemaPaths);
+    expect(Object.keys(THEME_FILES).length).toBeGreaterThan(0);
+    for (const [file, text] of Object.entries(THEME_FILES)) {
+      expect(leafPaths(parse(text)).sort(), file).toEqual(schemaPaths);
     }
   });
 
@@ -45,8 +48,7 @@ describe("THEME_SCHEMA", () => {
 describe("themeToToml", () => {
   it("reproduces each built-in theme's file in /themes/ byte for byte", () => {
     for (const [name, theme] of Object.entries(BUILTIN_THEME_MAP)) {
-      const file = readFileSync(resolve(THEMES_DIR, `${name}.toml`), "utf8");
-      expect(themeToToml(theme as CompleteTheme), name).toBe(file);
+      expect(themeToToml(theme as CompleteTheme), name).toBe(THEME_FILES[`${name}.toml`]);
     }
   });
 
@@ -99,15 +101,16 @@ describe("share string", () => {
 
   it("is plain base64 of the TOML, so any decoder can read it", () => {
     const toml = themeToToml(phosphor);
-    const b64 = Buffer.from(encodeThemeShare(toml), "base64url").toString("utf8");
-    expect(b64).toBe(toml);
+    const std = encodeThemeShare(toml).replace(/-/g, "+").replace(/_/g, "/");
+    expect(atob(std + "=".repeat((4 - (std.length % 4)) % 4))).toBe(toml); // ASCII theme
+
   });
 
   it("rejects strings that are not base64 or not text", () => {
     expect(() => decodeThemeShare("")).toThrow();
     expect(() => decodeThemeShare("not base64!")).toThrow();
     expect(() => decodeThemeShare("A")).toThrow();
-    expect(() => decodeThemeShare(Buffer.from([0xff, 0xfe, 0x00]).toString("base64url"))).toThrow();
+    expect(() => decodeThemeShare(btoa("\xff\xfe\x00"))).toThrow(/does not decode to text/);
   });
 });
 
