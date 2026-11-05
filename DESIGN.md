@@ -1521,6 +1521,22 @@ visual_indicator = "VIS"
 - **Gruvbox Dark**
 - **High Contrast** — accessibility-focused
 
+### Theme Editor & Sharing
+
+**[quark.tel/theme](https://quark.tel/theme/)** is a web editor for theme files: every field above as a form control, previewed live on the real client (`docs/demo`, embedded same-origin), with a download of the finished `.toml` for `~/.config/quark/themes/`. It can start from any built-in theme, and imports TOML (pasted, picked or dropped) or a theme link.
+
+**Share format.** A theme travels as a *share string*: the unpadded base64url (RFC 4648 §5) of the theme's UTF-8 TOML. There is no other envelope, so reading one is decode → the ordinary TOML theme parser. A link is the editor URL with the share string as its fragment:
+
+```
+https://quark.tel/theme/#W21ldGFdCm5hbWUgPSAiUGhvc3Bob3Ii…
+```
+
+The fragment never reaches a server. The address bar is the editor's state — every edit rewrites it, so reloading or sending the link reproduces the theme. Decoders should accept a whole link (use what follows `#`), the standard alphabet, padding, and line breaks. A full theme encodes to roughly 1.5 KB.
+
+The editor writes **canonical TOML**: every field, in the table and key order of the [structure above](#theme-file-structure) and the files in `/themes/`. Unlike the app's lenient custom-theme loader, the output satisfies the strict Rust `Theme` struct and `validate_theme`. Importing a partial or partly invalid theme fills in or replaces those fields from Phosphor and lists each change.
+
+Implementation: `src/theme/share.ts` holds a schema mirroring the Rust struct, which drives the TOML output, the validation and the share codec (shared with the app for a future in-app import). `themeToCssVars` in `src/theme/loader.ts` is the single field→CSS mapping, used by both `applyTheme` and the preview. The page is `src/theme-editor/`, built into `docs/theme/` by `pnpm build:theme-editor`. That output is committed like `docs/demo`, so rebuild it after changing either directory.
+
 ### Theme Hot-Reloading
 Themes reload on file save (watched via `notify` crate / filesystem events passed through Tauri). No restart required.
 
