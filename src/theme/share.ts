@@ -56,6 +56,8 @@ export interface ThemeSection {
 export interface ThemeIssue {
   /** Dotted field path, e.g. `colors.accent.primary`. */
   path: string;
+  /** Absent, present with a bad value, or not a theme setting at all. */
+  kind: "missing" | "invalid" | "unknown";
   message: string;
 }
 
@@ -263,11 +265,11 @@ export function validateTheme(theme: unknown): ThemeIssue[] {
     const value = getField(theme, path);
     if (value === undefined && field.optional) continue;
     if (value === undefined) {
-      issues.push({ path, message: "is missing" });
+      issues.push({ path, kind: "missing", message: "is missing" });
       continue;
     }
     const problem = checkField(field, value);
-    if (problem) issues.push({ path, message: problem });
+    if (problem) issues.push({ path, kind: "invalid", message: problem });
   }
   return issues;
 }
@@ -290,20 +292,24 @@ export function completeTheme(
       if (field.optional) {
         theme = setField(theme, path, "");
       } else {
-        issues.push({ path, message: `missing — using ${show(getField(base, path))}` });
+        issues.push({ path, kind: "missing", message: `missing — using ${show(getField(base, path))}` });
       }
       continue;
     }
     const problem = checkField(field, value);
     if (problem) {
-      issues.push({ path, message: `${show(value)} ${problem} — using ${show(getField(base, path))}` });
+      issues.push({
+        path,
+        kind: "invalid",
+        message: `${show(value)} ${problem} — using ${show(getField(base, path))}`,
+      });
     } else {
       theme = setField(theme, path, value);
     }
   }
 
   for (const path of unknownPaths(input)) {
-    issues.push({ path, message: "not a theme setting — ignored" });
+    issues.push({ path, kind: "unknown", message: "not a theme setting — ignored" });
   }
   return { theme, issues };
 }

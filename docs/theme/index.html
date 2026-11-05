@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quark theme editor</title>
+<meta name="description" content="Make a Quark theme in your browser: edit every colour and setting against the live client, share it as a link, and download the TOML.">
+<meta name="theme-color" content="#070b07">
+<link rel="icon" type="image/png" href="../assets/favicon.png">
+<link rel="canonical" href="https://quark.tel/theme/">
+
+<meta property="og:type" content="website">
+<meta property="og:title" content="Quark theme editor">
+<meta property="og:description" content="Edit a Quark theme against the live client, share it as a link, download the TOML.">
+<meta property="og:url" content="https://quark.tel/theme/">
+<meta property="og:image" content="https://quark.tel/assets/logo.png">
+<meta name="twitter:card" content="summary">
+
+<!-- The landing page's stylesheet supplies the fonts, palette, top bar,
+     window chrome and buttons; ./style.css only adds the editor layout.
+     vite-ignore keeps it a plain runtime link (it lives in docs/, not here). -->
+<link rel="preload" href="../assets/fonts/jetbrains-mono-400.woff2" as="font" type="font/woff2" crossorigin >
+<link rel="stylesheet" href="../style.css" >
+  <script type="module" crossorigin src="./assets/index-BnZTMCDc.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-MPLSC1uQ.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="../" aria-label="Quark home">
+    <img src="../assets/logo.png" alt="" width="26" height="26">
+    <span>quark</span>
+  </a>
+  <nav class="nav" aria-label="Primary">
+    <a href="../#features"><span class="c">:</span>features</a>
+    <a href="../#download"><span class="c">:</span>download</a>
+    <a class="nav-ext" href="https://github.com/MCPlummet/quark" rel="noopener">github&nbsp;↗</a>
+  </nav>
+</header>
+
+<main class="te">
+  <div class="te-head">
+    <h1 class="te-title"><span class="c">:</span>theme <span class="te-title-name" id="title-name">editor</span></h1>
+    <p class="te-lede">Every setting, against the live client. The link in your address bar
+      <em>is</em> the theme — share it, or download the TOML.</p>
+  </div>
+
+  <div class="te-bar" role="toolbar" aria-label="Theme actions">
+    <label class="te-preset">
+      <span class="te-preset-label">start from</span>
+      <select id="preset" aria-label="Start from a built-in theme"></select>
+    </label>
+    <button class="te-btn" id="import-btn" type="button">import…</button>
+    <span class="te-bar-gap"></span>
+    <button class="te-btn" id="copy-link" type="button">copy link</button>
+    <button class="te-btn te-btn-primary" id="download" type="button">↓ download .toml</button>
+  </div>
+
+  <div class="te-report" id="report" hidden>
+    <div class="te-report-head">
+      <strong id="report-title"></strong>
+      <button class="te-x" id="report-close" type="button" aria-label="Dismiss">×</button>
+    </div>
+    <ul id="report-list"></ul>
+  </div>
+
+  <div class="te-cols">
+    <form class="te-form" id="form" autocomplete="off" aria-label="Theme settings"></form>
+
+    <aside class="te-side">
+      <figure class="te-preview">
+        <div class="window">
+          <div class="window-bar">
+            <span class="tl"><i class="r"></i><i class="y"></i><i class="g"></i></span>
+            <span class="window-title" id="preview-title">quark — preview</span>
+            <a class="window-newtab" href="../demo/?debug" target="_blank" rel="noopener"
+               title="The demo in a new tab (without your theme)">demo ↗</a>
+          </div>
+          <div class="te-stage demo-loading" id="stage"></div>
+        </div>
+        <figcaption class="shot-cap">The real client with demo data — click in and try
+          <span class="kbd">j</span>/<span class="kbd">k</span>, <span class="kbd">i</span>, <span class="kbd">:</span>.</figcaption>
+      </figure>
+
+      <details class="te-toml" id="toml-panel">
+        <summary>
+          <span><span class="c">$</span> cat <span id="toml-filename">theme.toml</span></span>
+          <span class="te-valid" id="valid-badge"></span>
+        </summary>
+        <div class="te-toml-body">
+          <button class="te-btn te-btn-sm" id="copy-toml" type="button">copy</button>
+          <pre id="toml-out"></pre>
+        </div>
+      </details>
+
+      <section class="te-install" aria-labelledby="install-h">
+        <h2 id="install-h"><span class="c">›</span> install</h2>
+        <ol>
+          <li>Download the <span class="kbd">.toml</span>.</li>
+          <li>Put it in <span class="kbd">~/.config/quark/themes/</span>.</li>
+          <li>Pick it in Settings → Themes, under custom themes.</li>
+        </ol>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<dialog class="te-dialog" id="import-dialog" aria-labelledby="import-h">
+  <form method="dialog" class="te-dialog-inner" id="import-form">
+    <div class="te-dialog-head">
+      <h2 id="import-h">import a theme</h2>
+      <button class="te-x" value="cancel" formnovalidate aria-label="Close">×</button>
+    </div>
+    <label class="te-dialog-label" for="import-text">Paste a theme's TOML, a quark.tel/theme link, or its share string.</label>
+    <textarea id="import-text" rows="10" spellcheck="false" placeholder="[meta]&#10;name = &quot;…&quot;"></textarea>
+    <p class="te-dialog-error" id="import-error" role="alert" hidden></p>
+    <div class="te-dialog-actions">
+      <label class="te-btn te-file">
+        open .toml file…
+        <input type="file" id="import-file" accept=".toml,text/plain,application/toml">
+      </label>
+      <span class="te-bar-gap"></span>
+      <button class="te-btn" value="cancel" formnovalidate>cancel</button>
+      <button class="te-btn te-btn-primary" id="import-go" value="import">import</button>
+    </div>
+    <p class="te-dialog-fine">You can also drop a <span class="kbd">.toml</span> file anywhere on the page.</p>
+  </form>
+</dialog>
+
+<footer class="footer">
+  <div class="foot-main">
+    <a class="brand" href="../"><img src="../assets/logo.png" alt="" width="22" height="22"><span>quark</span></a>
+    <nav class="foot-links" aria-label="Footer">
+      <a href="https://github.com/MCPlummet/quark" rel="noopener">GitHub</a>
+      <a href="https://github.com/MCPlummet/quark/blob/main/DESIGN.md#theming" rel="noopener">Theme format</a>
+      <a href="https://github.com/MCPlummet/quark/tree/main/themes" rel="noopener">Built-in themes</a>
+      <a href="https://github.com/MCPlummet/quark/blob/main/LICENSE" rel="noopener">AGPL-3.0</a>
+    </nav>
+  </div>
+  <p class="foot-fine">
+    <span class="c">$</span> nothing leaves your browser — the theme lives in the link after the <span class="kbd">#</span>, which is never sent to a server.
+  </p>
+</footer>
+
+</body>
+</html>

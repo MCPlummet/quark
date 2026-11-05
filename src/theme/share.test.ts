@@ -161,9 +161,9 @@ describe("completeTheme", () => {
     expect(theme.meta.author).toBe("");
     expect(validateTheme(theme)).toEqual([]);
 
-    const byPath = new Map(issues.map((i) => [i.path, i.message]));
-    expect(byPath.get("colors.foreground")).toMatch(/"nope" must be a hex colour/);
-    expect(byPath.get("colors.cursor")).toMatch(/^missing/);
+    const byPath = new Map(issues.map((i) => [i.path, i]));
+    expect(byPath.get("colors.foreground")).toMatchObject({ kind: "invalid", message: expect.stringMatching(/"nope" must be a hex colour/) });
+    expect(byPath.get("colors.cursor")).toMatchObject({ kind: "missing", message: expect.stringMatching(/^missing/) });
     expect(byPath.has("meta.author")).toBe(false);
   });
 
@@ -171,6 +171,7 @@ describe("completeTheme", () => {
     const input = setField(setField(phosphor, "colors.accent.tertiary", "#fff"), "extra", { a: 1 });
     const { theme, issues } = completeTheme(input, phosphor);
     expect(issues.map((i) => i.path).sort()).toEqual(["colors.accent.tertiary", "extra"]);
+    expect(issues.every((i) => i.kind === "unknown")).toBe(true);
     expect(getField(theme, "colors.accent.tertiary")).toBeUndefined();
   });
 
