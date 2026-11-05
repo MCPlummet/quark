@@ -4,10 +4,20 @@
     <script>(function(){try{var p=new URLSearchParams(location.search);if(!p.has("debug")){p.set("debug","");history.replaceState(null,"",location.pathname+"?"+p.toString()+location.hash);}}catch(e){}})();</script>
 
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- user-scalable=no / maximum-scale=1 are what actually disable pinch-zoom on
+         iOS: WebKit does not let `touch-action` suppress the page-level pinch
+         gesture, so the `touch-action` rules in base.css never covered it. Images
+         keep their own pinch-to-zoom, which ImageLightbox implements in JS and
+         this does not affect; desktop browsers ignore the viewport meta entirely.
+         Android's "force enable zoom" accessibility setting overrides this meta,
+         which is why viewportMetrics (src/app/mobile.ts) stays scale-aware. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <title>Quark</title>
-    <script type="module" crossorigin src="./assets/index-eI2WozL-.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-98AbsPMG.css">
+    <script type="module" crossorigin src="./assets/index-DbGgP-1M.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DrHPovZd.css">
   </head>
   <body>
     <!-- Startup overlay — visible from first paint, before any JS runs, so the
