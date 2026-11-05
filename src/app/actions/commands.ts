@@ -406,9 +406,12 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
     case "create-space": {
       // The dialog, prefilled — a typed name alone is not enough to decide
       // access, encryption and parent space for the user.
+      const isSpace = entry.id === "create-space";
       await openCreateRoom({
-        kind: entry.id === "create-space" ? "space" : "room",
+        kind: isSpace ? "space" : "room",
         name: parsed.args.join(" ") || undefined,
+        // A room defaults into the space being viewed; a space to the top level.
+        ...(isSpace ? { parentSpaceId: null } : {}),
       });
       break;
     }

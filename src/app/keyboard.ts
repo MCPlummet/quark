@@ -387,7 +387,8 @@ export function dispatchAction(action: string, components: AppComponents): void 
       break;
 
     case "create-space":
-      void openCreateRoom({ kind: "space" });
+      // A new top-level space; "New subspace" on a space's menu nests one.
+      void openCreateRoom({ kind: "space", parentSpaceId: null });
       break;
 
     case "move-room-up":
@@ -1256,7 +1257,7 @@ export function setupKeyboard(components: AppComponents): void {
   roomList.onCreateClick((x, y) => {
     contextMenu.show(x, y, buildMenu("create", currentAvailability(), {
       "create-room": () => void openCreateRoom({ kind: "room" }),
-      "create-space": () => void openCreateRoom({ kind: "space" }),
+      "create-space": () => void openCreateRoom({ kind: "space", parentSpaceId: null }),
       "open-directory": () => openRoomDirectory(),
     }));
   });

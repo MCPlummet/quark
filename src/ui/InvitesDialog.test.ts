@@ -22,9 +22,10 @@ describe("invite labels", () => {
   });
 
   it("says who invited you", () => {
-    expect(inviteMeta(invite())).toBe("invited by Carol · @carol:x");
+    expect(inviteMeta(invite())).toBe("invited by Carol (@carol:x)");
+    expect(inviteMeta(invite({ canonical_alias: "#rust:x" }))).toBe("invited by Carol (@carol:x) · #rust:x");
     expect(inviteMeta(invite({ is_direct: true, is_encrypted: true }))).toBe(
-      "direct message from Carol · @carol:x · encrypted",
+      "direct message from Carol (@carol:x) · encrypted",
     );
   });
 });

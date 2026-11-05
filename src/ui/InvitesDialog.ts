@@ -25,11 +25,12 @@ export function inviteTitle(invite: InviteInfo): string {
 /** The row's second line: who invited you, and the room's address. */
 export function inviteMeta(invite: InviteInfo): string {
   const parts: string[] = [];
-  const who = invite.inviter_name ?? invite.inviter_id;
+  const name = invite.inviter_name;
+  const id = invite.inviter_id;
+  const who = name && id && name !== id ? `${name} (${id})` : name ?? id;
   if (invite.is_direct) parts.push(who ? `direct message from ${who}` : "direct message");
   else if (who) parts.push(`invited by ${who}`);
-  if (invite.inviter_name && invite.inviter_id) parts.push(invite.inviter_id);
-  else if (invite.canonical_alias && invite.canonical_alias !== inviteTitle(invite)) {
+  if (invite.canonical_alias && invite.canonical_alias !== inviteTitle(invite)) {
     parts.push(invite.canonical_alias);
   }
   if (invite.is_encrypted) parts.push("encrypted");

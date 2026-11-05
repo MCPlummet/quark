@@ -5865,6 +5865,8 @@ body.quark-mobile .create-room-dialog__body .settings-dialog__row {
 body.quark-mobile .create-room-dialog__body .settings-dialog__text-input,
 body.quark-mobile .create-room-dialog__body .settings-dialog__select {
   min-height: 40px;
+  /* iOS zooms into any control under 16px. */
+  font-size: max(16px, var(--font-size));
 }
 
 body.quark-mobile .create-room-dialog__actions .settings-dialog__btn {
