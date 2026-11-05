@@ -56,7 +56,8 @@ import {
 } from "./dialogs.js";
 import { setupCrossSigning } from "./crypto.js";
 import { startVerification } from "./verification.js";
-import { openEmojiPicker, openStickerPicker, openGifPicker } from "./gif.js";
+import { openEmojiPicker, openStickerPicker } from "./emoji_picker.js";
+import { openGifPicker } from "./gif.js";
 import { runUpdateCheck } from "../update_check.js";
 
 /**

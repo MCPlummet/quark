@@ -42,7 +42,7 @@ import { openThread, closeThread, isInOpenThread, THREAD_FOCUS_CLASS } from "./t
 import { sendMessage, startReply, startEdit, dismissComposeBanner } from "./messages.js";
 import { setComponents, _ownSentEventIds } from "./context.js";
 import { renderLiveEvent } from "./live.js";
-import { openQuickReactPicker } from "./reactions.js";
+import { openReactionPicker } from "./emoji_picker.js";
 import { AppState } from "../state.js";
 import { Timeline } from "../../ui/Timeline.js";
 import { ThreadView } from "../../ui/ThreadView.js";
@@ -82,7 +82,7 @@ let threadView: ThreadView;
 let replyPreview: ReplyPreview;
 let input: Input;
 let mainLayout: HTMLElement;
-const quickReactPicker = { show: vi.fn(), isVisible: () => false, setCustomEmoji: vi.fn() };
+const emojiPicker = { open: vi.fn(), setCustomPacks: vi.fn(), setCustomImage: vi.fn() };
 
 /** The pieces App and keyboard.ts wire together, wired the same way. */
 function mount(): void {
@@ -96,7 +96,7 @@ function mount(): void {
   document.body.appendChild(mainLayout);
   replyPreview.onDismiss(() => dismissComposeBanner());
   threadView.onClose(() => closeThread());
-  setComponents({ timeline, threadView, replyPreview, input, mainLayout, quickReactPicker } as unknown as AppComponents);
+  setComponents({ timeline, threadView, replyPreview, input, mainLayout, emojiPicker } as unknown as AppComponents);
 }
 
 const sheetOpen = () => threadView.getElement().style.display !== "none";
@@ -597,8 +597,8 @@ describe("a thread reply that fails to send", () => {
 it("anchors the reaction picker to the thread's row of the root, not the room's", async () => {
   timeline.setMessages([{ id: "$root", senderName: "Alice", timestamp: "2024-01-01T12:00:00Z", body: "the root" }]);
   await openThread("$root");
-  openQuickReactPicker("$root");
-  const anchor = quickReactPicker.show.mock.calls[0][1] as HTMLElement;
+  openReactionPicker("$root");
+  const anchor = emojiPicker.open.mock.calls[0][0].anchor as HTMLElement;
   expect(anchor).toBe(threadView.getMessageEl("$root"));
   expect(threadView.getElement().contains(anchor)).toBe(true);
 });

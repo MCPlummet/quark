@@ -118,7 +118,8 @@ export const EMOJI_CATEGORIES: EmojiCategory[] = ${JSON.stringify(categories, nu
 
 /**
  * Flat list of all built-in emoji shortcodes (including aliases) — used for
- * shortcode autocomplete and QuickReactPicker.
+ * shortcode autocomplete and outgoing shortcode expansion. The emoji picker
+ * reads EMOJI_CATEGORIES through ui/emoji_catalog.ts instead.
  */
 export const BUILTIN_EMOJI: ShortcodeEntry[] = EMOJI_CATEGORIES.flatMap((cat) =>
   cat.entries.flatMap((e) => [

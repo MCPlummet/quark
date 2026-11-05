@@ -88,7 +88,6 @@ export { openThread, closeThread } from "./actions/threads.js";
 export {
   sendReaction,
   applyIncomingReaction,
-  openQuickReactPicker,
   setupReactionChipHandler,
 } from "./actions/reactions.js";
 
@@ -114,8 +113,9 @@ export {
   openDebugViewerForEvent,
 } from "./actions/dialogs.js";
 
-// Emoji / sticker / GIF pickers.
-export { openEmojiPicker, openStickerPicker, openGifPicker } from "./actions/gif.js";
+// The emoji picker (compose and reaction contexts) and the GIF picker.
+export { openEmojiPicker, openStickerPicker, openReactionPicker } from "./actions/emoji_picker.js";
+export { openGifPicker } from "./actions/gif.js";
 
 // Media paste/pick, message hover-action handlers.
 export { sendStagedAttachments, attachFiles, readCopiedFiles, setupMessageActionHandlers } from "./actions/media.js";
