@@ -1266,7 +1266,7 @@ export function setupKeyboard(components: AppComponents): void {
   spaceStrip.onCreateSpaceClick(() => void openCreateRoom({ kind: "space", parentSpaceId: null }));
 
   // Drag-to-reorder within a space's section.
-  roomList.onReorder((spaceId, roomIds, movedRoomId) => void applySpaceOrder(spaceId, roomIds, movedRoomId));
+  roomList.onReorder((spaceId, roomIds) => void applySpaceOrder(spaceId, roomIds));
 
   // Invites: the status line's button and count, and the dialog's answers.
   const { statusBar, invitesDialog, createRoomDialog } = components;

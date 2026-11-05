@@ -936,6 +936,19 @@ lagged a reorder until the server's own view caught up. One consequence: a
 child this account knows nothing about (an unjoined subspace) has only its ID,
 so its section is not drawn — the room list lists joined rooms anyway.
 
+Removed children need help from us. The spec removes a child by replacing its
+event with one that has no `via`, and matrix-sdk 0.9 drops any state event it
+cannot deserialize — ruma requires `via` — so the SDK never stores a removal
+and the old child would stay listed forever. The sync loop therefore writes
+those raw removal events into the store itself
+(`room_list_watch::removed_space_children` → `spaces::persist_child_removals`),
+before signalling the refresh. And because every store written before this
+build already holds children removed while it ran (`/hierarchy` used to hide
+them), the first read of each joined space per session checks the stored
+children against the space's authoritative `children_state` from one
+`/hierarchy` call, and marks the ones the server no longer lists as removed.
+One request per space per session, retried after ten minutes if it fails.
+
 **Keeping up with other clients.** The backend emits `quark://sync/rooms` when a
 sync response touches the room list (`matrix/room_list_watch.rs`): any invite,
 leave or knock section; in a joined room, our *own* `m.room.member` or a state

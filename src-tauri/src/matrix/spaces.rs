@@ -298,6 +298,133 @@ async fn hierarchy_cached(client: &Client, space_room_id: &str) -> Result<Vec<Sp
     Ok(children)
 }
 
+/// A space-child removal to write: `(space, child, raw event)`.
+pub type ChildRemoval = (
+    matrix_sdk::ruma::OwnedRoomId,
+    String,
+    matrix_sdk::ruma::serde::Raw<matrix_sdk::ruma::events::AnySyncStateEvent>,
+);
+
+/// Write space-child removals the SDK dropped into the local store (see
+/// `room_list_watch::removed_space_children`). Called from the sync loop after
+/// the SDK has saved the response, so these land on top of it.
+pub async fn persist_child_removals(client: &Client, removals: Vec<ChildRemoval>) {
+    if removals.is_empty() {
+        return;
+    }
+    let mut changes = matrix_sdk::StateChanges::default();
+    for (space, child, raw) in removals {
+        changes
+            .state
+            .entry(space)
+            .or_default()
+            .entry(StateEventType::SpaceChild)
+            .or_default()
+            .insert(child, raw);
+    }
+    if let Err(e) = client.store().save_changes(&changes).await {
+        warn!("Failed to record removed space children: {e}");
+    }
+}
+
+/// Per joined space: whether its stored children have been checked against
+/// the server this session. A lock per space, so concurrent first reads wait
+/// for one check rather than each making their own request.
+#[derive(Default)]
+struct ReconcileState {
+    done: bool,
+    last_failure: Option<std::time::Instant>,
+}
+
+type ReconcileSlots = HashMap<String, Arc<tokio::sync::Mutex<ReconcileState>>>;
+static RECONCILED: std::sync::LazyLock<std::sync::Mutex<ReconcileSlots>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// How long after a failed check (offline, say) to try again.
+const RECONCILE_RETRY: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// The children `children_state` (from `/hierarchy`) lists as current.
+fn current_children(children_state: &[matrix_sdk::ruma::serde::Raw<matrix_sdk::ruma::events::space::child::HierarchySpaceChildEvent>]) -> std::collections::HashSet<String> {
+    children_state
+        .iter()
+        .filter_map(|raw| {
+            let v = raw.deserialize_as::<serde_json::Value>().ok()?;
+            let has_via = v["content"]["via"].as_array().is_some_and(|via| !via.is_empty());
+            if has_via { v["state_key"].as_str().map(str::to_owned) } else { None }
+        })
+        .collect()
+}
+
+/// Bring a joined space's stored children in line with the server, once per
+/// session. Returns whether anything was written.
+///
+/// Stores written by any earlier build still hold every child that was removed
+/// while the app ran — the SDK dropped each removal (see
+/// `persist_child_removals`) — and `/hierarchy`, which served every read until
+/// this build, hid that. One request per space per session reads the space's
+/// authoritative `children_state`; stored children it does not list are marked
+/// removed. Removals arriving later are caught by the sync loop instead.
+async fn reconcile_children(client: &Client, space: &matrix_sdk::Room, local: &[ChildEvent]) -> bool {
+    use matrix_sdk::ruma::api::client::space::get_hierarchy::v1::Request as HierarchyRequest;
+
+    let key = space.room_id().to_string();
+    let slot = {
+        let Ok(mut map) = RECONCILED.lock() else { return false };
+        map.entry(key.clone()).or_default().clone()
+    };
+    let mut state = slot.lock().await;
+    if state.done || state.last_failure.is_some_and(|at| at.elapsed() < RECONCILE_RETRY) {
+        return false;
+    }
+
+    let mut request = HierarchyRequest::new(space.room_id().to_owned());
+    request.max_depth = Some(matrix_sdk::ruma::UInt::from(1u32));
+    // The space's own entry carries all of its `children_state`; the rooms
+    // after it are not needed.
+    request.limit = Some(matrix_sdk::ruma::UInt::from(1u32));
+    let root = match client.send(request, None).await {
+        Ok(response) => response.rooms.into_iter().find(|r| r.room_id == space.room_id()),
+        Err(e) => {
+            warn!("Could not check {key}'s children against the server: {e}");
+            None
+        }
+    };
+    let Some(root) = root else {
+        state.last_failure = Some(std::time::Instant::now());
+        return false;
+    };
+    state.done = true;
+
+    let on_server = current_children(&root.children_state);
+    let stale: Vec<&ChildEvent> = local.iter().filter(|c| !on_server.contains(&c.room_id)).collect();
+    if stale.is_empty() {
+        return false;
+    }
+    let own = client.user_id().map(|u| u.to_string()).unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let removals: Vec<_> = stale
+        .iter()
+        .filter_map(|child| {
+            let raw = serde_json::from_value(serde_json::json!({
+                "type": "m.space.child",
+                "state_key": child.room_id,
+                "content": {},
+                "sender": own,
+                "origin_server_ts": now,
+                "event_id": format!("$quark-local-removed-{}", child.room_id.trim_start_matches('!')),
+            }))
+            .ok()?;
+            Some((space.room_id().to_owned(), child.room_id.clone(), raw))
+        })
+        .collect();
+    info!(space = %key, stale = removals.len(), "Marked space children the server no longer lists as removed");
+    persist_child_removals(client, removals).await;
+    true
+}
+
 /// The direct children of a space, in listing order.
 ///
 /// Read from the local store whenever this account has joined the space — no
@@ -319,8 +446,13 @@ pub async fn get_space_children(
         return hierarchy_cached(client, space_room_id).await;
     };
 
+    let mut events = read_child_events(&space).await?;
+    if reconcile_children(client, &space, &events).await {
+        events = read_child_events(&space).await?;
+    }
+
     let mut children = Vec::new();
-    for event in read_child_events(&space).await? {
+    for event in events {
         let stored = event
             .content
             .get("order")
@@ -511,6 +643,20 @@ mod tests {
         // Now it has: the store's value is used and the entry is dropped.
         assert_eq!(effective_order(space, "!a:x", Some("m".into())).as_deref(), Some("m"));
         assert_eq!(effective_order(space, "!a:x", Some("z".into())).as_deref(), Some("z"));
+    }
+
+    #[test]
+    fn only_children_with_via_are_current_on_the_server() {
+        let state: Vec<matrix_sdk::ruma::serde::Raw<_>> = [
+            serde_json::json!({ "type": "m.space.child", "state_key": "!a:x", "sender": "@u:x", "origin_server_ts": 1, "content": { "via": ["x"] } }),
+            serde_json::json!({ "type": "m.space.child", "state_key": "!gone:x", "sender": "@u:x", "origin_server_ts": 1, "content": {} }),
+        ]
+        .into_iter()
+        .map(|v| serde_json::from_value(v).unwrap())
+        .collect();
+        let current = current_children(&state);
+        assert!(current.contains("!a:x"));
+        assert!(!current.contains("!gone:x"));
     }
 
     #[test]

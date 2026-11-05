@@ -143,7 +143,7 @@ describe("reordering a space", () => {
 
   it("puts the list back when the server refuses", async () => {
     vi.mocked(ipc.reorderSpaceChildren).mockRejectedValueOnce(new Error("M_FORBIDDEN"));
-    await applySpaceOrder("!work:x", ["!b:x", "!a:x", "!c:x"], "!b:x");
+    await applySpaceOrder("!work:x", ["!b:x", "!a:x", "!c:x"]);
     expect(showError).toHaveBeenCalledWith(expect.stringContaining("M_FORBIDDEN"));
     expect(listed()).toEqual(["!a:x", "!b:x", "!c:x"]);
   });

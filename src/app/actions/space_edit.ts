@@ -112,10 +112,12 @@ let _reorderChain: Promise<void> = Promise.resolve();
  * Put a space section's rooms in `roomIds` order: at once in the list, then on
  * the server. A failure puts the list back the way the server has it.
  */
-export function applySpaceOrder(spaceId: string, roomIds: string[], movedRoomId: string): Promise<void> {
+export function applySpaceOrder(spaceId: string, roomIds: string[]): Promise<void> {
   const { roomList } = getComponents();
+  // Keeps keyboard focus on the moved row when the list had it (J/K, a drag);
+  // a move from the menu leaves focus where it was rather than taking DOM
+  // focus without making the room list the active panel.
   roomList.applySectionOrder(spaceId, roomIds);
-  roomList.focusRoom(movedRoomId, spaceId);
 
   _reorderChain = _reorderChain.then(async () => {
     try {
@@ -145,7 +147,7 @@ export function moveRoomInSpace(roomId: string, delta: -1 | 1): Promise<void> {
   if (from < 0 || to < 0 || to >= ids.length) return Promise.resolve();
   const next = [...ids];
   [next[from], next[to]] = [next[to], next[from]];
-  return applySpaceOrder(section.spaceId, next, roomId);
+  return applySpaceOrder(section.spaceId, next);
 }
 
 /** Whether `roomId` can move by `delta` in the list as shown. */

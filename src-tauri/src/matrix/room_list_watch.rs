@@ -97,6 +97,56 @@ pub fn room_list_changed(response: &SyncResponse, own_user_id: &str) -> bool {
     })
 }
 
+/// The child an `m.space.child` event removes, if it is a removal: the spec
+/// removes a child by replacing its event with one that has no `via`.
+fn child_removal<T>(raw: &Raw<T>) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Head {
+        #[serde(rename = "type")]
+        kind: String,
+        state_key: Option<String>,
+        #[serde(default)]
+        content: serde_json::Value,
+    }
+    let head = raw.deserialize_as::<Head>().ok()?;
+    if head.kind != "m.space.child" {
+        return None;
+    }
+    let has_via = head
+        .content
+        .get("via")
+        .and_then(|v| v.as_array())
+        .is_some_and(|via| !via.is_empty());
+    if has_via {
+        return None;
+    }
+    head.state_key.filter(|k| !k.is_empty())
+}
+
+/// Space-child removals in this response's joined rooms, as
+/// `(space, child, raw event)`.
+///
+/// matrix-sdk 0.9 throws away any state event it cannot deserialize, and ruma
+/// requires `via` on `m.space.child` — so the SDK never stores a removal, and
+/// the removed child stays in the local store with its old `via` for good.
+/// These are what `spaces::persist_child_removals` writes back.
+pub fn removed_space_children(response: &SyncResponse) -> Vec<crate::matrix::spaces::ChildRemoval> {
+    let mut out = Vec::new();
+    for (room_id, update) in &response.rooms.join {
+        for raw in &update.state {
+            if let Some(child) = child_removal(raw) {
+                out.push((room_id.clone(), child, raw.clone()));
+            }
+        }
+        for ev in &update.timeline.events {
+            if let Some(child) = child_removal(ev.raw()) {
+                out.push((room_id.clone(), child, ev.raw().clone().cast()));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +205,33 @@ mod tests {
         // Garbage is not a reason to refresh, and not a reason to panic.
         let junk: Raw<serde_json::Value> = Raw::new(&serde_json::json!([1, 2])).unwrap();
         assert!(!raw_is_room_list_event(&junk, ME));
+    }
+
+    #[test]
+    fn a_space_child_without_via_is_a_removal() {
+        let removal: Raw<serde_json::Value> = Raw::new(&serde_json::json!({
+            "type": "m.space.child", "state_key": "!c:x", "sender": ME, "content": {},
+        }))
+        .unwrap();
+        assert_eq!(child_removal(&removal).as_deref(), Some("!c:x"));
+
+        let empty_via: Raw<serde_json::Value> = Raw::new(&serde_json::json!({
+            "type": "m.space.child", "state_key": "!c:x", "sender": ME, "content": { "via": [] },
+        }))
+        .unwrap();
+        assert_eq!(child_removal(&empty_via).as_deref(), Some("!c:x"));
+
+        let live: Raw<serde_json::Value> = Raw::new(&serde_json::json!({
+            "type": "m.space.child", "state_key": "!c:x", "sender": ME, "content": { "via": ["x"] },
+        }))
+        .unwrap();
+        assert_eq!(child_removal(&live), None);
+
+        let other: Raw<serde_json::Value> = Raw::new(&serde_json::json!({
+            "type": "m.room.name", "state_key": "", "sender": ME, "content": {},
+        }))
+        .unwrap();
+        assert_eq!(child_removal(&other), None);
     }
 
     #[test]

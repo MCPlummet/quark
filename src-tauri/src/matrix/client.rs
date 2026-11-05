@@ -530,8 +530,13 @@ fn spawn_sync_loop(
                     crate::matrix::room_list_watch::room_list_changed(&response, &own_user_id)
                 });
                 let notify = notify.cloned();
+                let removals = crate::matrix::room_list_watch::removed_space_children(&response);
+                let client = client.clone();
                 async move {
                     crate::push_wake::note_warm_sync_progress();
+                    // Before the signal, so the refresh it triggers reads the
+                    // store with the removal in it.
+                    crate::matrix::spaces::persist_child_removals(&client, removals).await;
                     if let Some(app) = notify {
                         crate::events::emit_room_list_changed(&app);
                     }
