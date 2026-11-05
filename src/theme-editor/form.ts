@@ -4,6 +4,7 @@
 // page holds is always one quark accepts. Text a user is still typing that
 // isn't valid yet is marked invalid in place and reverted on blur.
 
+import { FRAME_STYLES } from "../theme/loader.js";
 import {
   THEME_SCHEMA,
   checkField,
@@ -19,14 +20,16 @@ interface Control {
   show(value: unknown): void;
 }
 
-/** Corner + edge glyphs shown beside each border style option. */
-const BORDER_SAMPLES: Record<string, string> = {
-  single: "┌─┐",
-  double: "╔═╗",
-  rounded: "╭─╮",
-  ascii: "+-+",
-  none: "   ",
-};
+/** A small box framed the way each border style draws, beside its option. */
+function borderSample(option: string): HTMLElement | null {
+  const frame = FRAME_STYLES[option as keyof typeof FRAME_STYLES] as (typeof FRAME_STYLES)["single"] | undefined;
+  if (!frame) return null;
+  const box = el("span", { class: "tf-seg-frame" });
+  box.setAttribute("aria-hidden", "true");
+  box.style.border = `${frame.width} ${frame.line} currentColor`;
+  box.style.borderRadius = frame.radius === "0px" ? "0" : "4px";
+  return box;
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -279,16 +282,8 @@ export class ThemeForm {
       radio.addEventListener("change", () => {
         if (radio.checked) this.onChange(path, option);
       });
-      const sample = BORDER_SAMPLES[option];
-      group.append(
-        el(
-          "label",
-          { class: "tf-seg-opt" },
-          radio,
-          ...(sample !== undefined ? [el("span", { class: "tf-seg-glyph" }, sample)] : []),
-          el("span", {}, option),
-        ),
-      );
+      const sample = borderSample(option);
+      group.append(el("label", { class: "tf-seg-opt" }, radio, ...(sample ? [sample] : []), el("span", {}, option)));
       return radio;
     });
     row.append(group);

@@ -82,7 +82,7 @@ describe("themeToToml", () => {
 
 describe("share string", () => {
   it("round-trips TOML, including non-ASCII", () => {
-    const toml = themeToToml(setField(phosphor, "prompt.symbol", "λ❯ 🐉"));
+    const toml = themeToToml(setField(phosphor, "prompt.insert_indicator", "λ❯ 🐉"));
     const encoded = encodeThemeShare(toml);
     expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(decodeThemeShare(encoded)).toBe(toml);
@@ -137,7 +137,7 @@ describe("validateTheme", () => {
     const paths = (t: unknown) => validateTheme(t).map((i) => i.path);
     expect(paths(setField(phosphor, "emoji.reaction_size", 20.5))).toEqual(["emoji.reaction_size"]);
     expect(paths(setField(phosphor, "typography.message_spacing", -1))).toEqual(["typography.message_spacing"]);
-    expect(paths(setField(phosphor, "prompt.symbol", 3))).toEqual(["prompt.symbol"]);
+    expect(paths(setField(phosphor, "prompt.normal_indicator", 3))).toEqual(["prompt.normal_indicator"]);
     expect(paths(setField(phosphor, "meta.name", "  "))).toEqual(["meta.name"]);
   });
 });
@@ -173,6 +173,12 @@ describe("completeTheme", () => {
     expect(issues.map((i) => i.path).sort()).toEqual(["colors.accent.tertiary", "extra"]);
     expect(issues.every((i) => i.kind === "unknown")).toBe(true);
     expect(getField(theme, "colors.accent.tertiary")).toBeUndefined();
+  });
+
+  it("drops retired settings without reporting them", () => {
+    const { theme, issues } = completeTheme(setField(phosphor, "prompt.symbol", ":>"), phosphor);
+    expect(issues).toEqual([]);
+    expect(getField(theme, "prompt.symbol")).toBeUndefined();
   });
 
   it("does not mutate the base", () => {

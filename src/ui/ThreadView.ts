@@ -3,8 +3,7 @@
 import { createReactionBar, type ReactionGroup } from "./Reactions.js";
 import { attachResizeHandle } from "./ResizeHandle.js";
 import { guardViewportPan } from "../app/mobile.js";
-import { appendLinkifiedText } from "../app/links.js";
-import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
+import { appendCaption, buildFileAffordance, renderMessageText } from "./message_body.js";
 
 export interface ThreadMessageData {
   id: string;
@@ -197,11 +196,7 @@ export class ThreadView {
 
     const body = document.createElement("div");
     body.className = "thread-view__root-body";
-    if (root.htmlBody) {
-      renderFormattedBody(body, root.htmlBody);
-    } else {
-      appendLinkifiedText(body, root.body);
-    }
+    renderMessageText(body, root.body, root.htmlBody);
     this._rootEl.appendChild(body);
   }
 
@@ -300,11 +295,7 @@ export class ThreadView {
     } else {
       const body = document.createElement("div");
       body.className = "thread-view__message-body";
-      if (msg.htmlBody) {
-        renderFormattedBody(body, msg.htmlBody);
-      } else {
-        appendLinkifiedText(body, msg.body);
-      }
+      renderMessageText(body, msg.body, msg.htmlBody);
       row.appendChild(body);
     }
 

@@ -150,14 +150,14 @@ export const THEME_SCHEMA: readonly ThemeSection[] = [
       text("font_family", "CSS font stack for the interface"),
       { key: "font_size", kind: { type: "int", min: 6, max: 72, enforce: true }, hint: "Base size in px" },
       { key: "line_height", kind: { type: "float", min: 1, max: 2.5, step: 0.05 }, hint: "Multiple of font size" },
-      { key: "message_spacing", kind: { type: "int", min: 0, max: 32 }, hint: "px between messages" },
+      { key: "message_spacing", kind: { type: "int", min: 0, max: 32 }, hint: "Space around each message in a group, px" },
     ],
   },
   {
     path: "borders",
     title: "Borders",
     fields: [
-      { key: "style", kind: { type: "enum", options: BORDER_STYLES }, hint: "Box-drawing glyph set" },
+      { key: "style", kind: { type: "enum", options: BORDER_STYLES }, hint: "Frames: message boxes, compose box, pane dividers" },
       text("room_list_width", "CSS width of the room list, e.g. 25% or 240px"),
     ],
   },
@@ -165,16 +165,15 @@ export const THEME_SCHEMA: readonly ThemeSection[] = [
     path: "emoji",
     title: "Emoji",
     fields: [
-      { key: "size", kind: { type: "int", min: 8, max: 256, enforce: true }, hint: "Inline custom emoji height, px" },
+      { key: "size", kind: { type: "int", min: 8, max: 256, enforce: true }, hint: "Emoji in a message that is only emoji, px" },
       { key: "sticker_max_size", kind: { type: "int", min: 32, max: 1024 }, hint: "Largest sticker dimension, px" },
-      { key: "reaction_size", kind: { type: "int", min: 8, max: 64 }, hint: "Emoji in the reaction bar, px" },
+      { key: "reaction_size", kind: { type: "int", min: 8, max: 64 }, hint: "Emoji in a reaction chip, px" },
     ],
   },
   {
     path: "prompt",
-    title: "Prompt",
+    title: "Mode labels",
     fields: [
-      text("symbol", "Input prompt glyph"),
       text("normal_indicator", "Mode label in normal mode"),
       text("insert_indicator", "Mode label in insert mode"),
       text("command_indicator", "Mode label in command mode"),
@@ -316,13 +315,18 @@ export function completeTheme(
 
 const SECTION_PATHS = new Set(THEME_SCHEMA.map((s) => s.path));
 const FIELD_PATHS = new Set(THEME_FIELDS.map((f) => f.path));
+/**
+ * Settings themes used to have. Older files still carry them, and the app
+ * ignores them, so they are dropped without being reported as mistakes.
+ */
+const RETIRED_PATHS = new Set(["prompt.symbol"]);
 
 function unknownPaths(input: unknown, prefix = ""): string[] {
   if (!isObj(input)) return [];
   const out: string[] = [];
   for (const [key, value] of Object.entries(input)) {
     const path = prefix ? `${prefix}.${key}` : key;
-    if (FIELD_PATHS.has(path)) continue;
+    if (FIELD_PATHS.has(path) || RETIRED_PATHS.has(path)) continue;
     if (SECTION_PATHS.has(path) || (isObj(value) && [...SECTION_PATHS].some((s) => s.startsWith(`${path}.`)))) {
       out.push(...unknownPaths(value, path));
     } else {

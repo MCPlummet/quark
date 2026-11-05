@@ -1472,7 +1472,7 @@ system = "#555555"
 timestamp = "#444444"
 mention_bg = "#1a1a00"
 mention_fg = "#ffaa00"
-reply_border = "#555555"
+reply_border = "#00aaff"       # quote bar on replies
 thread_indicator = "#00aaff"
 
 [colors.roomlist]
@@ -1483,7 +1483,7 @@ mention_badge = "#ff3333"
 muted = "#444444"
 
 [colors.reactions]
-background = "#1a1a1a"
+background = "#0a0a0a"
 border = "#333333"
 own_bg = "#1a3a1a"
 count = "#888888"
@@ -1492,24 +1492,29 @@ count = "#888888"
 font_family = "JetBrains Mono, Fira Code, monospace"
 font_size = 14
 line_height = 1.5
-message_spacing = 4           # px between messages
+message_spacing = 4           # px above each message in a group, twice that below
 
 [borders]
-style = "single"              # single | double | rounded | ascii | none
+style = "rounded"             # single | double | rounded | ascii | none
 room_list_width = "25%"
 
 [emoji]
-size = 32                     # px, inline custom emoji height
+size = 32                     # px, emoji in a message that is only emoji
 sticker_max_size = 256        # px, max sticker dimension
-reaction_size = 20            # px, emoji in reaction bar
+reaction_size = 20            # px, emoji in a reaction chip (custom and standard)
 
 [prompt]
-symbol = ":>"                 # input prompt glyph
-normal_indicator = "NOR"      # mode indicator in normal mode
+normal_indicator = "NOR"      # mode badge label in normal mode
 insert_indicator = "INS"
 command_indicator = "CMD"
 visual_indicator = "VIS"
 ```
+
+`borders.style` sets the frames — message boxes, the compose box and its mode badge, and the lines between panes. They are CSS borders, so the names map to a line and corners: `rounded` solid with rounded corners, `single` solid and square, `double` a 3px double line, `ascii` dashed, `none` no frame. Other borders (inputs, dialogs, chips) keep the plain theme border.
+
+An emoji-only message — nothing but Unicode and custom emoji, with whitespace between — shows them at `emoji.size`; emoji inside text stay at the text's size.
+
+Themes once had `prompt.symbol`, an input prompt glyph the UI no longer draws. The key is retired: theme files that still set it load as before, and it is ignored.
 
 ### Built-in Themes
 - **Phosphor** — green-on-black CRT terminal

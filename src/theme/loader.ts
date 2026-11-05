@@ -60,7 +60,6 @@ export interface ThemeEmoji {
 }
 
 export interface ThemePrompt {
-  symbol?: string;
   normal_indicator?: string;
   insert_indicator?: string;
   command_indicator?: string;
@@ -90,23 +89,34 @@ export interface Theme {
   prompt?: ThemePrompt;
 }
 
-// ── Border glyph sets ────────────────────────────────────────────────────────
+// ── Border styles ────────────────────────────────────────────────────────────
 
-const BORDER_GLYPHS: Record<
+/**
+ * How `borders.style` draws the UI's frames — the message boxes, the compose
+ * box and the lines between panes. The names come from box-drawing sets, but
+ * the frames are CSS borders, so each maps to a line style, width and corner
+ * radius (`--frame-*` in vars.css). `double` needs 3px for both lines to show.
+ */
+export const FRAME_STYLES: Record<
   NonNullable<ThemeBorders["style"]>,
-  { h: string; v: string; tl: string; tr: string; bl: string; br: string }
+  { line: string; width: string; radius: string }
 > = {
-  single: { h: "─", v: "│", tl: "┌", tr: "┐", bl: "└", br: "┘" },
-  double: { h: "═", v: "║", tl: "╔", tr: "╗", bl: "╚", br: "╝" },
-  rounded: { h: "─", v: "│", tl: "╭", tr: "╮", bl: "╰", br: "╯" },
-  ascii: { h: "-", v: "|", tl: "+", tr: "+", bl: "+", br: "+" },
-  none: { h: " ", v: " ", tl: " ", tr: " ", bl: " ", br: " " },
+  single: { line: "solid", width: "2px", radius: "0px" },
+  double: { line: "double", width: "3px", radius: "0px" },
+  rounded: { line: "solid", width: "2px", radius: "8px" },
+  ascii: { line: "dashed", width: "2px", radius: "0px" },
+  none: { line: "none", width: "0px", radius: "0px" },
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function px(n: number): string {
   return `${n}px`;
+}
+
+/** A CSS string literal for `content:` — quotes, backslashes and newlines escaped. */
+function cssString(text: string): string {
+  return `"${text.replace(/[\\"]/g, "\\$&").replace(/\r?\n|\r/g, "\\a ")}"`;
 }
 
 // ── Cross-fade ───────────────────────────────────────────────────────────────
@@ -212,15 +222,11 @@ export function themeToCssVars(theme: Theme): Record<string, string> {
   const b = theme.borders;
   if (b) {
     if (b.room_list_width) set("--room-list-width", b.room_list_width);
-    const glyphs = b.style ? BORDER_GLYPHS[b.style] : undefined;
-    if (b.style && glyphs) {
-      set("--border-style", b.style);
-      set("--border-h", `"${glyphs.h}"`);
-      set("--border-v", `"${glyphs.v}"`);
-      set("--border-tl", `"${glyphs.tl}"`);
-      set("--border-tr", `"${glyphs.tr}"`);
-      set("--border-bl", `"${glyphs.bl}"`);
-      set("--border-br", `"${glyphs.br}"`);
+    const frame = b.style ? FRAME_STYLES[b.style] : undefined;
+    if (frame) {
+      set("--frame-line", frame.line);
+      set("--frame-width", frame.width);
+      set("--frame-radius", frame.radius);
     }
   }
 
@@ -233,11 +239,10 @@ export function themeToCssVars(theme: Theme): Record<string, string> {
 
   const p = theme.prompt;
   if (p) {
-    if (p.symbol) set("--prompt-symbol", `"${p.symbol}"`);
-    if (p.normal_indicator) set("--mode-normal", `"${p.normal_indicator}"`);
-    if (p.insert_indicator) set("--mode-insert", `"${p.insert_indicator}"`);
-    if (p.command_indicator) set("--mode-command", `"${p.command_indicator}"`);
-    if (p.visual_indicator) set("--mode-visual", `"${p.visual_indicator}"`);
+    if (p.normal_indicator != null) set("--mode-normal", cssString(p.normal_indicator));
+    if (p.insert_indicator != null) set("--mode-insert", cssString(p.insert_indicator));
+    if (p.command_indicator != null) set("--mode-command", cssString(p.command_indicator));
+    if (p.visual_indicator != null) set("--mode-visual", cssString(p.visual_indicator));
   }
 
   return vars;
@@ -274,10 +279,9 @@ export function resetTheme(root: HTMLElement = document.documentElement): void {
     "--roomlist-mention-badge", "--roomlist-muted",
     "--reaction-bg", "--reaction-border", "--reaction-own-bg", "--reaction-count",
     "--font-family", "--font-size", "--line-height", "--message-spacing",
-    "--room-list-width", "--border-style",
-    "--border-h", "--border-v", "--border-tl", "--border-tr", "--border-bl", "--border-br",
+    "--room-list-width", "--frame-line", "--frame-width", "--frame-radius",
     "--emoji-size", "--sticker-max-size", "--reaction-size",
-    "--prompt-symbol", "--mode-normal", "--mode-insert", "--mode-command", "--mode-visual",
+    "--mode-normal", "--mode-insert", "--mode-command", "--mode-visual",
   ];
   for (const prop of props) {
     root.style.removeProperty(prop);

@@ -126,6 +126,8 @@ const MOCK_TIMELINE: TimelineEvent[] = [
 
   mockEvent("@dave:matrix.org", "just joined, this client looks amazing", 8),
   mockEvent("@alice:matrix.org", "welcome! try :help to see available commands", 5),
+  // Emoji-only — drawn at the theme's emoji.size
+  mockEvent("@dave:matrix.org", "🙌🐉", 4),
   mockEvent("@bob:matrix.org", "anyone working on the sticker packs?", 2),
 ];
 

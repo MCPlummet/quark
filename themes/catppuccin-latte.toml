@@ -26,7 +26,7 @@ system = "#8c8fa1"
 timestamp = "#bcc0cc"
 mention_bg = "#e8e5f5"
 mention_fg = "#df8e1d"
-reply_border = "#8c8fa1"
+reply_border = "#1e66f5"
 thread_indicator = "#1e66f5"
 
 [colors.roomlist]
@@ -37,7 +37,7 @@ mention_badge = "#d20f39"
 muted = "#8c8fa1"
 
 [colors.reactions]
-background = "#dce0e8"
+background = "#eff1f5"
 border = "#bcc0cc"
 own_bg = "#e2eedd"
 count = "#8c8fa1"
@@ -58,7 +58,6 @@ sticker_max_size = 256
 reaction_size = 20
 
 [prompt]
-symbol = ":>"
 normal_indicator = "NOR"
 insert_indicator = "INS"
 command_indicator = "CMD"

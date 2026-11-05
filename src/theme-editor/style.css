@@ -132,7 +132,7 @@
   font-size:.78rem;color:var(--ink-2);cursor:pointer;background:var(--bg-2);
 }
 .tf-seg-opt input{position:absolute;opacity:0;pointer-events:none}
-.tf-seg-glyph{color:var(--green-soft);white-space:pre}
+.tf-seg-frame{display:inline-block;width:1.5em;height:.95em;box-sizing:border-box;color:var(--green-soft)}
 .tf-seg-opt:has(input:checked){border-color:var(--green-dim);color:var(--ink);background:rgba(0,255,65,.07)}
 .tf-seg-opt:has(input:focus-visible){outline:2px solid var(--green);outline-offset:2px}
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyTheme, resetTheme, type Theme } from "./loader.js";
+import { applyTheme, resetTheme, themeToCssVars, type Theme } from "./loader.js";
 
 describe("theme/loader", () => {
   let root: HTMLElement;
@@ -101,23 +101,25 @@ describe("theme/loader", () => {
       expect(root.style.getPropertyValue("--line-height")).toBe("1.5");
     });
 
-    it("sets border style and associated glyph variables", () => {
-      const theme: Theme = { borders: { style: "single" } };
+    it.each([
+      ["rounded", "solid", "2px", "8px"],
+      ["single", "solid", "2px", "0px"],
+      ["double", "double", "3px", "0px"],
+      ["ascii", "dashed", "2px", "0px"],
+      ["none", "none", "0px", "0px"],
+    ] as const)("draws %s borders as a %s frame, %s wide, %s corners", (style, line, width, radius) => {
+      applyTheme({ borders: { style } }, root);
 
-      applyTheme(theme, root);
-
-      expect(root.style.getPropertyValue("--border-style")).toBe("single");
-      expect(root.style.getPropertyValue("--border-h")).toBeTruthy();
-      expect(root.style.getPropertyValue("--border-v")).toBeTruthy();
+      expect(root.style.getPropertyValue("--frame-line")).toBe(line);
+      expect(root.style.getPropertyValue("--frame-width")).toBe(width);
+      expect(root.style.getPropertyValue("--frame-radius")).toBe(radius);
     });
 
-    it("sets correct glyphs for ascii border style", () => {
-      const theme: Theme = { borders: { style: "ascii" } };
+    it("ignores an unknown border style instead of throwing", () => {
+      const theme = { borders: { style: "square" } } as unknown as Theme;
 
-      applyTheme(theme, root);
-
-      expect(root.style.getPropertyValue("--border-h")).toBe('"-"');
-      expect(root.style.getPropertyValue("--border-v")).toBe('"|"');
+      expect(() => applyTheme(theme, root)).not.toThrow();
+      expect(root.style.getPropertyValue("--frame-line")).toBe("");
     });
 
     it("sets room list width", () => {
@@ -136,14 +138,6 @@ describe("theme/loader", () => {
       expect(root.style.getPropertyValue("--emoji-size")).toBe("24px");
     });
 
-    it("sets prompt symbol", () => {
-      const theme: Theme = { prompt: { symbol: ">>" } };
-
-      applyTheme(theme, root);
-
-      expect(root.style.getPropertyValue("--prompt-symbol")).toBe('">>"');
-    });
-
     it("sets mode indicators", () => {
       const theme: Theme = {
         prompt: { normal_indicator: "NOR", insert_indicator: "INS" },
@@ -153,6 +147,17 @@ describe("theme/loader", () => {
 
       expect(root.style.getPropertyValue("--mode-normal")).toBe('"NOR"');
       expect(root.style.getPropertyValue("--mode-insert")).toBe('"INS"');
+    });
+
+    it("escapes mode indicators into valid CSS strings", () => {
+      const vars = themeToCssVars({
+        prompt: { normal_indicator: 'say "hi"', insert_indicator: "a\\b", command_indicator: "" },
+      });
+
+      expect(vars["--mode-normal"]).toBe('"say \\"hi\\""');
+      expect(vars["--mode-insert"]).toBe('"a\\\\b"');
+      // Empty is a choice (no label), not a missing field.
+      expect(vars["--mode-command"]).toBe('""');
     });
   });
 
@@ -210,21 +215,21 @@ describe("theme/loader", () => {
       expect(root.style.getPropertyValue("--font-size")).toBe("");
     });
 
-    it("removes border glyph properties", () => {
+    it("removes border frame properties", () => {
       applyTheme({ borders: { style: "single" } }, root);
 
       resetTheme(root);
 
-      expect(root.style.getPropertyValue("--border-h")).toBe("");
-      expect(root.style.getPropertyValue("--border-v")).toBe("");
+      expect(root.style.getPropertyValue("--frame-line")).toBe("");
+      expect(root.style.getPropertyValue("--frame-radius")).toBe("");
     });
 
-    it("removes prompt symbol", () => {
-      applyTheme({ prompt: { symbol: ">>" } }, root);
+    it("removes mode indicators", () => {
+      applyTheme({ prompt: { normal_indicator: "N" } }, root);
 
       resetTheme(root);
 
-      expect(root.style.getPropertyValue("--prompt-symbol")).toBe("");
+      expect(root.style.getPropertyValue("--mode-normal")).toBe("");
     });
 
     it("does not throw when called on a clean element", () => {
