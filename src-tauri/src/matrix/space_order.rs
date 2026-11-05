@@ -138,7 +138,7 @@ fn longest_increasing(orders: &[Option<&str>]) -> Vec<usize> {
                 }
             }
         }
-        if top.map_or(true, |t| best[i] > best[t]) {
+        if top.is_none_or(|t| best[i] > best[t]) {
             top = Some(i);
         }
     }

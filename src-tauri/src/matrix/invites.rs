@@ -70,7 +70,7 @@ pub async fn get_invites(client: &Client) -> Result<Vec<InviteInfo>, String> {
     }
     // Stable order for the dialog: the server gives no invite timestamp in
     // stripped state, so alphabetical by what the row will show.
-    invites.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
+    invites.sort_by_key(sort_key);
     Ok(invites)
 }
 
@@ -149,7 +149,7 @@ mod tests {
             invite(None, Some("Alice"), "!a:x"),
             invite(Some("Beta"), None, "!b:x"),
         ];
-        v.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
+        v.sort_by_key(sort_key);
         let ids: Vec<_> = v.iter().map(|i| i.room_id.as_str()).collect();
         assert_eq!(ids, ["!a:x", "!b:x", "!z:x"]);
     }

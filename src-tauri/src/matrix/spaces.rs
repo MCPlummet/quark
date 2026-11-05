@@ -141,7 +141,7 @@ async fn enrich_with_order(
     }
 
     // Same listing order as the local path and the reorder computation.
-    enriched.sort_by(|a, b| compare_space_children(a, b));
+    enriched.sort_by(compare_space_children);
 
     enriched
 }
@@ -211,9 +211,9 @@ async fn read_child_events(space: &matrix_sdk::Room) -> Result<Vec<ChildEvent>, 
 /// succession would be computed from orders already overwritten. Reads layer
 /// these on top of the store; each entry goes once the store agrees, or after
 /// [`PENDING_ORDER_TTL`] if the echo never comes.
-static PENDING_ORDERS: std::sync::LazyLock<
-    std::sync::Mutex<HashMap<String, HashMap<String, (String, std::time::Instant)>>>,
-> = std::sync::LazyLock::new(Default::default);
+type PendingBySpace = HashMap<String, HashMap<String, (String, std::time::Instant)>>;
+static PENDING_ORDERS: std::sync::LazyLock<std::sync::Mutex<PendingBySpace>> =
+    std::sync::LazyLock::new(Default::default);
 
 const PENDING_ORDER_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 
