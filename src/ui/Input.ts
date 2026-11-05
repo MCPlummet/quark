@@ -643,6 +643,20 @@ export class Input {
   }
 
   /**
+   * Insert `text` at the caret, replacing any selection, and leave the caret
+   * after it — what an emoji picked from the picker does. The field keeps its
+   * selection while the picker has focus, so this lands where the user was.
+   */
+  insertText(text: string): void {
+    const field = this._fieldEl;
+    const start = field.selectionStart ?? field.value.length;
+    const end = field.selectionEnd ?? field.value.length;
+    field.setRangeText(text, start, end, "end");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    this._autoGrow();
+  }
+
+  /**
    * Wrap the current selection in markdown markers (e.g. `**` for bold), or
    * insert an empty pair with the caret between them when nothing is selected.
    * The inner text stays selected so the user can keep typing or toggle again.
