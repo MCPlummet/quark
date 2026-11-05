@@ -6,8 +6,8 @@ import {
 } from "./PickerBase.js";
 import type { ResolveResult } from "../vim/keybindings.js";
 
-// SelectionList is the single nav engine shared by every picker (emoji, gif,
-// sticker, quick-react, quick-nav) after the dedup in 077fce9. A regression in
+// SelectionList is the single nav engine shared by every picker (emoji — in
+// both its compose and reaction contexts — gif, sticker, quick-nav). A regression in
 // its column/clamping math breaks all of them at once — and the grid arithmetic
 // here is exactly what the "grid-accurate quick-react nav" fix (d263814)
 // corrected. These tests lock that math down.
@@ -265,6 +265,60 @@ describe("SelectionList", () => {
         }),
       });
       expect(list.handleKey("Escape")).toEqual({ consumed: false, partial: false });
+    });
+  });
+
+  // The emoji picker's sectioned grid and its picker-specific keys go through
+  // these hooks, so its every key still takes the one keymap resolution.
+  describe("move / onEdge / onAction hooks", () => {
+    it("a `move` override decides where directional actions land", () => {
+      const items = makeItems(6);
+      const move = vi.fn((from: number) => (from === 0 ? 4 : null));
+      const onEdge = vi.fn();
+      const list = new SelectionList({
+        columns: 3, highlight: CLASS_HL, getItems: () => items, onSelect: vi.fn(), move, onEdge,
+      });
+      expect(list.dispatch("nav-down")).toBe(true);
+      expect(move).toHaveBeenCalledWith(0, "nav-down", 6);
+      expect(list.focusIndex).toBe(4);
+      expect(onEdge).not.toHaveBeenCalled();
+    });
+
+    it("a null move reports the edge and leaves focus where it was", () => {
+      const items = makeItems(6);
+      const onEdge = vi.fn();
+      const list = new SelectionList({
+        columns: 3, highlight: CLASS_HL, getItems: () => items, onSelect: vi.fn(),
+        move: () => null, onEdge,
+      });
+      list.setFocus(2);
+      list.dispatch("nav-up");
+      expect(onEdge).toHaveBeenCalledExactlyOnceWith("nav-up");
+      expect(list.focusIndex).toBe(2);
+    });
+
+    it("jumps, select and the fixed-column arithmetic are untouched by `move`", () => {
+      const items = makeItems(6);
+      const list = new SelectionList({
+        columns: 3, highlight: CLASS_HL, getItems: () => items, onSelect: vi.fn(), move: () => 0,
+      });
+      list.dispatch("jump-bottom");
+      expect(list.focusIndex).toBe(5);
+    });
+
+    it("hands close and unknown actions to onAction, consumed when it accepts", () => {
+      const onAction = vi.fn((a: string) => a === "picker-search" || a === "close");
+      const withHook = new SelectionList({
+        columns: 1, highlight: CLASS_HL, getItems: () => makeItems(3), onSelect: vi.fn(), onAction,
+        resolve: (key) =>
+          key === "/" ? { kind: "action", action: "picker-search", noremap: false }
+          : key === "Escape" ? { kind: "action", action: "close", noremap: false }
+          : { kind: "action", action: "toggle-member-list", noremap: false },
+      });
+      expect(withHook.handleKey("/").consumed).toBe(true);
+      expect(withHook.handleKey("Escape").consumed).toBe(true);
+      expect(withHook.handleKey("m").consumed).toBe(false);
+      expect(onAction.mock.calls.map((c) => c[0])).toEqual(["picker-search", "close", "toggle-member-list"]);
     });
   });
 });
