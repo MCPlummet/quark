@@ -27,6 +27,7 @@ import {
   type AvailabilityContext,
 } from "../registry.js";
 import { currentAvailability } from "../availability.js";
+import { AppState } from "../state.js";
 
 import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js";
 import packageJson from "../../../package.json";
@@ -378,6 +379,7 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       if (!newName) return usageError(entry);
       try {
         await ipcSetDisplayName(newName);
+        AppState.set("ownDisplayName", newName);
         showSuccess(`Display name set to "${newName}"`);
       } catch (err) {
         showError(`Failed to set display name: ${err instanceof Error ? err.message : String(err)}`);

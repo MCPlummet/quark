@@ -714,7 +714,7 @@ All panels, borders, and text use monospace rendering. Colors, borders, and glyp
 
 ### Status line
 
-The foot of the space strip and room list is one horizontal row:
+The foot of the space strip and room list is two rows:
 
 ```
 ┌────┬───────────────────────────┐
@@ -727,24 +727,31 @@ The foot of the space strip and room list is one horizontal row:
 │ ✉  │                           │
 │ #  │                           │
 ├────┴───────────────────────────┤
-│ (Y•) set status…     ⇩3  ⌕  ⚙ │
+│ (C•) Cyrillus       ⇩3   ⌕   ⚙ │
+│      set status…               │
 └────────────────────────────────┘
 ```
 
-- **Left — you.** Your avatar opens your profile (`P`); the dot on its corner is
-  the connection state (green connected, red offline, and the avatar dims).
-  Beside it, your presence status — click it, or press `S`, to edit inline.
-- **Right — the app.** Pending **invites** (an inbox tray with a count, lit when
-  any are waiting; `:invites`), **search** rooms and commands (the palette,
-  `Ctrl+K`), and **settings** (`?`).
+- **Top left — you.** Your avatar and display name, one button that opens your
+  profile (`P`); the dot on the avatar's corner is the connection state (green
+  connected, red offline, and the avatar dims).
+- **Top right — the app.** Pending **invites** (an inbox tray with a count, lit
+  when any are waiting; `:invites`), **search** rooms and commands (the
+  palette, `Ctrl+K`), and **settings** (`?`) — 40px square buttons, so they are
+  easy targets on desktop too.
+- **Below — your presence status**, lined up under your name with the rest of
+  the width to itself. Click it, or press `S`, to edit inline; `Enter` saves,
+  `Esc` cancels.
 
 These used to stack vertically at the bottom of the space strip, under the
-spaces, where a long list pushed them off screen. The strip now holds spaces
-alone. On desktop the row is fixed over the two columns, which reserve
-`--status-bar-height` of bottom padding for it; on mobile `App.ts` reparents it
-to the foot of the room-list drawer, with finger-sized targets. The old status
-bar's encryption indicator was dropped: nothing ever set it, so it always read
-"not encrypted" (the room header carries the real one).
+spaces, where a long list pushed them off screen; a single row with the status
+between the name and the buttons left the status about a dozen characters. The
+strip now holds spaces alone. On desktop the bar is fixed over the two
+columns, which reserve `--status-bar-height` of bottom padding for it; on
+mobile `App.ts` reparents it to the foot of the room-list drawer, with
+finger-sized targets. The old status bar's encryption indicator was dropped:
+nothing ever set it, so it always read "not encrypted" (the room header
+carries the real one).
 
 ### Threads
 

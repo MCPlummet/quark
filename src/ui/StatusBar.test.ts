@@ -14,17 +14,19 @@ describe("StatusBar", () => {
     bar.getElement().remove();
   });
 
-  it("lays out profile, status, then invites / search / settings, left to right", () => {
-    const order = Array.from(bar.getElement().children).map(
+  it("puts you and the controls on top, and the status on its own line below", () => {
+    const rows = Array.from(bar.getElement().children).map((el) => el.className);
+    expect(rows).toEqual(["status-bar__main", "status-bar__line"]);
+    const top = Array.from(q(".status-bar__main")!.children).map(
       (el) => Array.from(el.classList).find((c) => /^status-bar__[a-z]+$/.test(c) && c !== "status-bar__btn"),
     );
-    expect(order).toEqual([
-      "status-bar__profile",
-      "status-bar__status",
-      "status-bar__invites",
-      "status-bar__search",
-      "status-bar__settings",
-    ]);
+    expect(top).toEqual(["status-bar__profile", "status-bar__invites", "status-bar__search", "status-bar__settings"]);
+    expect(q(".status-bar__line .status-bar__status")).not.toBeNull();
+  });
+
+  it("shows your name beside the avatar, as part of the profile button", () => {
+    bar.setOwnName("Cyrillus");
+    expect(q(".status-bar__profile .status-bar__name")?.textContent).toBe("Cyrillus");
   });
 
   it("draws its control icons as SVG, not font glyphs", () => {
@@ -121,6 +123,23 @@ describe("StatusBar", () => {
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
       expect(onSet).toHaveBeenCalledWith("hacking");
       expect(q(".status-bar__status")?.textContent).toBe("hacking");
+    });
+
+    it("still saves when removing the input fires blur mid-commit", () => {
+      // Chromium fires blur synchronously while a focused input is removed.
+      const onSet = vi.fn();
+      bar.onSetStatus(onSet);
+      bar.beginEdit();
+      const input = q<HTMLInputElement>(".status-bar__status-input")!;
+      const realReplace = input.replaceWith.bind(input);
+      input.replaceWith = (...nodes: (string | Node)[]) => {
+        input.dispatchEvent(new FocusEvent("blur"));
+        realReplace(...nodes);
+      };
+      input.value = "busy";
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+      expect(onSet).toHaveBeenCalledWith("busy");
+      expect(q(".status-bar__status")?.textContent).toBe("busy");
     });
 
     it("cancels an edit on Escape", () => {

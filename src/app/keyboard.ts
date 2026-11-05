@@ -1270,6 +1270,12 @@ export function setupKeyboard(components: AppComponents): void {
 
   // Invites: the status line's button and count, and the dialog's answers.
   const { statusBar, invitesDialog, createRoomDialog } = components;
+  // The status line shows your name beside your avatar.
+  const showOwnName = (): void =>
+    statusBar.setOwnName(AppState.get("ownDisplayName") || AppState.get("ownUserId") || "");
+  showOwnName();
+  AppState.on("ownDisplayName", showOwnName);
+  AppState.on("ownUserId", showOwnName);
   statusBar.onInvitesClick(() => openInvites());
   statusBar.setInviteCount(AppState.get("invites").length);
   AppState.on("invites", (_key, invites) => {

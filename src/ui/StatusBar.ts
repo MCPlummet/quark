@@ -1,11 +1,13 @@
-// The status line — one horizontal bar at the foot of the space strip and room
-// list (desktop), or of the room-list drawer (mobile).
+// The status line — the foot of the space strip and room list (desktop), or of
+// the room-list drawer (mobile). Two rows:
 //
-//   [A•] set status…                    [✉ 2] [⌕] [⚙]
+//   (A•) Cyrillus                  [⇩ 2] [⌕] [⚙]
+//        set status…
 //
-// Left: who you are and what you're up to — your avatar (opens your profile;
-// its dot is the connection state) and your presence status (click, or `S`,
-// to edit). Right: the app-level controls — pending invites, search, settings.
+// Top: who you are — your avatar and name (opens your profile; the avatar's
+// dot is the connection state) — and the app-level controls: pending invites,
+// search, settings. Below: your presence status (click, or `S`, to edit),
+// with the whole width to itself rather than squeezed between the buttons.
 //
 // Those controls used to be stacked vertically at the bottom of the space
 // strip, under the spaces, where a long space list pushed them off screen and
@@ -18,6 +20,8 @@ import { inviteIcon, searchIcon, settingsIcon } from "./icons.js";
 export class StatusBar {
   private _el: HTMLElement;
   private _profileBtn: HTMLButtonElement;
+  private _avatarEl: HTMLElement;
+  private _nameEl: HTMLElement;
   private _connDot: HTMLElement;
   private _statusEl: HTMLElement;
   private _statusInput: HTMLInputElement | null = null;
@@ -38,16 +42,53 @@ export class StatusBar {
     this._el.setAttribute("role", "toolbar");
     this._el.setAttribute("aria-label", "Status line");
 
-    // ── Profile (left) ───────────────────────────────────────────────────────
+    const main = document.createElement("div");
+    main.className = "status-bar__main";
+    this._el.appendChild(main);
+    const line = document.createElement("div");
+    line.className = "status-bar__line";
+    this._el.appendChild(line);
+
+    // ── You (top left): avatar + name ────────────────────────────────────────
     this._profileBtn = this._makeButton("status-bar__profile", "Your profile", "Profile (P)", () =>
       this._onProfile?.(),
     );
+    this._avatarEl = document.createElement("span");
+    this._avatarEl.className = "status-bar__avatar";
     this._connDot = document.createElement("span");
     this._connDot.className = "status-bar__conn-dot";
     this._connDot.setAttribute("aria-hidden", "true");
-    this._el.appendChild(this._profileBtn);
+    this._nameEl = document.createElement("span");
+    this._nameEl.className = "status-bar__name";
+    this._profileBtn.append(this._avatarEl, this._nameEl);
+    main.appendChild(this._profileBtn);
 
-    // ── Presence status message ──────────────────────────────────────────────
+    // ── App controls (top right) ─────────────────────────────────────────────
+    this._invitesBtn = this._makeButton("status-bar__btn status-bar__invites", "Invites", "Invites (:invites)", () =>
+      this._onInvites?.(),
+    );
+    this._invitesBtn.appendChild(inviteIcon());
+    this._invitesCount = document.createElement("span");
+    this._invitesCount.className = "status-bar__count";
+    this._invitesBtn.appendChild(this._invitesCount);
+    main.appendChild(this._invitesBtn);
+
+    const searchBtn = this._makeButton(
+      "status-bar__btn status-bar__search",
+      "Search rooms and commands",
+      "Search rooms and commands (Ctrl+K)",
+      () => this._onSearch?.(),
+    );
+    searchBtn.appendChild(searchIcon());
+    main.appendChild(searchBtn);
+
+    const settingsBtn = this._makeButton("status-bar__btn status-bar__settings", "Settings", "Settings (?)", () =>
+      this._onSettings?.(),
+    );
+    settingsBtn.appendChild(settingsIcon());
+    main.appendChild(settingsBtn);
+
+    // ── Presence status (second row) ─────────────────────────────────────────
     this._statusEl = document.createElement("span");
     this._statusEl.className = "status-bar__status";
     this._statusEl.setAttribute("role", "button");
@@ -61,34 +102,10 @@ export class StatusBar {
         this.beginEdit();
       }
     });
-    this._el.appendChild(this._statusEl);
+    line.appendChild(this._statusEl);
     this.setStatusMessage("");
-
-    // ── App controls (right) ─────────────────────────────────────────────────
-    this._invitesBtn = this._makeButton("status-bar__btn status-bar__invites", "Invites", "Invites (:invites)", () =>
-      this._onInvites?.(),
-    );
-    this._invitesBtn.appendChild(inviteIcon());
-    this._invitesCount = document.createElement("span");
-    this._invitesCount.className = "status-bar__count";
-    this._invitesBtn.appendChild(this._invitesCount);
-    this._el.appendChild(this._invitesBtn);
     this.setInviteCount(0);
-
-    const searchBtn = this._makeButton(
-      "status-bar__btn status-bar__search",
-      "Search rooms and commands",
-      "Search rooms and commands (Ctrl+K)",
-      () => this._onSearch?.(),
-    );
-    searchBtn.appendChild(searchIcon());
-    this._el.appendChild(searchBtn);
-
-    const settingsBtn = this._makeButton("status-bar__btn status-bar__settings", "Settings", "Settings (?)", () =>
-      this._onSettings?.(),
-    );
-    settingsBtn.appendChild(settingsIcon());
-    this._el.appendChild(settingsBtn);
+    this.setOwnName("");
 
     this._renderProfile();
     this.setConnected(false);
@@ -124,6 +141,12 @@ export class StatusBar {
     this._ownAvatarUrl = avatarUrl;
     this._ownInitial = initial && initial[0] ? initial[0].toUpperCase() : "?";
     this._renderProfile();
+  }
+
+  /** Your display name, beside the avatar. */
+  setOwnName(name: string): void {
+    this._nameEl.textContent = name;
+    this._nameEl.title = name;
   }
 
   /** The connection state, drawn as the dot on your avatar. */
@@ -189,18 +212,27 @@ export class StatusBar {
     input.focus();
     input.select();
 
+    // Removing a focused input fires `blur` on some engines, mid-removal — and
+    // blur cancels. Without a guard, Enter's commit ran the cancel inside its
+    // own replaceWith, then threw on the second one before saving anything.
+    let finished = false;
+    const finish = (): boolean => {
+      if (finished) return false;
+      finished = true;
+      this._statusInput = null;
+      input.replaceWith(this._statusEl);
+      return true;
+    };
+
     const commit = () => {
       const val = input.value.trim();
-      input.replaceWith(this._statusEl);
-      this._statusInput = null;
+      if (!finish()) return;
       this.setStatusMessage(val);
       this._onSetStatus?.(val);
     };
 
     const cancel = () => {
-      if (!this._statusInput) return;
-      input.replaceWith(this._statusEl);
-      this._statusInput = null;
+      finish();
     };
 
     input.addEventListener("keydown", (e) => {
@@ -224,8 +256,8 @@ export class StatusBar {
   }
 
   private _renderProfile(): void {
-    this._profileBtn.textContent = "";
-    this._profileBtn.classList.toggle("status-bar__profile--fallback", !this._ownAvatarUrl);
+    this._avatarEl.textContent = "";
+    this._avatarEl.classList.toggle("status-bar__avatar--fallback", !this._ownAvatarUrl);
     if (this._ownAvatarUrl) {
       const img = document.createElement("img");
       img.className = "status-bar__profile-img";
@@ -234,13 +266,13 @@ export class StatusBar {
       // A data URL the renderer refuses to decode falls back to the initial
       // rather than leaving an empty box.
       img.addEventListener("error", () => this.setOwnProfile(this._ownInitial, null));
-      this._profileBtn.appendChild(img);
+      this._avatarEl.appendChild(img);
     } else {
       const initial = document.createElement("span");
       initial.className = "status-bar__profile-initial";
       initial.textContent = this._ownInitial;
-      this._profileBtn.appendChild(initial);
+      this._avatarEl.appendChild(initial);
     }
-    this._profileBtn.appendChild(this._connDot);
+    this._avatarEl.appendChild(this._connDot);
   }
 }

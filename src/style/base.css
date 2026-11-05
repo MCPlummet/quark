@@ -3151,26 +3151,26 @@ a:hover {
 
 /* ── Status line ─────────────────────────────────────────────────────
  *
- * One row at the foot of the space strip + room list: avatar and presence on
- * the left, invites / search / settings on the right. Fixed over both columns
- * on desktop (they reserve --status-bar-height of bottom padding for it); the
- * foot of the drawer on mobile, where App.ts reparents it. */
+ * Two rows at the foot of the space strip + room list: you (avatar, name) and
+ * the app controls (invites, search, settings) on top, your presence status on
+ * its own line below. Fixed over both columns on desktop (they reserve
+ * --status-bar-height of bottom padding for it); the foot of the drawer on
+ * mobile, where App.ts reparents it. */
 
 .status-bar {
   display: flex;
-  align-items: center;
-  gap: 2px;
+  flex-direction: column;
+  justify-content: center;
   position: fixed;
   bottom: 0;
   left: 0;
   width: calc(var(--space-strip-width) + var(--room-list-width));
   height: var(--status-bar-height);
-  padding: 0 4px 0 6px;
+  padding: 2px 6px 4px;
   z-index: 100;
   background-color: var(--bg);
   border-top: var(--border-width) solid var(--border-color);
   border-right: var(--border-width) solid var(--border-color);
-  font-size: calc(var(--font-size) - 2px);
   user-select: none;
   pointer-events: auto;
 }
@@ -3179,32 +3179,52 @@ a:hover {
   font-family: var(--font-family);
 }
 
-/* Your avatar, with the connection state as a dot on its corner. */
+.status-bar__main {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+}
+
+/* You: avatar + name, one button that opens your profile. Takes the row's
+ * spare width, so a long name ellipsizes rather than pushing the controls. */
 .status-bar__profile {
-  position: relative;
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  margin-right: 6px;
-  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 6px 0 2px;
   border: none;
-  border-radius: var(--icon-radius);
-  background-color: var(--surface-hover-active);
+  border-radius: 2px;
+  background: transparent;
   color: var(--fg);
   cursor: pointer;
   outline: none;
-  transition: box-shadow var(--transition-speed), opacity var(--transition-speed);
+  text-align: left;
+  transition: background-color var(--transition-speed);
 }
 
 .status-bar__profile:hover {
-  opacity: 0.85;
+  background-color: var(--roomlist-active-bg);
 }
 
 .status-bar__profile:focus-visible {
   box-shadow: 0 0 0 var(--focus-width) var(--focus-color);
 }
 
-.status-bar__profile--fallback {
+/* The avatar, with the connection state as a dot on its corner. */
+.status-bar__avatar {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--icon-radius);
+  background-color: var(--surface-hover-active);
+}
+
+.status-bar__avatar--fallback {
   color: var(--accent-primary);
   background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }
@@ -3219,9 +3239,9 @@ a:hover {
 
 .status-bar__profile-initial {
   display: block;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: bold;
-  line-height: 22px;
+  line-height: 30px;
   text-align: center;
 }
 
@@ -3251,10 +3271,74 @@ a:hover {
   opacity: 0.55;
 }
 
+.status-bar__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size);
+  font-weight: bold;
+}
+
+/* Invites / search / settings: square, finger-sized even on desktop, and
+ * quiet until hovered. */
+.status-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 40px;
+  height: 40px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) + 6px);
+  cursor: pointer;
+  outline: none;
+  transition: color var(--transition-speed), background-color var(--transition-speed);
+}
+
+.status-bar__btn:hover {
+  color: var(--accent-primary);
+  background-color: var(--roomlist-active-bg);
+}
+
+.status-bar__btn:focus-visible {
+  box-shadow: 0 0 0 var(--focus-width) var(--focus-color);
+}
+
+.status-bar__count {
+  font-size: var(--font-size);
+  font-weight: bold;
+  line-height: 1;
+}
+
+.status-bar__count:empty {
+  display: none;
+}
+
+/* Invites waiting: the button lights up, so it reads from across the room. */
+.status-bar__invites--pending {
+  color: var(--accent-primary);
+  text-shadow: 0 0 var(--glow-radius) var(--glow-color);
+}
+
+/* The status line: lined up under your name, and the full width after it. */
+.status-bar__line {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+  padding-left: 40px;
+  font-size: calc(var(--font-size) - 2px);
+}
+
 .status-bar__status {
   flex: 1;
   min-width: 0;
-  padding: 2px 4px;
+  padding: 1px 0;
   color: var(--accent-secondary);
   cursor: pointer;
   overflow: hidden;
@@ -3283,53 +3367,8 @@ a:hover {
   color: var(--fg);
   font-family: var(--font-family);
   font-size: calc(var(--font-size) - 2px);
-  padding: 0 4px;
+  padding: 0;
   outline: none;
-}
-
-/* Invites / search / settings. Icon-sized, square, and quiet until hovered. */
-.status-bar__btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  flex-shrink: 0;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 4px;
-  border: none;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--roomlist-muted);
-  font-size: calc(var(--font-size) + 1px);
-  cursor: pointer;
-  outline: none;
-  transition: color var(--transition-speed), background-color var(--transition-speed);
-}
-
-.status-bar__btn:hover {
-  color: var(--accent-primary);
-  background-color: var(--roomlist-active-bg);
-}
-
-.status-bar__btn:focus-visible {
-  box-shadow: 0 0 0 var(--focus-width) var(--focus-color);
-}
-
-.status-bar__count {
-  font-size: calc(var(--font-size) - 2px);
-  font-weight: bold;
-  line-height: 1;
-}
-
-.status-bar__count:empty {
-  display: none;
-}
-
-/* Invites waiting: the button lights up, so it reads from across the room. */
-.status-bar__invites--pending {
-  color: var(--accent-primary);
-  text-shadow: 0 0 var(--glow-radius) var(--glow-color);
 }
 
 /* ── Login screen ────────────────────────────────────────────────────── */
@@ -7178,42 +7217,50 @@ body.quark-mobile.quark-member-dragging .member-list {
 
 /* Mobile: the status line is the foot of the room-list drawer rather than
  * floating over the timeline, where it would sit under the compose box. App.ts
- * reparents it there. It keeps the desktop layout — avatar and presence left,
- * invites / search / settings right — with finger-sized targets. */
+ * reparents it there. Same two rows, with finger-sized targets. */
 body.quark-mobile .status-bar {
   position: static;
   width: 100%;
   height: auto;
-  min-height: 52px;
-  gap: 4px;
   /* The safe-area strip moves here from .room-list__scroll — the status bar is
    * the drawer's last child, so it is what sits against the home bar. */
-  padding: 4px 8px calc(4px + env(safe-area-inset-bottom)) 12px;
+  padding: 4px 8px calc(6px + env(safe-area-inset-bottom)) 8px;
   border-top: var(--border-width) solid var(--border-color);
   border-right: none;
   flex-shrink: 0;
-  font-size: var(--font-size);
+}
+
+body.quark-mobile .status-bar__main {
+  min-height: 48px;
 }
 
 body.quark-mobile .status-bar__profile {
-  width: 32px;
-  height: 32px;
-  margin-right: 8px;
+  height: 44px;
+}
+
+body.quark-mobile .status-bar__avatar {
+  width: 34px;
+  height: 34px;
 }
 
 body.quark-mobile .status-bar__profile-initial {
-  font-size: 15px;
-  line-height: 32px;
-}
-
-body.quark-mobile .status-bar__status {
-  padding: 10px 4px;
+  font-size: 16px;
+  line-height: 34px;
 }
 
 body.quark-mobile .status-bar__btn {
   min-width: 44px;
   height: 44px;
-  font-size: calc(var(--font-size) + 5px);
+}
+
+body.quark-mobile .status-bar__line {
+  min-height: 32px;
+  padding-left: 46px;
+  font-size: var(--font-size);
+}
+
+body.quark-mobile .status-bar__status {
+  padding: 6px 0;
 }
 
 /* Long press means "open the action sheet", and nothing else (#100).

@@ -257,10 +257,10 @@ export async function openProfileEdit(): Promise<void> {
       if (displayNameChanged) ops.push(ipcSetDisplayName(displayName));
       if (statusChanged) ops.push(ipcSetPresenceStatus(statusMessage));
       await Promise.all(ops);
-      // Reflect the new status in the status bar so the user sees the change
-      // without re-opening their profile. The display-name change shows up
-      // automatically on the next presence event from the homeserver.
+      // Reflect the change on the status line so the user sees it without
+      // re-opening their profile (it shows the name as well as the status).
       if (statusChanged) statusBar.setStatusMessage(statusMessage);
+      if (displayNameChanged) AppState.set("ownDisplayName", displayName);
       AppState.cacheUserStatus(profile.user_id, statusMessage || null);
     },
     () => void pickAndUploadAvatar(),
