@@ -114,6 +114,12 @@ export class GifPicker extends PickerBase {
       getItems: () =>
         Array.from(this._gridEl.querySelectorAll<HTMLElement>(".gif-picker__cell")),
       onSelect: (i) => this._selectIndex(i),
+      onAction: (action) => {
+        if (action === "close") this.hide();
+        else if (action === "picker-search") this._searchEl.focus();
+        else return false;
+        return true;
+      },
     });
 
     // ── Keyboard handling ────────────────────────────────────────────────
@@ -219,7 +225,8 @@ export class GifPicker extends PickerBase {
       return;
     }
 
-    // Escape, Tab, Enter, / are hardcoded (overlay-specific or not remappable)
+    // Escape and Tab are literal (overlay-specific); everything else, `/`
+    // included, resolves through the keymap so `pmap` rebindings apply.
     if (e.key === "Escape" || (e.ctrlKey && e.key === "[")) {
       e.preventDefault();
       this.hide();
@@ -232,13 +239,7 @@ export class GifPicker extends PickerBase {
       return;
     }
 
-    if (e.key === "/") {
-      e.preventDefault();
-      this._searchEl.focus();
-      return;
-    }
-
-    // Navigation + select route through the keymap (honours rebindings).
+    // Navigation, select and search route through the keymap (honours rebindings).
     const { consumed, partial } = this._list.handleKey(e.key);
     if (consumed || partial) e.preventDefault();
   }
