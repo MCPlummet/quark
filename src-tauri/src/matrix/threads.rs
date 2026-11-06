@@ -1,17 +1,22 @@
-use crate::matrix::timeline::TimelineEvent;
+use crate::matrix::timeline::{convert_raw_message_like, TimelineEvent};
+use futures_util::future::join_all;
 use matrix_sdk::{
+    config::RequestConfig,
     room::MessagesOptions,
     ruma::{
+        api::{client::relations::get_relating_events_with_rel_type, Direction},
         events::{
+            relation::RelationType,
             room::message::{MessageType, Relation, RoomMessageEventContent},
             AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
         },
+        serde::Raw,
         EventId, RoomId, UInt,
     },
-    Client,
+    Client, Room,
 };
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 /// A thread root message with reply count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,12 +108,33 @@ pub async fn get_thread_roots(
     Ok(roots)
 }
 
-/// Get the full timeline of a thread (root + replies).
+/// Replies asked for per `/relations` page.
+const THREAD_PAGE_SIZE: u32 = 100;
+/// Pages read before giving up on the rest of a thread: 5,000 replies, far past
+/// anything the panel is meant to hold.
+const MAX_THREAD_PAGES: usize = 50;
+
+/// A thread as loaded for the panel: the root (when it could be read), then its
+/// replies oldest first. `complete` is false when not all of it could be read
+/// — a page kept failing, or the thread runs past `MAX_THREAD_PAGES` — and the
+/// replies are then the newest ones, since pages are read newest first.
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadTimeline {
+    pub events: Vec<TimelineEvent>,
+    pub complete: bool,
+}
+
+/// Get the full timeline of a thread (root + replies), oldest first.
+///
+/// The replies are the root's `m.thread` relations, read page by page to the
+/// end. This used to be the last 100 events of the *room* filtered down to the
+/// thread, so any reply further back than that — a busy room, a long thread, an
+/// old one — was silently missing, and the panel counted only what was left.
 pub async fn get_thread_timeline(
     client: &Client,
     room_id: &str,
     thread_root_event_id: &str,
-) -> Result<Vec<TimelineEvent>, String> {
+) -> Result<ThreadTimeline, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let root_id = EventId::parse(thread_root_event_id)
         .map_err(|e| format!("Invalid event ID: {e}"))?;
@@ -117,50 +143,141 @@ pub async fn get_thread_timeline(
         .get_room(&room_id)
         .ok_or_else(|| format!("Room {} not found", room_id))?;
 
-    let mut opts = MessagesOptions::backward();
-    opts.limit = UInt::from(100u32);
-
-    let messages = room
-        .messages(opts)
-        .await
-        .map_err(|e| format!("Failed to fetch thread timeline: {e}"))?;
-
-    let mut thread_events = Vec::new();
-
-    for timeline_event in messages.chunk {
-        if let Ok(deserialized) = timeline_event.raw().deserialize() {
-            match deserialized {
-                AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
-                    SyncMessageLikeEvent::Original(ev),
-                )) => {
-                    let is_root = ev.event_id.as_str() == thread_root_event_id;
-                    let in_thread = belongs_to_thread(ev.content.relates_to.as_ref(), &root_id);
-
-                    if is_root || in_thread {
-                        let te = crate::matrix::timeline::convert_sync_room_message(ev);
-                        thread_events.push(anchor_to_thread(te, is_root, thread_root_event_id));
-                    }
-                }
-                // Stickers are thread replies too. Matching only `RoomMessage`
-                // meant one sent into a thread was invisible in the panel even
-                // after a reload — it is an `m.sticker`, not an `m.room.message`.
-                AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::Sticker(
-                    SyncMessageLikeEvent::Original(ev),
-                )) => {
-                    if belongs_to_thread(ev.content.relates_to.as_ref(), &root_id) {
-                        let te = crate::matrix::timeline::convert_sync_sticker_event(ev);
-                        thread_events.push(anchor_to_thread(te, false, thread_root_event_id));
-                    }
-                }
-                _ => {}
-            }
+    // The root is not one of its own relations, so it is fetched on its own —
+    // alongside the first page rather than ahead of it.
+    let (root, first) = tokio::join!(
+        room.event(&root_id, None),
+        thread_page(client, &room, &root_id, None),
+    );
+    // A root that cannot be read (redacted, before our history) still leaves a
+    // thread to show; the frontend draws the root it already has.
+    let root = match root {
+        Ok(ev) => Some(ev.raw().clone()),
+        Err(e) => {
+            warn!(thread_root = %root_id, "Could not fetch thread root: {e}");
+            None
         }
+    };
+
+    let (replies, complete) = read_thread_pages(
+        first,
+        |from| thread_page(client, &room, &root_id, Some(from)),
+        MAX_THREAD_PAGES,
+    )
+    .await
+    .map_err(|e| format!("Failed to fetch thread: {e}"))?;
+    if !complete {
+        warn!(thread_root = %root_id, replies = replies.len(), "Thread not read to its end; showing its newest replies");
     }
 
-    // Sort by timestamp ascending
-    thread_events.sort_by_key(|e| e.timestamp);
+    Ok(ThreadTimeline { events: assemble_thread(root, replies, thread_root_event_id), complete })
+}
 
-    Ok(thread_events)
+/// One page of a listing, as `read_thread_pages` walks it.
+struct Page<T> {
+    items: Vec<T>,
+    next: Option<String>,
+}
+
+/// One page of the root's `m.thread` relations, newest first, decrypted where
+/// we hold the keys. Decryption runs across the page at once rather than one
+/// reply after another. The request retries a network failure a few times:
+/// matrix-sdk on its own retries a rate limit but not a timeout.
+async fn thread_page(
+    client: &Client,
+    room: &Room,
+    root_id: &EventId,
+    from: Option<String>,
+) -> Result<Page<Raw<AnySyncTimelineEvent>>, matrix_sdk::HttpError> {
+    let mut request = get_relating_events_with_rel_type::v1::Request::new(
+        room.room_id().to_owned(),
+        root_id.to_owned(),
+        RelationType::Thread,
+    );
+    request.dir = Direction::Backward;
+    request.from = from;
+    request.limit = Some(UInt::from(THREAD_PAGE_SIZE));
+    let page = client.send(request, Some(RequestConfig::short_retry())).await?;
+    let items = join_all(page.chunk.into_iter().map(|event| decrypted(room, event.cast()))).await;
+    Ok(Page { items, next: page.next_batch })
+}
+
+/// Walk a paged listing from its `first` page to the end, or as far as it
+/// goes: `(items, true)` for all of it; `(items, false)` for the pages read
+/// before one failed, or before `max_pages` ran out. Only a failed first page
+/// is an error — one failed page used to throw away every page already read,
+/// and the frontend closed the thread.
+async fn read_thread_pages<T, E, F, Fut>(
+    first: Result<Page<T>, E>,
+    mut fetch: F,
+    max_pages: usize,
+) -> Result<(Vec<T>, bool), E>
+where
+    E: std::fmt::Display,
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Page<T>, E>>,
+{
+    let mut items = Vec::new();
+    let mut next = first;
+    let mut pages_read = 0;
+    let complete = loop {
+        let page = match next {
+            Ok(page) => page,
+            Err(e) if pages_read == 0 => return Err(e),
+            Err(e) => {
+                warn!(pages_read, "A thread page failed: {e}");
+                break false;
+            }
+        };
+        pages_read += 1;
+        items.extend(page.items);
+        match page.next {
+            None => break true,
+            Some(_) if pages_read >= max_pages => break false,
+            Some(token) => next = fetch(token).await,
+        }
+    };
+    Ok((items, complete))
+}
+
+/// The event as its sender wrote it, when we hold the key; otherwise the
+/// encrypted event, which converts to an "unable to decrypt" row.
+async fn decrypted(room: &Room, event: Raw<AnySyncTimelineEvent>) -> Raw<AnySyncTimelineEvent> {
+    if let Ok(AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomEncrypted(
+        SyncMessageLikeEvent::Original(_),
+    ))) = event.deserialize()
+    {
+        if let Ok(ev) = room.decrypt_event(event.cast_ref()).await {
+            return ev.raw().clone();
+        }
+    }
+    event
+}
+
+/// The thread as the panel shows it: the root (when it could be read), then its
+/// replies oldest first. `replies` arrive newest first, as `/relations` pages
+/// backward, and keep the server's order rather than being sorted by
+/// timestamp. Events that are not messages (a poll, say) are left out;
+/// stickers and undecryptable replies are not — a sticker matched nothing here
+/// once and vanished from the panel (#78).
+fn assemble_thread(
+    root: Option<Raw<AnySyncTimelineEvent>>,
+    replies: Vec<Raw<AnySyncTimelineEvent>>,
+    thread_root_event_id: &str,
+) -> Vec<TimelineEvent> {
+    let root = root
+        .as_ref()
+        .and_then(convert_raw_message_like)
+        .map(|te| anchor_to_thread(te, true, thread_root_event_id));
+    root.into_iter()
+        .chain(
+            replies
+                .iter()
+                .rev()
+                .filter_map(convert_raw_message_like)
+                .map(|te| anchor_to_thread(te, false, thread_root_event_id)),
+        )
+        .collect()
 }
 
 /// Convert one thread event into a `TimelineEvent`.
@@ -188,25 +305,21 @@ fn anchor_to_thread(
     te
 }
 
-/// Whether a relation puts its event in the given thread.
+/// Send a message into a thread.
 ///
-/// Generic over the relation's replacement-content type so stickers and room
-/// messages can ask the same question — they carry the same `Thread` variant
-/// under different `Relation<C>`s.
-fn belongs_to_thread<C>(
-    relates_to: Option<&Relation<C>>,
-    root_id: &matrix_sdk::ruma::EventId,
-) -> bool {
-    matches!(relates_to, Some(Relation::Thread(t)) if t.event_id == root_id)
-}
-
-/// Send a reply in a thread.
+/// `in_reply_to` quotes one of the thread's own messages: the event then
+/// carries it as a real reply (`is_falling_back: false`) inside the `m.thread`
+/// relation. Without it the message is a plain thread message, whose
+/// `m.in_reply_to` is only the fallback pointer for thread-unaware clients.
+/// This used to accept no reply target at all, so a reply typed inside a thread
+/// lost its quote (#131).
 pub async fn send_thread_reply(
     client: &Client,
     room_id: &str,
     thread_root_event_id: &str,
     body: &str,
     formatted_body: Option<&str>,
+    in_reply_to: Option<&str>,
 ) -> Result<String, String> {
     let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
     let root_id = EventId::parse(thread_root_event_id)
@@ -227,7 +340,7 @@ pub async fn send_thread_reply(
     // would drift.
     let mut thread_content = content;
     thread_content.relates_to =
-        crate::matrix::relations::build_relation(Some(root_id.as_str()), None)?;
+        crate::matrix::relations::build_relation(Some(root_id.as_str()), in_reply_to)?;
 
     let response = room
         .send(thread_content)
@@ -241,12 +354,52 @@ pub async fn send_thread_reply(
 
 #[cfg(test)]
 mod tests {
+    // ── Walking the pages ────────────────────────────────────────────────────
+
+    fn page(items: &[u32], next: Option<&str>) -> Result<Page<u32>, String> {
+        Ok(Page { items: items.to_vec(), next: next.map(str::to_owned) })
+    }
+
+    /// Serves later pages by token: "p2" → [3, 4] then "p3", and so on.
+    fn pages(token: String) -> std::future::Ready<Result<Page<u32>, String>> {
+        std::future::ready(match token.as_str() {
+            "p2" => page(&[3, 4], Some("p3")),
+            "p3" => page(&[5], None),
+            "bad" => Err("timed out".to_owned()),
+            other => panic!("unexpected token {other}"),
+        })
+    }
+
+    #[tokio::test]
+    async fn reads_every_page_to_the_end() {
+        let read = read_thread_pages(page(&[1, 2], Some("p2")), pages, 50).await.unwrap();
+        assert_eq!(read, (vec![1, 2, 3, 4, 5], true));
+    }
+
+    // One failed page used to throw away every page already read, and the
+    // frontend closed the thread.
+    #[tokio::test]
+    async fn keeps_the_pages_read_before_one_fails() {
+        let read = read_thread_pages(page(&[1, 2], Some("bad")), pages, 50).await.unwrap();
+        assert_eq!(read, (vec![1, 2], false));
+    }
+
+    #[tokio::test]
+    async fn fails_when_the_first_page_does() {
+        let read = read_thread_pages(Err::<Page<u32>, _>("offline".to_owned()), pages, 50).await;
+        assert_eq!(read, Err("offline".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn stops_at_the_page_limit_and_says_so() {
+        let read = read_thread_pages(page(&[1, 2], Some("p2")), pages, 2).await.unwrap();
+        assert_eq!(read, (vec![1, 2, 3, 4], false));
+    }
+
     use super::*;
     use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
 
-    /// What `get_thread_replies` does to one room message, in one call: convert,
-    /// then anchor. Split in the source because stickers need the second half
-    /// with a different converter.
+    /// What `assemble_thread` does to one room message: convert, then anchor.
     fn convert_thread_event(
         ev: OriginalSyncRoomMessageEvent,
         is_root: bool,
@@ -315,10 +468,64 @@ mod tests {
         assert_eq!(te.thread_root.as_deref(), Some(root));
     }
 
-    fn sticker_in_thread(root: &str) -> matrix_sdk::ruma::events::OriginalSyncMessageLikeEvent<
-        matrix_sdk::ruma::events::sticker::StickerEventContent,
-    > {
-        serde_json::from_value(serde_json::json!({
+    // The room's count on a root is the server's bundled summary — encrypted
+    // roots included, since decryption keeps the envelope's `unsigned` — with
+    // the time of the latest reply it includes.
+    #[test]
+    fn a_root_carries_the_servers_reply_count() {
+        let unsigned = serde_json::json!({ "m.relations": { "m.thread": {
+            "latest_event": {
+                "type": "m.room.message",
+                "event_id": "$latest:example.com",
+                "sender": "@bob:example.com",
+                "origin_server_ts": 5,
+                "room_id": "!room:example.com",
+                "content": { "msgtype": "m.text", "body": "latest" },
+            },
+            "count": 42,
+            "current_user_participated": true,
+        } } });
+        let plain = raw(serde_json::json!({
+            "type": "m.room.message",
+            "event_id": "$root:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1,
+            "content": { "msgtype": "m.text", "body": "the root" },
+            "unsigned": unsigned.clone(),
+        }));
+        let encrypted = raw(serde_json::json!({
+            "type": "m.room.encrypted",
+            "event_id": "$root:example.com",
+            "sender": "@alice:example.com",
+            "origin_server_ts": 1,
+            "content": {
+                "algorithm": "m.megolm.v1.aes-sha2",
+                "ciphertext": "AwgA",
+                "sender_key": "key",
+                "device_id": "DEVICE",
+                "session_id": "session",
+            },
+            "unsigned": unsigned,
+        }));
+        for root in [plain, encrypted] {
+            let te = convert_raw_message_like(&root).unwrap();
+            assert_eq!(te.thread_reply_count, Some(42));
+            // When the count was taken: replies sent after it are not in it.
+            assert_eq!(te.thread_latest_reply_ts, Some(5));
+        }
+        let no_thread = text("$x:example.com", "no replies", 1, None);
+        let te = convert_raw_message_like(&no_thread).unwrap();
+        assert_eq!(te.thread_reply_count, None);
+        assert_eq!(te.thread_latest_reply_ts, None);
+    }
+
+    // A sticker sent into a thread is an `m.sticker`, not an `m.room.message`,
+    // so matching only the latter left it invisible in the panel — on the live
+    // echo *and* on every reload afterwards (#78).
+    #[test]
+    fn a_sticker_in_a_thread_is_one_of_its_replies() {
+        let root = "$root:example.com";
+        let sticker = raw(serde_json::json!({
             "type": "m.sticker",
             "event_id": "$sticker:example.com",
             "sender": "@alice:example.com",
@@ -329,36 +536,96 @@ mod tests {
                 "info": { "mimetype": "image/png", "w": 128, "h": 128 },
                 "m.relates_to": { "rel_type": "m.thread", "event_id": root },
             },
-        }))
-        .expect("deserialize sticker")
-    }
-
-    // A sticker sent into a thread is an `m.sticker`, not an `m.room.message`,
-    // so matching only the latter left it invisible in the panel — on the live
-    // echo *and* on every reload afterwards (#78).
-    #[test]
-    fn a_sticker_in_a_thread_belongs_to_it() {
-        let root = "$root:example.com";
-        let root_id = EventId::parse(root).expect("valid root");
-        let ev = sticker_in_thread(root);
-
-        assert!(belongs_to_thread(ev.content.relates_to.as_ref(), &root_id));
-
-        let te = anchor_to_thread(
-            crate::matrix::timeline::convert_sync_sticker_event(ev),
-            false,
-            root,
-        );
+        }));
+        let events = assemble_thread(None, vec![sticker], root);
+        assert_eq!(events.len(), 1);
+        let te = &events[0];
         assert_eq!(te.msg_type, "m.sticker");
         assert_eq!(te.thread_root.as_deref(), Some(root));
         assert_eq!(te.media_url.as_deref(), Some("mxc://example.com/sticker"));
     }
 
-    #[test]
-    fn a_sticker_outside_the_thread_is_left_alone() {
-        let root_id = EventId::parse("$other:example.com").expect("valid root");
-        let ev = sticker_in_thread("$root:example.com");
+    fn raw(json: serde_json::Value) -> Raw<AnySyncTimelineEvent> {
+        Raw::from_json(serde_json::value::to_raw_value(&json).expect("raw json"))
+    }
 
-        assert!(!belongs_to_thread(ev.content.relates_to.as_ref(), &root_id));
+    fn text(id: &str, body: &str, ts: i64, thread: Option<&str>) -> Raw<AnySyncTimelineEvent> {
+        let mut content = serde_json::json!({ "msgtype": "m.text", "body": body });
+        if let Some(root) = thread {
+            content["m.relates_to"] = serde_json::json!({ "rel_type": "m.thread", "event_id": root });
+        }
+        raw(serde_json::json!({
+            "type": "m.room.message",
+            "event_id": id,
+            "sender": "@alice:example.com",
+            "origin_server_ts": ts,
+            "content": content,
+        }))
+    }
+
+    // `/relations` pages backward, newest first; the panel reads oldest first,
+    // with the root ahead of its replies.
+    #[test]
+    fn a_thread_reads_root_first_then_its_replies_oldest_first() {
+        let root = "$root:example.com";
+        let newest_first = vec![
+            text("$c:example.com", "third", 3, Some(root)),
+            text("$b:example.com", "second", 2, Some(root)),
+            text("$a:example.com", "first", 1, Some(root)),
+        ];
+        let events = assemble_thread(Some(text(root, "the root", 0, None)), newest_first, root);
+        let bodies: Vec<&str> = events.iter().map(|e| e.body.as_str()).collect();
+        assert_eq!(bodies, ["the root", "first", "second", "third"]);
+        assert_eq!(events[0].thread_root, None);
+        assert!(events[1..].iter().all(|e| e.thread_root.as_deref() == Some(root)));
+    }
+
+    // Server order, not timestamps: what other clients show, and what a
+    // clock-skewed federated reply would otherwise be sorted out of.
+    #[test]
+    fn replies_keep_the_servers_order() {
+        let root = "$root:example.com";
+        let newest_first = vec![
+            text("$b:example.com", "second", 1, Some(root)),
+            text("$a:example.com", "first", 9, Some(root)),
+        ];
+        let events = assemble_thread(None, newest_first, root);
+        let bodies: Vec<&str> = events.iter().map(|e| e.body.as_str()).collect();
+        assert_eq!(bodies, ["first", "second"]);
+    }
+
+    // A reply that cannot be decrypted is still a reply — shown as such, not
+    // dropped; other event types relating to the thread are not messages.
+    #[test]
+    fn an_undecryptable_reply_stays_and_other_events_are_skipped() {
+        let root = "$root:example.com";
+        let newest_first = vec![
+            raw(serde_json::json!({
+                "type": "m.room.encrypted",
+                "event_id": "$utd:example.com",
+                "sender": "@bob:example.com",
+                "origin_server_ts": 2,
+                "content": {
+                    "algorithm": "m.megolm.v1.aes-sha2",
+                    "ciphertext": "AwgA",
+                    "sender_key": "key",
+                    "device_id": "DEVICE",
+                    "session_id": "session",
+                    "m.relates_to": { "rel_type": "m.thread", "event_id": root },
+                },
+            })),
+            raw(serde_json::json!({
+                "type": "org.example.poll",
+                "event_id": "$poll:example.com",
+                "sender": "@bob:example.com",
+                "origin_server_ts": 1,
+                "content": { "m.relates_to": { "rel_type": "m.thread", "event_id": root } },
+            })),
+        ];
+        let events = assemble_thread(None, newest_first, root);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id, "$utd:example.com");
+        assert_eq!(events[0].msg_type, "m.room.encrypted");
+        assert_eq!(events[0].thread_root.as_deref(), Some(root));
     }
 }

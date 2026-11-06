@@ -31,6 +31,7 @@ export function currentAvailability(
     selectedMessageId: null,
     selectedMessageIsOwn: false,
     isMobile: isMobile(),
+    threadOpen: AppState.get("threadRootEventId") !== null,
     ...overrides,
   };
 }

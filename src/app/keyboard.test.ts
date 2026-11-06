@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { dispatchAction, resolveModeRoute } from "./keyboard.js";
+import { dispatchAction, resolveModeRoute, escapeRunsPanelClose } from "./keyboard.js";
 import { Mode } from "../vim/mode.js";
-import { confirmAndLeaveRoom } from "./actions.js";
+import { confirmAndLeaveRoom, redactMessage, startEdit } from "./actions.js";
+import { AppState } from "./state.js";
 import type { AppComponents } from "../ui/App.js";
 
 // dispatchAction routes resolved action names to handlers. Two invariants from
@@ -13,7 +14,7 @@ import type { AppComponents } from "../ui/App.js";
 
 vi.mock("./actions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./actions.js")>();
-  return { ...actual, confirmAndLeaveRoom: vi.fn() };
+  return { ...actual, confirmAndLeaveRoom: vi.fn(), redactMessage: vi.fn(), startEdit: vi.fn() };
 });
 
 beforeEach(() => {
@@ -83,5 +84,69 @@ describe("dispatchAction — chord-bound actions", () => {
       dispatchAction(action, components);
       expect(wrapSelection).toHaveBeenLastCalledWith(marker);
     }
+  });
+});
+
+describe("escapeRunsPanelClose", () => {
+  it("leaving Insert or Visual in a close-from-Normal panel only changes mode", () => {
+    // The thread panel: opening a thread lands in Insert; if that first Esc
+    // closed it, a vim user could never reach the thread's rows and a
+    // reflexive Esc mid-reply would retarget the draft at the room (#131).
+    expect(escapeRunsPanelClose(Mode.Insert, true, true)).toBe(false);
+    expect(escapeRunsPanelClose(Mode.Visual, true, true)).toBe(false);
+  });
+
+  it("an Esc in Normal there still closes", () => {
+    expect(escapeRunsPanelClose(Mode.Normal, true, true)).toBe(true);
+  });
+
+  it("leaves every other panel, and vim-off, closing on the first Esc", () => {
+    expect(escapeRunsPanelClose(Mode.Insert, false, true)).toBe(true);
+    expect(escapeRunsPanelClose(Mode.Insert, true, false)).toBe(true);
+  });
+});
+
+// Message actions act on what the panels declare, not on panel names: the
+// active panel's selection when it holds messages, else the timeline's, and
+// only the actions that panel supports.
+describe("dispatchAction — message actions", () => {
+  const components = {} as AppComponents;
+  const own = { id: "$mine", body: "mine", isOwn: true };
+
+  beforeEach(() => {
+    AppState.registerPanelNav("timeline", {
+      navDown: vi.fn(), navUp: vi.fn(),
+      selectedMessageId: () => "$mine",
+      selectedMessage: () => own,
+    });
+    AppState.registerPanelNav("thread", { navDown: vi.fn(), navUp: vi.fn(), selectedMessageId: () => "$reply" });
+    AppState.registerPanelNav("roomlist", { navDown: vi.fn(), navUp: vi.fn() });
+  });
+
+  it("act on the active panel's selection when it holds messages", () => {
+    AppState.set("activePanel", "thread");
+    dispatchAction("redact", components);
+    expect(redactMessage).toHaveBeenCalledExactlyOnceWith("$reply");
+  });
+
+  it("act on the timeline's selection from a panel without messages", () => {
+    AppState.set("activePanel", "roomlist");
+    dispatchAction("redact", components);
+    expect(redactMessage).toHaveBeenCalledExactlyOnceWith("$mine");
+  });
+
+  it("do nothing where the panel has nothing selected that can be acted on", () => {
+    AppState.registerPanelNav("thread", { navDown: vi.fn(), navUp: vi.fn(), selectedMessageId: () => null });
+    AppState.set("activePanel", "thread");
+    dispatchAction("redact", components);
+    expect(redactMessage).not.toHaveBeenCalled();
+  });
+
+  // The thread's messages aren't editable, and the room's own message sits
+  // dimmed behind the open thread: editing it would close the thread.
+  it("edit nothing in a panel that registers no selectedMessage", () => {
+    AppState.set("activePanel", "thread");
+    dispatchAction("edit", { input: { focus: vi.fn() } } as unknown as AppComponents);
+    expect(startEdit).not.toHaveBeenCalled();
   });
 });

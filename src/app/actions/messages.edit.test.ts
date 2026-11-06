@@ -35,7 +35,7 @@ vi.mock("../../ipc/index.js", () => ({
 }));
 // messages.ts imports the thread reply path at module scope; it pulls in a much
 // larger slice of the IPC surface and no edit ever routes through it.
-vi.mock("./threads.js", () => ({ sendThreadReply: vi.fn() }));
+vi.mock("./threads.js", () => ({ sendThreadReply: vi.fn(), applyEditToOpenThread: vi.fn() }));
 vi.mock("../../ui/NotificationToast.js", () => ({ showError: vi.fn(), showSuccess: vi.fn() }));
 
 import { editMessage } from "./messages.js";

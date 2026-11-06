@@ -21,7 +21,11 @@ vi.mock("../../ipc/index.js", () => ({
   createRoom: vi.fn(),
 }));
 vi.mock("../mobile.js", () => ({ isMobile: () => false, closeDrawer: vi.fn() }));
-vi.mock("./threads.js", () => ({ closeThread: vi.fn(), openThread: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("./threads.js", () => ({
+  closeThread: vi.fn(),
+  openThread: vi.fn().mockResolvedValue(undefined),
+  openThreadEvents: () => [],
+}));
 vi.mock("./messages.js", () => ({ cancelReply: vi.fn(), cancelEdit: vi.fn() }));
 vi.mock("./dialogs.js", () => ({ openRoomSettings: vi.fn() }));
 vi.mock("./profile.js", () => ({ openProfileForUser: vi.fn() }));
@@ -141,7 +145,8 @@ describe("jumpToMessage", () => {
   it("opens the thread when the target is a loaded thread reply", async () => {
     AppState.set("currentTimeline", [makeEvent({ event_id: "$t", thread_root: "$root" })]);
     await jumpToMessage("$t");
-    expect(openThread).toHaveBeenCalledWith("$root");
+    // …scrolled to the reply itself, not just the thread it is in.
+    expect(openThread).toHaveBeenCalledWith("$root", { focusEventId: "$t" });
     expect(getEventContext).not.toHaveBeenCalled();
   });
 
@@ -151,7 +156,8 @@ describe("jumpToMessage", () => {
       target_event_id: "$t", prev_batch: null, next_batch: null,
     });
     await jumpToMessage("$t");
-    expect(openThread).toHaveBeenCalledWith("$root");
+    // …scrolled to the reply itself, not just the thread it is in.
+    expect(openThread).toHaveBeenCalledWith("$root", { focusEventId: "$t" });
     expect(setMessages).not.toHaveBeenCalled();
   });
 

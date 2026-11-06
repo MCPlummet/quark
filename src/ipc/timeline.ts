@@ -1,6 +1,7 @@
 // Timeline IPC calls
 
 import { invoke } from "./invoke.js";
+import { inSendOrder } from "./send_order.js";
 import type { TimelineEvent, TimelinePage, EventContextPage, TimelineForwardPage, CachedTimelinePage } from "./types.js";
 
 export type { TimelineEvent, TimelinePage, EventContextPage, TimelineForwardPage, CachedTimelinePage };
@@ -91,7 +92,7 @@ export async function sendMessage(
   formattedBody?: string,
   inReplyTo?: string,
 ): Promise<string> {
-  return invoke<string>("send_message", { roomId, body, formattedBody, inReplyTo });
+  return inSendOrder(roomId, () => invoke<string>("send_message", { roomId, body, formattedBody, inReplyTo }));
 }
 
 /**
