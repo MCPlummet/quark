@@ -1439,7 +1439,7 @@ alongside `openExternalUrl` opened every link twice.
 
 ## Theming
 
-Themes are TOML files stored in `~/.config/quark/themes/`. The active theme is set in `~/.config/quark/config.toml`.
+Themes are TOML files in the `themes/` folder of Quark's config directory: `~/.config/quark/themes/` on Linux, `~/Library/Application Support/quark/themes/` on macOS, `%APPDATA%\quark\config\themes\` on Windows (the `directories` crate's config dir for `quark`). The active theme is set in `config.toml` beside it.
 
 ### Theme File Structure
 
@@ -1512,7 +1512,9 @@ visual_indicator = "VIS"
 
 `borders.style` sets the frames — message boxes, the compose box and its mode badge, and the lines between panes. They are CSS borders, so the names map to a line and corners: `rounded` solid with rounded corners, `single` solid and square, `double` a 3px double line, `ascii` dashed, `none` no frame. Other borders (inputs, dialogs, chips) keep the plain theme border.
 
-An emoji-only message — nothing but Unicode and custom emoji, with whitespace between — shows them at `emoji.size`; emoji inside text stay at the text's size.
+An emoji-only message — nothing but Unicode and custom emoji, with whitespace between — shows them at `emoji.size`; emoji inside text stay at the text's size. A Unicode emoji counts only if it is drawn as one: emoji presentation by default, or followed by U+FE0F, a skin tone or a ZWJ. Symbols that render as text unless asked otherwise — ©, ®, ™, ‼, ↔, ☺ — do not.
+
+The mode badge is at least 40px wide and grows to fit a longer `prompt.*_indicator` label.
 
 Themes once had `prompt.symbol`, an input prompt glyph the UI no longer draws. The key is retired: theme files that still set it load as before, and it is ignored.
 
@@ -1528,7 +1530,7 @@ Themes once had `prompt.symbol`, an input prompt glyph the UI no longer draws. T
 
 ### Theme Editor & Sharing
 
-**[quark.tel/theme](https://quark.tel/theme/)** is a web editor for theme files: every field above as a form control, previewed live on the real client (`docs/demo`, embedded same-origin), with a download of the finished `.toml` for `~/.config/quark/themes/`. It can start from any built-in theme, and imports TOML (pasted, picked or dropped) or a theme link.
+**[quark.tel/theme](https://quark.tel/theme/)** is a web editor for theme files: every field above as a form control, previewed live on the real client (`docs/demo`, embedded same-origin), with a download of the finished `.toml` for the [themes folder](#theming). It can start from any built-in theme, and imports TOML (pasted, picked or dropped) or a theme link.
 
 **Share format.** A theme travels as a *share string*: the unpadded base64url (RFC 4648 §5) of the theme's UTF-8 TOML. There is no other envelope, so reading one is decode → the ordinary TOML theme parser. A link is the editor URL with the share string as its fragment:
 
@@ -1538,7 +1540,7 @@ https://quark.tel/theme/#W21ldGFdCm5hbWUgPSAiUGhvc3Bob3Ii…
 
 The fragment never reaches a server. The address bar is the editor's state — every edit rewrites it, so reloading or sending the link reproduces the theme. Decoders should accept a whole link (use what follows `#`), the standard alphabet, padding, and line breaks. A full theme encodes to roughly 1.5 KB.
 
-The editor writes **canonical TOML**: every field, in the table and key order of the [structure above](#theme-file-structure) and the files in `/themes/`. Unlike the app's lenient custom-theme loader, the output satisfies the strict Rust `Theme` struct and `validate_theme`. Importing a partial or partly invalid theme fills in or replaces those fields from Phosphor and lists each change.
+The editor writes **canonical TOML**: every field, in the table and key order of the [structure above](#theme-file-structure) and the files in `/themes/`. Unlike the app's lenient custom-theme loader, the output satisfies the strict Rust `Theme` struct and `validate_theme`. Importing a partial or partly invalid theme fills in or replaces those fields from Phosphor and lists each change — except the fields that say whose theme it is: a missing or blank `meta.name` becomes "Untitled theme" (not "Phosphor", which would pass it off as the built-in), and an invalid `author`/`version` is left out. Integer fields are `u32` in Rust, so values above 4294967295 are rejected.
 
 Implementation: `src/theme/share.ts` holds a schema mirroring the Rust struct, which drives the TOML output, the validation and the share codec (shared with the app for a future in-app import). `themeToCssVars` in `src/theme/loader.ts` is the single field→CSS mapping, used by both `applyTheme` and the preview. The page is `src/theme-editor/`, built into `docs/theme/` by `pnpm build:theme-editor`. That output is committed like `docs/demo`, so rebuild it after changing either directory.
 
