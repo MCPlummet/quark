@@ -613,6 +613,29 @@ pub async fn mark_room_read(
     crate::matrix::rooms::mark_room_read(&client, &room_id, send_public).await
 }
 
+/// Announce that the user is (or has stopped) typing in a room. The frontend
+/// calls this on every compose keystroke; matrix-sdk decides when a request
+/// actually goes out. Announcing is skipped when the user has opted out, but a
+/// stop always passes through — matrix-sdk sends it only while an announcement
+/// is live, which covers opting out mid-sentence.
+#[tauri::command]
+pub async fn set_typing(
+    state: State<'_, MatrixState>,
+    config_state: State<'_, Mutex<AppConfig>>,
+    room_id: String,
+    typing: bool,
+) -> Result<(), String> {
+    let enabled = config_state
+        .lock()
+        .map(|c| c.general.send_typing_notifications)
+        .unwrap_or(true);
+    if typing && !enabled {
+        return Ok(());
+    }
+    let client = get_client(&state)?;
+    crate::matrix::rooms::set_typing(&client, &room_id, typing).await
+}
+
 /// Load other members' latest public read positions for a room (initial seed).
 #[tauri::command]
 pub async fn get_room_receipts(

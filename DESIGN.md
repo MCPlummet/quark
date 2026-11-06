@@ -1456,7 +1456,23 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       place, so a hovered reader list survives incoming messages. An open
       reader list follows its cluster as the timeline scrolls and closes once
       the cluster is out of view.
-- [x] Typing indicators
+- [x] Typing indicators (`m.typing`), both ways.
+    - **Sending**: Insert-mode edits to the compose box call `set_typing`
+      (`Room::typing_notice`) on every keystroke. matrix-sdk throttles the
+      requests itself: an announcement goes out at most every 3 s and lasts
+      4 s on the server. Calling it less often lets the announcement lapse
+      mid-sentence. The announcement is withdrawn when the message is sent,
+      the box is emptied, Insert mode is left or the room changes.
+      `app/typing.ts` sends one request at a time, so a stop never overtakes
+      the start it withdraws. Settings → General → Typing
+      (`general.send_typing_notifications`) turns announcing off. Others'
+      typing is still shown.
+    - **Receiving**: the latest list is kept for every room, not just the
+      open one, because the server pushes it only when it changes. A room
+      opened mid-sentence shows the dots straight away. The list includes
+      the reader, who is left out of the label. Names are display names:
+      "A is typing…", "A and B are typing…", "A, B and C are typing…",
+      "A, B and N others are typing…".
 - [x] Presence (when homeserver enables it)
 - [x] Authenticated media (MSC3916)
 - [x] Room summary previews (MSC3266)
@@ -1921,6 +1937,7 @@ theme = "phosphor"            # the active theme; outranks quarkrc's `colorschem
                               # (see Theme precedence below)
 notifications = true
 confirm_redact = true
+send_typing_notifications = true  # tell rooms when you are typing (m.typing)
 send_key_behavior = "auto"    # auto | enter | newline — what the Enter key does
                               #   auto:    send on desktop, newline on mobile
                               #   enter:   always send (Shift+Enter inserts a newline)

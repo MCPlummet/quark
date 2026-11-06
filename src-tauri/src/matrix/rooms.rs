@@ -626,6 +626,19 @@ pub async fn get_room_members(client: &Client, room_id: &str) -> Result<Vec<Room
         .collect())
 }
 
+/// Send a typing notice for a room. `Room::typing_notice` throttles itself:
+/// an announcement goes out at most every 3 s and lasts 4 s on the server, and
+/// a stop is sent only while one is live.
+pub async fn set_typing(client: &Client, room_id: &str, typing: bool) -> Result<(), String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {room_id} not found"))?;
+    room.typing_notice(typing)
+        .await
+        .map_err(|e| format!("Failed to send typing notice: {e}"))
+}
+
 /// Mark a room as fully read by sending a read receipt for the latest event.
 ///
 /// `send_public` controls whether the visible-to-others `m.read` receipt is sent

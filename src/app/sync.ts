@@ -6,6 +6,7 @@ import type { TimelineEvent, IncomingVerificationRequest, VerificationUpdate, Ve
 import { refreshRooms, selectRoom, resolveDisplayName, applyIncomingReaction, handleIncomingVerificationRequest, handleVerificationUpdate, handleOwnTrustChanged, catchUpPendingVerificationRequests, ensureSenderAvatarDownloaded, applyIncomingRedaction, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, homeViewHandlePresence, recordLiveEvent, renderLiveEvent } from "./actions.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { handleIncomingMessage } from "./notifications.js";
+import { recordTyping, renderTypingIndicator, clearTypingState } from "./typing.js";
 
 // ── Tauri event types ─────────────────────────────────────────────────────────
 
@@ -261,22 +262,12 @@ export async function startSync(components: AppComponents): Promise<() => void> 
   const unlistenTyping = await tauriListen<SyncTypingPayload>(
     "quark://sync/typing",
     (payload) => {
-      const currentRoom = AppState.get("currentRoomId");
-      if (payload.room_id !== currentRoom) return;
-
-      const { typingIndicator } = components;
-      const textEl = typingIndicator.querySelector(".typing-indicator__text");
-
-      if (payload.user_ids.length > 0) {
-        const names = payload.user_ids.join(", ");
-        const label = payload.user_ids.length === 1
-          ? `${names} is typing…`
-          : `${names} are typing…`;
-        if (textEl) textEl.textContent = label;
-        typingIndicator.classList.add("typing-indicator--active");
-      } else {
-        if (textEl) textEl.textContent = "";
-        typingIndicator.classList.remove("typing-indicator--active");
+      // Kept for every room, not just the open one: the server pushes the
+      // list only when it changes, so a room opened mid-sentence has no new
+      // update coming to say someone is typing.
+      recordTyping(payload.room_id, payload.user_ids);
+      if (payload.room_id === AppState.get("currentRoomId")) {
+        renderTypingIndicator(typingIndicator);
       }
     }
   );
@@ -436,4 +427,5 @@ export function stopSync(): void {
     clearTimeout(_roomListRefreshTimer);
     _roomListRefreshTimer = null;
   }
+  clearTypingState();
 }

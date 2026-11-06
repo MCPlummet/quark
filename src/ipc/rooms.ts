@@ -111,6 +111,16 @@ export async function markRoomRead(roomId: string): Promise<void> {
 }
 
 /**
+ * Tell the room this user is (or has stopped) typing. Call on every compose
+ * keystroke: the backend's matrix-sdk decides when a request actually goes out,
+ * and skips announcing at all when `general.send_typing_notifications` is off.
+ * Matches the Rust `set_typing` command.
+ */
+export async function setTyping(roomId: string, typing: boolean): Promise<void> {
+  return invoke<void>("set_typing", { roomId, typing });
+}
+
+/**
  * Get other members' latest public read positions for a room (initial seed for
  * the read-receipt avatars). Matches the Rust `get_room_receipts` command.
  */

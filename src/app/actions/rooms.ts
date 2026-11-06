@@ -30,6 +30,7 @@ import { getPseudoSpace, sortByRecency } from "../pseudo_spaces.js";
 import { clearRoomNotificationsIpc } from "../../ipc/notifications.js";
 import { muteRoom, unmuteRoom } from "../notifications.js";
 import { enterHomeView, exitHomeView } from "./home.js";
+import { renderTypingIndicator } from "../typing.js";
 
 import type { RoomMember, TimelineEvent, EventContextPage } from "../../ipc/types.js";
 import type { AppConfig } from "../../ipc/app_config.js";
@@ -279,10 +280,9 @@ export async function selectRoom(
   // instantly from the per-room cache below (revisit), to avoid a skeleton flash.
   if (!_roomTimelineCache.has(roomId)) timeline.showSkeleton();
 
-  // Clear typing indicator when switching rooms
-  const typingTextEl = typingIndicator.querySelector(".typing-indicator__text");
-  if (typingTextEl) typingTextEl.textContent = "";
-  typingIndicator.classList.remove("typing-indicator--active");
+  // Show whoever is already typing in the incoming room — the server will not
+  // push its list again until it changes. Names resolve once members load.
+  renderTypingIndicator(typingIndicator);
 
   // Clear unread badge optimistically in local cache, then send read receipt.
   // Use updateRoomBadge (not setRooms) so the current space filter is preserved.
@@ -440,6 +440,7 @@ export async function selectRoom(
           timeline.updateSenderName(m.user_id, m.display_name);
         }
       }
+      renderTypingIndicator(typingIndicator);
 
       // Populate the member list sidebar
       memberList.setMembers(members.map(roomMemberToEntry));

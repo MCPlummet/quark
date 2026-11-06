@@ -190,6 +190,7 @@ pub fn run() {
             commands::get_room_nickname,
             commands::set_room_nickname,
             commands::mark_room_read,
+            commands::set_typing,
             commands::get_room_receipts,
             commands::get_pinned_events,
             commands::search_room_directory,

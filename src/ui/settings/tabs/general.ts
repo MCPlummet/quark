@@ -108,6 +108,14 @@ export const generalTab: SettingsTab = {
       (v) => { draft = { ...draft, general: { ...draft.general, show_read_receipts: v } }; },
     ));
 
+    section.appendChild(controls.sectionTitle("Typing"));
+
+    section.appendChild(controls.checkbox(
+      "Let others see when I'm typing",
+      draft.general.send_typing_notifications,
+      (v) => { draft = { ...draft, general: { ...draft.general, send_typing_notifications: v } }; },
+    ));
+
     // (Session verification / cross-signing and the prompt-to-verify toggle now
     // live in the Account tab.)
 

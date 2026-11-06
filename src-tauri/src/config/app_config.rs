@@ -48,6 +48,10 @@ pub struct GeneralConfig {
     /// Show other users' read receipts as shifting avatars in the timeline.
     #[serde(default = "bool_true")]
     pub show_read_receipts: bool,
+    /// Tell a room when you are typing in it (`m.typing`). When false, nothing
+    /// is announced; other people's typing is still shown.
+    #[serde(default = "bool_true")]
+    pub send_typing_notifications: bool,
     /// Prompt to verify a new/unverified session on startup, until it is verified
     /// or the user opts out ("Never ask").
     #[serde(default = "bool_true")]
@@ -239,7 +243,7 @@ fn default_channel() -> UpdateChannel { UpdateChannel::Stable }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
-        Self { theme: default_theme_name(), notifications: true, confirm_redact: true, icon_radius: default_icon_radius(), vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true, send_key_behavior: SendKeyBehavior::Auto }
+        Self { theme: default_theme_name(), notifications: true, confirm_redact: true, icon_radius: default_icon_radius(), vim_mode: true, send_read_receipts: true, show_read_receipts: true, send_typing_notifications: true, prompt_session_verification: true, send_key_behavior: SendKeyBehavior::Auto }
     }
 }
 
@@ -416,6 +420,32 @@ mod send_key_behavior_tests {
         assert_eq!(toml.as_str(), Some("newline"));
         let back: SendKeyBehavior = toml.try_into().unwrap();
         assert_eq!(back, SendKeyBehavior::Newline);
+    }
+}
+
+#[cfg(test)]
+mod typing_notification_tests {
+    use super::*;
+
+    #[test]
+    fn sends_typing_notifications_by_default() {
+        assert!(GeneralConfig::default().send_typing_notifications);
+    }
+
+    #[test]
+    fn missing_field_falls_back_to_sending() {
+        // A config written before this field existed must still load.
+        let cfg: AppConfig = toml::from_str("[general]\ntheme = \"phosphor\"\n").unwrap();
+        assert!(cfg.general.send_typing_notifications);
+    }
+
+    #[test]
+    fn opting_out_round_trips() {
+        let cfg: AppConfig =
+            toml::from_str("[general]\nsend_typing_notifications = false\n").unwrap();
+        assert!(!cfg.general.send_typing_notifications);
+        let back: AppConfig = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+        assert!(!back.general.send_typing_notifications);
     }
 }
 
