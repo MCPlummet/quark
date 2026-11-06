@@ -2,10 +2,11 @@
 
 import { AppState } from "./state.js";
 import type { AppComponents } from "../ui/App.js";
-import type { TimelineEvent, RoomInfo, IncomingVerificationRequest, VerificationUpdate, VerificationStatus } from "../ipc/types.js";
+import type { TimelineEvent, IncomingVerificationRequest, VerificationUpdate, VerificationStatus } from "../ipc/types.js";
 import { refreshRooms, selectRoom, resolveDisplayName, applyIncomingReaction, handleIncomingVerificationRequest, handleVerificationUpdate, handleOwnTrustChanged, catchUpPendingVerificationRequests, ensureSenderAvatarDownloaded, applyIncomingRedaction, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, homeViewHandlePresence, recordLiveEvent, renderLiveEvent } from "./actions.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { handleIncomingMessage } from "./notifications.js";
+import { recordTyping, setupTypingIndicator, clearTypingState } from "./typing.js";
 
 // ── Tauri event types ─────────────────────────────────────────────────────────
 
@@ -14,9 +15,8 @@ interface SyncNewMessagePayload {
   event: TimelineEvent;
 }
 
-interface SyncRoomListChangedPayload {
-  rooms: RoomInfo[];
-}
+/** `quark://sync/rooms` is a bare signal — see `room_list_watch.rs`. */
+type SyncRoomListChangedPayload = Record<string, never>;
 
 interface SyncTypingPayload {
   room_id: string;
@@ -99,18 +99,27 @@ async function tauriListen<T>(
 
 let _unlisteners: UnlistenFn[] = [];
 
-// Room keys arrive in bursts (e.g. the flush right after a session is verified,
-// or a key-backup restore). Each burst can newly decrypt room names / last
-// messages / avatars across many rooms, so the room LIST needs re-fetching — not
-// just the open room's timeline. Debounce so one refresh runs after the burst
-// settles instead of one per key event.
+// Room-list refreshes are debounced: room keys arrive in bursts (the flush right
+// after a session is verified, a key-backup restore), and a join from another
+// client is several sync responses in a row (the join, then the room's state).
+// Each can change room names, membership or a space's children, so the list
+// needs re-reading — once, after the burst settles, not once per event.
+//
+// A scheduled refresh is never postponed — a steady trickle of events must not
+// starve it — so requests made while one is pending ride along with it, a more
+// urgent one brings it forward, and anything arriving after it fires schedules
+// the next. `refreshRooms` itself coalesces runs that overlap.
 let _roomListRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-function _scheduleRoomListRefresh(): void {
+let _roomListRefreshDue = 0;
+function _scheduleRoomListRefresh(delayMs = 800): void {
+  const due = Date.now() + delayMs;
+  if (_roomListRefreshTimer && _roomListRefreshDue <= due) return;
   if (_roomListRefreshTimer) clearTimeout(_roomListRefreshTimer);
+  _roomListRefreshDue = due;
   _roomListRefreshTimer = setTimeout(() => {
     _roomListRefreshTimer = null;
     void refreshRooms();
-  }, 800);
+  }, delayMs);
 }
 
 /**
@@ -241,36 +250,25 @@ export async function startSync(components: AppComponents): Promise<() => void> 
   );
 
   // ── quark://sync/rooms ────────────────────────────────────────────────────
+  // The backend emits this when a sync response touches the room list: our own
+  // membership (joined, left, invited — from this device or any other), a
+  // rename, a space's children, m.direct or push rules.
   const unlistenRooms = await tauriListen<SyncRoomListChangedPayload>(
     "quark://sync/rooms",
-    (_payload) => {
-      void refreshRooms();
-    }
+    () => _scheduleRoomListRefresh(250),
   );
 
   // ── quark://sync/typing ───────────────────────────────────────────────────
   const unlistenTyping = await tauriListen<SyncTypingPayload>(
     "quark://sync/typing",
     (payload) => {
-      const currentRoom = AppState.get("currentRoomId");
-      if (payload.room_id !== currentRoom) return;
-
-      const { typingIndicator } = components;
-      const textEl = typingIndicator.querySelector(".typing-indicator__text");
-
-      if (payload.user_ids.length > 0) {
-        const names = payload.user_ids.join(", ");
-        const label = payload.user_ids.length === 1
-          ? `${names} is typing…`
-          : `${names} are typing…`;
-        if (textEl) textEl.textContent = label;
-        typingIndicator.classList.add("typing-indicator--active");
-      } else {
-        if (textEl) textEl.textContent = "";
-        typingIndicator.classList.remove("typing-indicator--active");
-      }
+      // Kept for every room, not just the open one: the server pushes the
+      // list only when it changes, so a room opened mid-sentence has no new
+      // update coming to say someone is typing. Repaints if it is the open one.
+      recordTyping(payload.room_id, payload.user_ids);
     }
   );
+  const unbindTypingIndicator = setupTypingIndicator(typingIndicator);
 
   // ── quark://sync/presence ─────────────────────────────────────────────────
   const unlistenPresence = await tauriListen<SyncPresencePayload>(
@@ -393,6 +391,7 @@ export async function startSync(components: AppComponents): Promise<() => void> 
     unlistenUnread,
     unlistenRooms,
     unlistenTyping,
+    unbindTypingIndicator,
     unlistenPresence,
     unlistenConnected,
     unlistenReaction,
@@ -418,8 +417,15 @@ export async function startSync(components: AppComponents): Promise<() => void> 
  * Stop all sync listeners.
  */
 export function stopSync(): void {
+  // Cleared while the indicator is still bound, so it is repainted empty.
+  clearTypingState();
   for (const unlisten of _unlisteners) {
     unlisten();
   }
   _unlisteners = [];
+  // A refresh scheduled by the last session must not run against the next.
+  if (_roomListRefreshTimer) {
+    clearTimeout(_roomListRefreshTimer);
+    _roomListRefreshTimer = null;
+  }
 }

@@ -26,6 +26,11 @@ vi.mock("../ipc/room_settings.js", () => ({
   setRoomTopic: vi.fn(),
   setRoomJoinRule: vi.fn(),
   setRoomHistoryVisibility: vi.fn(),
+  // The Settings tab reads the current join rule and history visibility.
+  // Missing from the mock, the read threw when the tab was built — inside an
+  // un-awaited tab build, so the tests passed and vitest failed the run on
+  // the unhandled rejection.
+  getRoomStateEvents: vi.fn().mockResolvedValue([]),
 }));
 
 const { RoomDialog } = await import("./RoomDialog.js");

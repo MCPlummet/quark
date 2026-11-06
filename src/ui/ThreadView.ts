@@ -18,9 +18,8 @@
 // live and sends into the thread.
 
 import { createReactionBar, type ReactionGroup } from "./Reactions.js";
-import { appendLinkifiedText } from "../app/links.js";
 import { attachLongPress } from "../app/long_press.js";
-import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
+import { appendCaption, buildFileAffordance, renderMessageText } from "./message_body.js";
 import { buildReplyPreview, buildVideoAffordance, playVideoInline, type ReplyPreviewData } from "./Timeline.js";
 import { TimelineSplit, type SplitHost } from "./thread_split.js";
 
@@ -468,8 +467,7 @@ export class ThreadView {
     const bodyEl = this.getMessageEl(eventId)?.querySelector<HTMLElement>(":scope > .thread-view__message-body");
     if (!bodyEl) return;
     bodyEl.replaceChildren();
-    if (htmlBody) renderFormattedBody(bodyEl, htmlBody);
-    else appendLinkifiedText(bodyEl, body);
+    renderMessageText(bodyEl, body, htmlBody);
   }
 
   updateMessageReactions(eventId: string, reactions: ReactionGroup[]): void {
@@ -697,8 +695,7 @@ export class ThreadView {
     } else {
       const body = document.createElement("div");
       body.className = "thread-view__message-body";
-      if (msg.htmlBody) renderFormattedBody(body, msg.htmlBody);
-      else appendLinkifiedText(body, msg.body);
+      renderMessageText(body, msg.body, msg.htmlBody);
       row.appendChild(body);
     }
 

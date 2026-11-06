@@ -26,11 +26,13 @@ import { refreshRooms, applyCacheConfig } from "./rooms.js";
 import { loadThemeFromConfig } from "./theme.js";
 
 /** Apply persisted runtime preferences from config at session start: the
- *  in-memory cache budgets and the read-receipt display setting (non-critical). */
+ *  in-memory cache budgets, the read-receipt display setting and the typing
+ *  opt-out (non-critical). */
 function _applyStartupConfig(): void {
   void getAppConfig().then((cfg) => {
     applyCacheConfig(cfg);
     AppState.set("showReadReceipts", cfg.general.show_read_receipts);
+    AppState.set("sendTypingNotices", cfg.general.send_typing_notifications);
   }).catch(() => { /* defaults stand */ });
 }
 
@@ -41,18 +43,18 @@ async function _loadOwnProfile(): Promise<void> {
     AppState.set("ownUserId", profile.user_id);
     AppState.set("ownDisplayName", profile.display_name);
 
-    // Render the user's avatar in the space-strip profile button. Mxc URLs
-    // need downloading; the initial fallback works without network. Both
-    // the space strip's own renderer handles either case.
+    // Render the user's avatar on the status line's profile button. Mxc URLs
+    // need downloading; the initial fallback works without network, and the
+    // status bar's renderer handles either case.
     const initialSource = profile.display_name || profile.user_id.replace(/^@/, "");
-    const { spaceStrip } = getComponents();
-    spaceStrip.setOwnProfile(initialSource, null);
+    const { statusBar } = getComponents();
+    statusBar.setOwnProfile(initialSource, null);
 
     if (profile.avatar_url?.startsWith("mxc://")) {
       try {
         const dl = await downloadMedia(profile.avatar_url);
         const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
-        spaceStrip.setOwnProfile(initialSource, dataUrl);
+        statusBar.setOwnProfile(initialSource, dataUrl);
       } catch {
         // Network or media error — leave the initial fallback in place.
       }

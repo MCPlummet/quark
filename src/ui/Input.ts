@@ -7,13 +7,6 @@ import { AttachmentTray, type StagedAttachment } from "./AttachmentTray.js";
 
 export type { StagedAttachment };
 
-const MODE_LABELS: Record<string, string> = {
-  Normal: "NOR",
-  Insert: "INS",
-  Command: "CMD",
-  Visual: "VIS",
-};
-
 const MODE_CSS_CLASS: Record<string, string> = {
   Normal: "",
   Insert: "input-bar__mode--insert",
@@ -149,6 +142,8 @@ export function looksLikeFileListText(text: string): boolean {
 export class Input {
   private _el: HTMLElement;
   private _modeEl: HTMLElement;
+  /** The mode's name for screen readers; the visible label is the theme's. */
+  private _modeNameEl: HTMLElement;
   private _fieldEl: HTMLTextAreaElement;
   private _composeBoxEl: HTMLElement;
   private _tray: AttachmentTray;
@@ -203,7 +198,17 @@ export class Input {
     this._modeEl.className = "input-bar__mode";
     this._modeEl.setAttribute("aria-live", "polite");
     this._modeEl.setAttribute("aria-label", "Editor mode");
-    this._modeEl.textContent = "NOR";
+    // The badge's text is the theme's (prompt.*_indicator), so it is drawn by
+    // CSS — `content: var(--mode-…)` — and follows a theme switch, or the
+    // quark.tel/theme preview, with no JS. It sits on an aria-hidden child: a
+    // screen reader hears the mode's name rather than an abbreviation.
+    const modeLabel = document.createElement("span");
+    modeLabel.className = "input-bar__mode-label";
+    modeLabel.setAttribute("aria-hidden", "true");
+    this._modeNameEl = document.createElement("span");
+    this._modeNameEl.className = "sr-only";
+    this._modeNameEl.textContent = "Normal";
+    this._modeEl.append(modeLabel, this._modeNameEl);
     inputBar.appendChild(this._modeEl);
 
     // Compose box — directly after mode indicator, no avatar
@@ -734,8 +739,7 @@ export class Input {
       if (cls) this._modeEl.classList.remove(cls);
     }
 
-    // Set mode label
-    this._modeEl.textContent = MODE_LABELS[label] ?? label.slice(0, 3).toUpperCase();
+    this._modeNameEl.textContent = label;
 
     // Apply mode class
     const cls = MODE_CSS_CLASS[label];

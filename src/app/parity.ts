@@ -31,6 +31,7 @@ const MENU_TOUCH: Readonly<Record<MenuSurface, boolean>> = {
   section: true,   // long press on a subspace label
   space: true,     // long press on a space icon
   overflow: true,  // the mobile top bar's ⋮ — mobile-only by definition
+  create: true,    // the room list header's + (in the drawer on mobile)
 };
 
 /** Whether a menu surface can be opened with a pointer. */
@@ -42,6 +43,7 @@ const MENU_POINTER: Readonly<Record<MenuSurface, boolean>> = {
   // The mobile top bar does not exist on desktop, so this surface is touch-only
   // and cannot be what makes an action pointer-reachable.
   overflow: false,
+  create: true,
 };
 
 /**

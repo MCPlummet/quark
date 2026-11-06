@@ -1,6 +1,6 @@
 // Application state manager — single source of truth for Quark's runtime state
 
-import type { RoomInfo, TimelineEvent } from "../ipc/types.js";
+import type { RoomInfo, TimelineEvent, InviteInfo } from "../ipc/types.js";
 import type { UpdateInfo } from "../ipc/index.js";
 import type { SendKeyBehavior } from "../ipc/app_config.js";
 
@@ -32,6 +32,8 @@ export interface AppStateSnapshot {
   roomListCache: RoomInfo[];
   /** Room IDs that belong to at least one space (used to filter home view). */
   spaceRoomIds: string[];
+  /** Pending room invites, refreshed with the room list. */
+  invites: InviteInfo[];
   currentTimeline: TimelineEvent[];
   replyToEventId: string | null;
   /** Event ID of the message currently being edited inline, or null. */
@@ -47,6 +49,9 @@ export interface AppStateSnapshot {
   sendKeyBehavior: SendKeyBehavior;
   /** When false, other users' read-receipt avatars are not rendered in the timeline. */
   showReadReceipts: boolean;
+  /** When false, typing is not announced (mirrors general.send_typing_notifications;
+   *  the backend enforces it as well, so the default before config loads is safe). */
+  sendTypingNotices: boolean;
   /** Active text-selection target, or null if not in text-select mode. */
   textSelectMode: TextSelectMode;
   /** Metadata for an available update, or null when none/up to date. */
@@ -125,6 +130,7 @@ class AppStateManager {
     activePanel: "roomlist",
     roomListCache: [],
     spaceRoomIds: [],
+    invites: [],
     currentTimeline: [],
     replyToEventId: null,
     editingEventId: null,
@@ -134,6 +140,7 @@ class AppStateManager {
     vimMode: true,
     sendKeyBehavior: "auto",
     showReadReceipts: true,
+    sendTypingNotices: true,
     textSelectMode: null,
     updateAvailable: null,
   };

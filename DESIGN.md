@@ -712,6 +712,47 @@ than absorbing every new action nobody got round to giving a home.
 
 All panels, borders, and text use monospace rendering. Colors, borders, and glyph styles are controlled by themes.
 
+### Status line
+
+The foot of the space strip and room list is two rows:
+
+```
+┌────┬───────────────────────────┐
+│ ⌂  │ ROOMS                   + │
+│ ── │ #general                  │
+│ W  │ #dev                      │
+│ G  │                           │
+│ +  │                           │
+│ ── │                           │
+│ ✉  │                           │
+│ #  │                           │
+├────┴───────────────────────────┤
+│ (C•) Cyrillus       ⇩3   ⌕   ⚙ │
+│      set status…               │
+└────────────────────────────────┘
+```
+
+- **Top left — you.** Your avatar and display name, one button that opens your
+  profile (`P`); the dot on the avatar's corner is the connection state (green
+  connected, red offline, and the avatar dims).
+- **Top right — the app.** Pending **invites** (an inbox tray with a count, lit
+  when any are waiting; `:invites`), **search** rooms and commands (the
+  palette, `Ctrl+K`), and **settings** (`?`) — 40px square buttons, so they are
+  easy targets on desktop too.
+- **Below — your presence status**, lined up under your name with the rest of
+  the width to itself. Click it, or press `S`, to edit inline; `Enter` saves,
+  `Esc` cancels.
+
+These used to stack vertically at the bottom of the space strip, under the
+spaces, where a long list pushed them off screen; a single row with the status
+between the name and the buttons left the status about a dozen characters. The
+strip now holds spaces alone. On desktop the bar is fixed over the two
+columns, which reserve `--status-bar-height` of bottom padding for it; on
+mobile `App.ts` reparents it to the foot of the room-list drawer, with
+finger-sized targets. The old status bar's encryption indicator was dropped:
+nothing ever set it, so it always read "not encrypted" (the room header
+carries the real one).
+
 ### Threads
 
 A thread opens **in the timeline, at its root**: the room parts there — the
@@ -858,6 +899,7 @@ The room list has a two-column layout inspired by Cinny:
 - Narrow vertical strip showing space icons (avatar images or first-letter fallback)
 - A "Home" icon at the top for rooms not in any space, and a "DMs" icon
 - Spaces display their avatar/icon; this is the only place icons appear in the room list
+- The space list ends in a `+` that creates a space (see *Creating rooms and spaces*)
 - `j/k` (or rebound keys) to navigate spaces, `Enter` to select
 - Selecting a space filters the room list to show only that space's children
 - Each space remembers its own last-active chat: switching to a space loads that
@@ -867,8 +909,8 @@ The room list has a two-column layout inspired by Cinny:
 **Right column — Room list (text only, no icons):**
 - Rooms listed by name in a **fixed, deterministic order** (not sorted by activity):
   - Order follows the `m.space.child` state event `order` field if set
-  - Fallback: alphabetical by room name
-  - User can pin rooms to top via `:pin` command
+  - Fallback: alphabetical by room name, then room ID
+  - The user can **reorder** a room within its section — see below
 - No room avatars or icons — text only, matching the CLI aesthetic
 - Unread indicators via color (theme-configurable) and optional badge count.
   Two counters, and they are not interchangeable: the SDK's *notification* count
@@ -890,6 +932,102 @@ The room list has a two-column layout inspired by Cinny:
 - Categories/sections within a space rendered as visual dividers (using `m.space.child` ordering)
 
 This mirrors Cinny's approach: spaces have visual identity through icons, but the channel list itself is clean text in a stable order, so rooms don't jump around based on activity.
+
+**Reading a space.** A joined space's children come from its `m.space.child`
+state in the local store (`get_space_children`) — no HTTP, current with sync. A
+child event with an empty or missing `via` is a removed child and is skipped.
+`/hierarchy` is only the fallback for a space this account has not joined. It
+used to serve every read, and the room list reads every space's children on
+every refresh: a server round-trip per space per room-list change, which also
+lagged a reorder until the server's own view caught up. A child this account
+knows nothing about — never joined, so not in the store — is described from the
+space's `/hierarchy` instead, which is asked only when the space has such a
+child, and cached. Whether it is a space is the part that matters: an unjoined
+subspace still gets its section, and that section is where the rooms this
+account *did* join inside it are listed. (For a while the store alone answered,
+calling every unknown child a room, and those rooms vanished from the parent.)
+If the server won't answer, unknown children are listed by ID only.
+
+Removed children need help from us. The spec removes a child by replacing its
+event with one that has no `via`, and matrix-sdk 0.9 drops any state event it
+cannot deserialize — ruma requires `via` — so the SDK never stores a removal
+and the old child would stay listed forever. Every sync therefore writes those
+raw removal events into the store itself, before signalling the refresh
+(`room_list_watch::apply_sync_response` → `removed_space_children` →
+`spaces::persist_child_removals`). "Every sync" includes a push wake's: it
+advances the stored token like the warm loop does, so a response it skipped
+would never be seen again — the warm loop resumes after it. And because every store written before this
+build already holds children removed while it ran (`/hierarchy` used to hide
+them), the first read of each joined space per session checks the stored
+children against the space's authoritative `children_state` from one
+`/hierarchy` call, and marks the ones the server no longer lists as removed.
+One request per space per session, retried after ten minutes if it fails.
+
+**Keeping up with other clients.** The backend emits `quark://sync/rooms` when a
+sync response — the warm loop's, or a push wake's while the app is running —
+touches the room list (`matrix/room_list_watch.rs`): any invite,
+leave or knock section; in a joined room, our *own* `m.room.member` or a state
+event that changes a row or a space's shape (`m.room.name`, `avatar`,
+`canonical_alias`, `topic`, `create`, `encryption`, `tombstone`,
+`m.space.child`, `m.space.parent`); or `m.direct` / `m.push_rules` account data.
+Other members' joins and leaves do not count — most state traffic in a busy room
+is exactly that. The event is a bare signal; the frontend debounces it (250ms)
+into `refreshRooms`, which re-reads rooms, spaces and invites and re-renders
+whichever list is showing — **real spaces included**. Before #14 nothing emitted
+the event at all, and a refresh only redrew pseudo-spaces, so a room joined or
+left from another client did not appear until restart. A refresh that finds the
+open room gone (left, kicked) clears the timeline; one that finds the selected
+space gone returns to Home. Refreshes are serialized and coalesced — every
+caller's promise settles after a run that *started after its call*, so
+`join → refresh → select` never races an older response.
+
+**Reordering.** In a space's list (not the activity-sorted pseudo-spaces), a room
+moves within its section: **Move up / Move down** on its menu (long press on
+touch), `K` / `J` in the room list, or drag it with the mouse
+(`src/ui/room_list_drag.ts` — pointer events, not HTML5 drag-and-drop, which
+Tauri's file-drop handling intercepts; touch keeps vertical drags for
+scrolling). Moving between sections (spaces) is not supported. The list
+updates at once; `reorder_space_children` then writes the fewest
+`m.space.child` events that produce the new order
+(`matrix/space_order.rs`): it keeps the longest run of existing `order` strings
+already in sequence and fills the gaps with midpoint strings (spec alphabet
+`\x20`–`\x7E`, ≤ 50 chars), and an unordered tail already in name order stays
+unordered. Moving one room in a space ordered before is one event; a homeserver
+rate-limits state events like messages, so renumbering a whole space per move
+would take minutes. The trade-off: the rooms left unordered sort by name here,
+but by when they were added in clients that follow the spec's tie-break
+(Element), so those clients can show that tail differently. The rooms the user
+placed are ordered everywhere. Each write rewrites only `order`, keeping `via`,
+`suggested` and anything else. Writes not yet echoed by sync are layered over
+the store for reads (so a refresh in between doesn't put the room back), and
+reorders run one at a time, each computed from the last. A refused write shows
+the error and redraws the server's order. Rooms the list doesn't show (unjoined
+children, subspaces) keep their slots.
+
+`/hierarchy` answers — for unjoined subspaces, and for describing a joined
+space's unknown children — are cached for five minutes, and failures for one
+(`HIERARCHY_CACHE`, `matrix/spaces.rs`): the open space is re-read on every
+room-list change, and without the cache each such space in it cost a
+possibly-federated server request per refresh. Failures count: a subspace this
+account left but still knows answers 403 for as long as it stays left.
+
+**Creating rooms and spaces.** The room list header's `+` opens a menu — **New
+room**, **New space**, **Browse room directory** — and the space strip's `+`, a
+space's menu (**New room in this space**, **New subspace**), a subspace
+section's menu, `:createroom [name]` and `:createspace [name]` open the same
+dialog: kind, name, topic, address (`#local:server`, optional), parent space,
+access, encryption and invites. Defaults are the safe ones: private and
+encrypted; a room defaults into the space being viewed, a space to the top
+level. With a parent space, access offers **members of <space>** (the
+`restricted` join rule) and selects it by default. A public room with no
+address takes one suggested from its name, since otherwise it can only be
+joined by room ID; public rooms default to unencrypted until the user chooses.
+A space is never encrypted. Encryption goes in the creation request's
+`initial_state`, so the room is never briefly unencrypted, and so does the new
+room's `m.space.parent`. Listing it in the parent (`add_space_child`, appended
+after the ordered children) is a separate write: if that fails — no permission
+in the space — the room exists and the dialog closes with a warning, while a
+failed creation keeps the dialog open with the error inline.
 
 ### Vim-Style Navigation
 
@@ -918,6 +1056,7 @@ This mirrors Cinny's approach: spaces have visual identity through icons, but th
 | Global        | `I`           | Open room info                |
 | Global        | `S`           | Set your presence status      |
 | Global        | `?`           | Open settings                 |
+| Room list     | `J` / `K`     | Move the room down / up in its space |
 | Timeline      | `r`           | Reply to selected message     |
 | Timeline      | `e`           | React to selected message (opens the emoji picker) |
 | Timeline      | `t`           | Reply in thread (again: close)|
@@ -1069,6 +1208,9 @@ handler is now a compile error, not a silent no-op.
 :pinned                                        Show pinned messages
 :search [query]                                Search messages in this room
 :directory                                     Browse the public room directory
+:invites                                       Show pending room invites
+:createroom / :mkroom [name]                   Create a room (opens the dialog)
+:createspace / :mkspace [name]                 Create a space (opens the dialog)
 :debug [cache|$eventId]                        Open the debug viewer
 :help                                          Show commands and keybindings
 :join <room-id|alias>                          Join a room or space
@@ -1080,6 +1222,7 @@ handler is now a compile error, not a silent no-op.
 :converttodm / :convert-to-dm [room-id]        Mark this room as a direct message
 :converttoroom / :convert-to-room [room-id]    Unmark this room as a direct message
 :topic <text>                                  Set the room topic
+:myroomnick / :roomnick [name]                 Set your name in this room (bare: back to global)
 :invite <user-id>                              Invite a user to this room
 :kick <user-id> [reason]                       Remove a user from this room
 :ban <user-id> [reason]                        Ban a user from this room
@@ -1099,7 +1242,7 @@ Arguments follow one grammar: `<required>` and `[optional]`. The command palette
 reads it to decide whether a row can run outright or must prefill the command
 bar for the user to finish — a palette row cannot supply `@user:server`.
 
-**The command palette** (`Ctrl+K`, the search (magnifier) button in the space strip, or a
+**The command palette** (`Ctrl+K`, the search (magnifier) button on the status line, or a
 pull-down from the top of the open drawer on mobile) searches rooms and actions
 together. A leading `:` drops the rooms. A row that needs an argument prefills
 the command bar; a row whose action is irreversible goes through the same
@@ -1140,7 +1283,8 @@ what the action means.
 ### Room Dialog
 
 One tabbed dialog covers everything about a room: **Info** (read-only facts,
-mute, raw state, leave), **Settings** (name, topic, conversation type, access),
+mute, raw state, leave), **Settings** (name, topic, your name in this room,
+conversation type, access),
 **Members** (invite, and kick/ban where your power level permits) and
 **Permissions** (power levels). `:info` and `:roomsettings` are two doors into
 it; on mobile it shows the tab list first, like the settings dialog.
@@ -1155,13 +1299,51 @@ permits acting on yourself, so a room where everyone sits at the default offers
 nothing — a button the homeserver will refuse is worse than no button, because
 the user cannot tell a permission problem from a bug.
 
+**Fields save themselves** (`src/ui/settings/commit_field.ts`) in the Settings
+tab and in space settings: a text field on Enter or when focus leaves it, a
+select as soon as it changes, each with its own status line underneath
+(unsaved / saving / saved / the error). Esc in an edited field undoes the edit;
+in an unedited one it closes the dialog. There used to be a `[save]` per section
+— three in this tab — and Enter did nothing, so a new nickname typed, "saved"
+with the nearest button (which belonged to the section above) and closed saved
+nothing and said nothing. The Access selects show the room's current join rule
+and history visibility (read from its state), where they used to show defaults
+and their `[save]` wrote both — so changing one could quietly change the other.
+Closing a dialog blurs its focused field first, so a pending edit commits even
+where clicking the close button does not take focus (macOS WebKit). The
+Permissions tab keeps one `[save]`: power levels are a batch you apply
+together.
+
+**Your name in this room** is your own `m.room.member` `displayname`, which
+starts as your global name and may differ per room (`:myroomnick` does the
+same). Clearing it writes the global name back rather than dropping the field —
+a member event with no `displayname` shows as the bare user-ID localpart.
+
+### Invites
+
+Pending invites (rooms in the invited state) are listed by `get_invites` from
+the stripped state the inviting server shared — name, topic, avatar, address,
+the inviter, and the invite's own `is_direct` flag — with no HTTP. They refresh
+with the room list on every `quark://sync/rooms`, into `AppState.invites`, which
+drives the status line's count and an open dialog, so an invite answered on
+another device disappears here too. One that arrives while the app runs raises
+a toast ("Carol invited you to rust-lang", "Dave wants to chat", or "3 new
+invites"); the first load after starting is never announced.
+
+The **invites dialog** (status line button, `:invites`, the palette) lists each
+with **[accept]** and **[decline]**; `j`/`k` move, `Enter` accepts, `x` declines.
+A nameless DM invite is shown as its inviter. Accepting joins (the SDK marks a
+DM invite as direct in `m.direct` as it joins), refreshes, and goes there — the
+room, or for a space, the space — closing the dialog. Declining leaves the room
+and keeps the dialog open on the rest. A failed answer leaves the row usable.
+
 ### Settings Dialog
 
 Opened via `:settings` or the settings UI affordance. The dialog has eight tabs, rendered in this order:
 
 | Tab | Contents |
 |-----|----------|
-| **General** | Theme selector, notification toggles, send-key behaviour, read-receipt toggles, confirm-redact toggle |
+| **General** | Theme selector, notification toggles, send-key behaviour, read-receipt toggles, typing-notice toggle, confirm-redact toggle |
 | **Account** | Devices & Verification — see below |
 | **Media** | Image auto-load, max dimensions, cache-size limit |
 | **GIF** | Provider (Klipy / Giphy), API key, content rating |
@@ -1226,7 +1408,10 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
     toast names the requester, and the request opens when the dialog closes, if it is still waiting.
   - An incoming request dismisses the startup "verify this session" prompt and the device picker; the
     prompt is not shown while a flow is live.
-- [x] Room creation, join, leave, invite, kick, ban
+- [x] Room and space creation (in a space, with access/encryption), join, leave, invite, kick, ban
+- [x] Pending invites: list, accept, decline, live count and new-invite toast
+- [x] Per-room display name (`:myroomnick`)
+- [x] Reordering rooms within a space (`m.space.child` `order`, minimal writes)
 - [x] Room directory & federated room search
 - [x] In-room message search — header search box (`:search`) with four tiers: loaded window (instant) · local cache (matrix-sdk event cache, offline) · back-to-date · entire history. Server tiers stream results one page at a time (bounded memory) and are cancelable.
 - [x] Spaces: hierarchy display, space-scoped room lists, restricted joins
@@ -1284,7 +1469,32 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       place, so a hovered reader list survives incoming messages. An open
       reader list follows its cluster as the timeline scrolls and closes once
       the cluster is out of view.
-- [x] Typing indicators
+- [x] Typing indicators (`m.typing`), both ways.
+    - **Sending**: Insert-mode edits to the compose box announce typing.
+      `app/typing.ts` owns the schedule: an announcement goes out on the
+      first keystroke and is renewed every 3 s while keystrokes continue, and
+      the keystrokes in between make no call at all. The backend's
+      `set_typing` sends exactly what it is asked, each announcement lasting
+      4 s on the server (the same timings as matrix-sdk's
+      `Room::typing_notice`, which it bypasses: that throttle, started a
+      moment after the frontend's, would drop some of the renewals and let
+      the announcement lapse mid-sentence). The announcement is withdrawn when
+      the message is sent, the box is emptied, Insert mode is left, the room
+      changes or an edit starts, unless it has already lapsed. Editing a sent
+      message announces nothing. Requests go one at a time, so a stop never
+      overtakes the start it withdraws. Settings → General → Typing
+      (`general.send_typing_notifications`) turns announcing off, in the
+      frontend (no calls) and in the backend (enforced, failing closed if the
+      config can't be read). Others' typing is still shown.
+    - **Receiving**: the latest list is kept for every room, not just the
+      open one, because the server pushes it only when it changes. A room
+      opened mid-sentence shows the dots straight away. A room's list is
+      dropped when the room leaves the room list (left, kicked or banned),
+      since no update will come to correct it. The server's list includes
+      the reader; the backend drops them using the session's own user ID.
+      The indicator follows the open room, clearing when none is open, and
+      names are display names: "A is typing…", "A and B are typing…",
+      "A, B and C are typing…", "A, B and N others are typing…".
 - [x] Presence (when homeserver enables it)
 - [x] Authenticated media (MSC3916)
 - [x] Room summary previews (MSC3266)
@@ -1683,7 +1893,7 @@ alongside `openExternalUrl` opened every link twice.
 
 ## Theming
 
-Themes are TOML files stored in `~/.config/quark/themes/`. The active theme is set in `~/.config/quark/config.toml`.
+Themes are TOML files in the `themes/` folder of Quark's config directory: `~/.config/quark/themes/` on Linux, `~/Library/Application Support/quark/themes/` on macOS, `%APPDATA%\quark\config\themes\` on Windows (the `directories` crate's config dir for `quark`). The active theme is set in `config.toml` beside it.
 
 ### Theme File Structure
 
@@ -1716,7 +1926,7 @@ system = "#555555"
 timestamp = "#444444"
 mention_bg = "#1a1a00"
 mention_fg = "#ffaa00"
-reply_border = "#555555"
+reply_border = "#00aaff"       # quote bar on replies
 thread_indicator = "#00aaff"
 
 [colors.roomlist]
@@ -1727,7 +1937,7 @@ mention_badge = "#ff3333"
 muted = "#444444"
 
 [colors.reactions]
-background = "#1a1a1a"
+background = "#0a0a0a"
 border = "#333333"
 own_bg = "#1a3a1a"
 count = "#888888"
@@ -1736,24 +1946,31 @@ count = "#888888"
 font_family = "JetBrains Mono, Fira Code, monospace"
 font_size = 14
 line_height = 1.5
-message_spacing = 4           # px between messages
+message_spacing = 4           # px above each message in a group, twice that below
 
 [borders]
-style = "single"              # single | double | rounded | ascii | none
+style = "rounded"             # single | double | rounded | ascii | none
 room_list_width = "25%"
 
 [emoji]
-size = 32                     # px, inline custom emoji height
+size = 32                     # px, emoji in a message that is only emoji
 sticker_max_size = 256        # px, max sticker dimension
-reaction_size = 20            # px, emoji in reaction bar
+reaction_size = 20            # px, emoji in a reaction chip (custom and standard)
 
 [prompt]
-symbol = ":>"                 # input prompt glyph
-normal_indicator = "NOR"      # mode indicator in normal mode
+normal_indicator = "NOR"      # mode badge label in normal mode
 insert_indicator = "INS"
 command_indicator = "CMD"
 visual_indicator = "VIS"
 ```
+
+`borders.style` sets the frames — message boxes, the compose box and its mode badge, and the lines between panes. They are CSS borders, so the names map to a line and corners: `rounded` solid with rounded corners, `single` solid and square, `double` a 3px double line, `ascii` dashed, `none` no frame. Other borders (inputs, dialogs, chips) keep the plain theme border.
+
+An emoji-only message — nothing but Unicode and custom emoji, with whitespace between — shows them at `emoji.size`; emoji inside text stay at the text's size. A Unicode emoji counts only if it is drawn as one: emoji presentation by default, or followed by U+FE0F, a skin tone or a ZWJ. Symbols that render as text unless asked otherwise — ©, ®, ™, ‼, ↔, ☺ — do not.
+
+The mode badge is at least 40px wide and grows to fit a longer `prompt.*_indicator` label.
+
+Themes once had `prompt.symbol`, an input prompt glyph the UI no longer draws. The key is retired: theme files that still set it load as before, and it is ignored.
 
 ### Built-in Themes
 - **Phosphor** — green-on-black CRT terminal
@@ -1764,6 +1981,22 @@ visual_indicator = "VIS"
 - **Catppuccin Mocha / Latte**
 - **Gruvbox Dark**
 - **High Contrast** — accessibility-focused
+
+### Theme Editor & Sharing
+
+**[quark.tel/theme](https://quark.tel/theme/)** is a web editor for theme files: every field above as a form control, previewed live on the real client (`docs/demo`, embedded same-origin), with a download of the finished `.toml` for the [themes folder](#theming). It can start from any built-in theme, and imports TOML (pasted, picked or dropped) or a theme link.
+
+**Share format.** A theme travels as a *share string*: the unpadded base64url (RFC 4648 §5) of the theme's UTF-8 TOML. There is no other envelope, so reading one is decode → the ordinary TOML theme parser. A link is the editor URL with the share string as its fragment:
+
+```
+https://quark.tel/theme/#W21ldGFdCm5hbWUgPSAiUGhvc3Bob3Ii…
+```
+
+The fragment never reaches a server. The address bar is the editor's state — every edit rewrites it, so reloading or sending the link reproduces the theme. Decoders should accept a whole link (use what follows `#`), the standard alphabet, padding, and line breaks. A full theme encodes to roughly 1.5 KB.
+
+The editor writes **canonical TOML**: every field, in the table and key order of the [structure above](#theme-file-structure) and the files in `/themes/`. Unlike the app's lenient custom-theme loader, the output satisfies the strict Rust `Theme` struct and `validate_theme`. Importing a partial or partly invalid theme fills in or replaces those fields from Phosphor and lists each change — except the fields that say whose theme it is: a missing or blank `meta.name` becomes "Untitled theme" (not "Phosphor", which would pass it off as the built-in), and an invalid `author`/`version` is left out. Integer fields are `u32` in Rust, so values above 4294967295 are rejected.
+
+Implementation: `src/theme/share.ts` holds a schema mirroring the Rust struct, which drives the TOML output, the validation and the share codec (shared with the app for a future in-app import). `themeToCssVars` in `src/theme/loader.ts` is the single field→CSS mapping, used by both `applyTheme` and the preview. The page is `src/theme-editor/`, built into `docs/theme/` by `pnpm build:theme-editor`. That output is committed like `docs/demo`, so rebuild it after changing either directory.
 
 ### Theme Hot-Reloading
 Themes reload on file save (watched via `notify` crate / filesystem events passed through Tauri). No restart required.
@@ -1795,6 +2028,7 @@ theme = "phosphor"            # the active theme; outranks quarkrc's `colorschem
                               # (see Theme precedence below)
 notifications = true
 confirm_redact = true
+send_typing_notifications = true  # tell rooms when you are typing (m.typing)
 send_key_behavior = "auto"    # auto | enter | newline — what the Enter key does
                               #   auto:    send on desktop, newline on mobile
                               #   enter:   always send (Shift+Enter inserts a newline)

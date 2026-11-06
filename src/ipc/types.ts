@@ -45,11 +45,36 @@ export interface RoomInfo {
 export interface CreateRoomOptions {
   name?: string | null;
   topic?: string | null;
+  /** A bare localpart (`dev`) or a full alias (`#dev:server`). */
   alias?: string | null;
   is_public: boolean;
   is_direct: boolean;
   invite: string[];
   enable_encryption: boolean;
+  /** Create a space rather than a room. */
+  is_space?: boolean;
+  /**
+   * The space this room is created in — recorded as the new room's
+   * `m.space.parent`. Listing it in the space is the separate `addSpaceChild`.
+   */
+  parent_space_id?: string | null;
+  /** With a parent space and not public: members of that space may join. */
+  space_members_can_join?: boolean;
+}
+
+/** A pending room invite — matches matrix::invites::InviteInfo. */
+export interface InviteInfo {
+  room_id: string;
+  /** Computed room name, or null when the stripped state gives none. */
+  name: string | null;
+  topic: string | null;
+  avatar_url: string | null;
+  canonical_alias: string | null;
+  inviter_id: string | null;
+  inviter_name: string | null;
+  is_direct: boolean;
+  is_space: boolean;
+  is_encrypted: boolean;
 }
 
 // ─── Members ──────────────────────────────────────────────────────────────────

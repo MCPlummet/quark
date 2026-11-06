@@ -173,4 +173,69 @@ describe("RoomList", () => {
       expect(handler).toHaveBeenCalledWith("!r1:s");
     });
   });
+
+  describe("space sections", () => {
+    const sections = () => [
+      { label: "", spaceId: "!work:s", rooms: [{ id: "!a:s", name: "a" }, { id: "!b:s", name: "b" }, { id: "!c:s", name: "c" }] },
+      { label: "Ops", spaceId: "!ops:s", rooms: [{ id: "!d:s", name: "d" }] },
+    ];
+
+    it("marks rows of a space's section as orderable, and pseudo-space rows not", () => {
+      roomList.setSections(sections());
+      const row = roomList.getElement().querySelector<HTMLElement>('[data-room-id="!a:s"]');
+      expect(row?.dataset.section).toBe("!work:s");
+      roomList.setRooms([{ id: "!x:s", name: "x" }]);
+      expect(roomList.getElement().querySelector<HTMLElement>(".room-list__item")?.dataset.section).toBeUndefined();
+    });
+
+    it("finds the section a room is listed in", () => {
+      roomList.setSections(sections());
+      expect(roomList.getSectionFor("!b:s")).toEqual({ spaceId: "!work:s", roomIds: ["!a:s", "!b:s", "!c:s"] });
+      expect(roomList.getSectionFor("!d:s")?.spaceId).toBe("!ops:s");
+      roomList.setRooms([{ id: "!x:s", name: "x" }]);
+      expect(roomList.getSectionFor("!x:s")).toBeNull();
+    });
+
+    it("re-orders a section in place, keeping keyboard focus on the moved room", () => {
+      roomList.setSections(sections());
+      roomList.focusRoom("!c:s");
+      roomList.applySectionOrder("!work:s", ["!c:s", "!a:s", "!b:s"]);
+      const ids = Array.from(roomList.getElement().querySelectorAll<HTMLElement>(".room-list__item")).map((e) => e.dataset.roomId);
+      expect(ids).toEqual(["!c:s", "!a:s", "!b:s", "!d:s"]);
+      expect(roomList.getFocusedRoomId()).toBe("!c:s");
+    });
+
+    it("keeps badges and muting changed since render when it re-orders", () => {
+      roomList.setSections([
+        { label: "", spaceId: "!work:s", rooms: [{ id: "!a:s", name: "a", unreadCount: 4 }, { id: "!b:s", name: "b" }] },
+      ]);
+      roomList.updateRoomBadge("!a:s", 0, 0);
+      roomList.updateRoomMuted("!b:s", true);
+      roomList.applySectionOrder("!work:s", ["!b:s", "!a:s"]);
+      const a = roomList.getElement().querySelector('[data-room-id="!a:s"]')!;
+      const b = roomList.getElement().querySelector('[data-room-id="!b:s"]')!;
+      expect(a.querySelector(".room-list__item-badge")).toBeNull();
+      expect(a.classList.contains("room-list__item--unread")).toBe(false);
+      expect(b.classList.contains("room-list__item--muted")).toBe(true);
+    });
+
+    it("ignores an order that doesn't match the section's rooms", () => {
+      roomList.setSections(sections());
+      roomList.applySectionOrder("!work:s", ["!c:s", "!a:s"]);
+      expect(roomList.getSectionFor("!a:s")?.roomIds).toEqual(["!a:s", "!b:s", "!c:s"]);
+    });
+  });
+
+  describe("the + button", () => {
+    it("opens the create menu without bubbling to the header", () => {
+      const onCreate = vi.fn();
+      const onHeader = vi.fn();
+      roomList.onCreateClick(onCreate);
+      roomList.getHeaderElement().addEventListener("click", onHeader);
+      roomList.getHeaderElement().querySelector<HTMLButtonElement>(".room-list__header-btn")!.click();
+      expect(onCreate).toHaveBeenCalledTimes(1);
+      // On mobile a header click closes the drawer — this one must not.
+      expect(onHeader).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -2,9 +2,9 @@
 
 import { invoke } from "./invoke.js";
 import { isTauri, mockListen } from "./mock.js";
-import type { RoomInfo, CreateRoomOptions, RoomMember, PinnedEventInfo, PublicRoomInfo, ReadReceiptInfo, TimelineEvent, SearchSummary, HomeDmInfo } from "./types.js";
+import type { RoomInfo, CreateRoomOptions, RoomMember, PinnedEventInfo, PublicRoomInfo, ReadReceiptInfo, TimelineEvent, SearchSummary, HomeDmInfo, InviteInfo } from "./types.js";
 
-export type { RoomInfo, CreateRoomOptions, RoomMember, PinnedEventInfo, PublicRoomInfo, ReadReceiptInfo, HomeDmInfo };
+export type { RoomInfo, CreateRoomOptions, RoomMember, PinnedEventInfo, PublicRoomInfo, ReadReceiptInfo, HomeDmInfo, InviteInfo };
 
 /**
  * Get all joined rooms.
@@ -47,6 +47,42 @@ export async function createRoom(options: CreateRoomOptions): Promise<string> {
 }
 
 /**
+ * Pending room invites. Matches the Rust `get_invites` command.
+ */
+export async function getInvites(): Promise<InviteInfo[]> {
+  return invoke<InviteInfo[]>("get_invites");
+}
+
+/**
+ * Accept an invite; resolves to the joined room's ID.
+ * Matches the Rust `accept_invite` command.
+ */
+export async function acceptInvite(roomId: string): Promise<string> {
+  return invoke<string>("accept_invite", { roomId });
+}
+
+/** Decline an invite. Matches the Rust `decline_invite` command. */
+export async function declineInvite(roomId: string): Promise<void> {
+  return invoke<void>("decline_invite", { roomId });
+}
+
+/**
+ * This account's display name in one room (its own member event), or null.
+ * Matches the Rust `get_room_nickname` command.
+ */
+export async function getRoomNickname(roomId: string): Promise<string | null> {
+  return invoke<string | null>("get_room_nickname", { roomId });
+}
+
+/**
+ * Set this account's display name in one room; `null` puts it back to the
+ * global display name. Matches the Rust `set_room_nickname` command.
+ */
+export async function setRoomNickname(roomId: string, nickname: string | null): Promise<void> {
+  return invoke<void>("set_room_nickname", { roomId, nickname });
+}
+
+/**
  * Resolve the existing DM room shared with `userId`, or null if there is none.
  *
  * Reads the account's `m.direct` mapping in the Rust store (no HTTP), which is
@@ -72,6 +108,17 @@ export async function getRoomMembers(roomId: string): Promise<RoomMember[]> {
  */
 export async function markRoomRead(roomId: string): Promise<void> {
   return invoke<void>("mark_room_read", { roomId });
+}
+
+/**
+ * Tell the room this user is (or has stopped) typing. Each call sends a request
+ * (an announcement lasts 4 s on the server), so call it on `TypingNotifier`'s
+ * schedule in `app/typing.ts`, not per keystroke. The backend skips announcing
+ * when `general.send_typing_notifications` is off. Matches the Rust
+ * `set_typing` command.
+ */
+export async function setTyping(roomId: string, typing: boolean): Promise<void> {
+  return invoke<void>("set_typing", { roomId, typing });
 }
 
 /**

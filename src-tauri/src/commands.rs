@@ -549,6 +549,54 @@ pub async fn create_room(
     crate::matrix::rooms::create_room(&client, options).await
 }
 
+/// Pending invites (rooms in the invited state). Local store read only.
+#[tauri::command]
+pub async fn get_invites(
+    state: State<'_, MatrixState>,
+) -> Result<Vec<crate::matrix::invites::InviteInfo>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::invites::get_invites(&client).await
+}
+
+#[tauri::command]
+pub async fn accept_invite(
+    state: State<'_, MatrixState>,
+    room_id: String,
+) -> Result<String, String> {
+    let client = get_client(&state)?;
+    crate::matrix::invites::accept_invite(&client, &room_id).await
+}
+
+#[tauri::command]
+pub async fn decline_invite(
+    state: State<'_, MatrixState>,
+    room_id: String,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::invites::decline_invite(&client, &room_id).await
+}
+
+#[tauri::command]
+pub async fn get_room_nickname(
+    state: State<'_, MatrixState>,
+    room_id: String,
+) -> Result<Option<String>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::rooms::get_room_nickname(&client, &room_id).await
+}
+
+/// Set (or with `None`, reset to the global name) this account's display name
+/// in one room.
+#[tauri::command]
+pub async fn set_room_nickname(
+    state: State<'_, MatrixState>,
+    room_id: String,
+    nickname: Option<String>,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::rooms::set_room_nickname(&client, &room_id, nickname).await
+}
+
 #[tauri::command]
 pub async fn mark_room_read(
     state: State<'_, MatrixState>,
@@ -563,6 +611,33 @@ pub async fn mark_room_read(
         .map(|c| c.general.send_read_receipts)
         .unwrap_or(true);
     crate::matrix::rooms::mark_room_read(&client, &room_id, send_public).await
+}
+
+/// Announce that the user is (or has stopped) typing in a room. The frontend
+/// decides when (`src/app/typing.ts`) and already skips announcing when the
+/// user has opted out; the opt-out is enforced here as well, since the
+/// frontend's copy of the setting arrives after startup. A stop always passes
+/// through, which covers opting out mid-sentence — and needs no config read,
+/// so a poisoned config lock refuses announcements without blocking stops.
+#[tauri::command]
+pub async fn set_typing(
+    state: State<'_, MatrixState>,
+    config_state: State<'_, Mutex<AppConfig>>,
+    room_id: String,
+    typing: bool,
+) -> Result<(), String> {
+    if typing {
+        let enabled = config_state
+            .lock()
+            .map_err(|_| "App config lock poisoned")?
+            .general
+            .send_typing_notifications;
+        if !enabled {
+            return Ok(());
+        }
+    }
+    let client = get_client(&state)?;
+    crate::matrix::rooms::set_typing(&client, &room_id, typing).await
 }
 
 /// Load other members' latest public read positions for a room (initial seed).
@@ -2059,6 +2134,39 @@ pub async fn get_space_hierarchy(
 ) -> Result<Vec<SpaceChild>, String> {
     let client = get_client(&state)?;
     crate::matrix::spaces::get_space_hierarchy(&client, &space_room_id, max_depth).await
+}
+
+/// Direct children of a space in listing order, from local state when the
+/// space is joined (see `spaces::get_space_children`).
+#[tauri::command]
+pub async fn get_space_children(
+    state: State<'_, MatrixState>,
+    space_room_id: String,
+) -> Result<Vec<SpaceChild>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::spaces::get_space_children(&client, &space_room_id).await
+}
+
+/// Reorder the listed rooms of a space. Returns the number of events written.
+#[tauri::command]
+pub async fn reorder_space_children(
+    state: State<'_, MatrixState>,
+    space_room_id: String,
+    room_ids: Vec<String>,
+) -> Result<usize, String> {
+    let client = get_client(&state)?;
+    crate::matrix::spaces::reorder_space_children(&client, &space_room_id, &room_ids).await
+}
+
+/// List `child_room_id` in a space (writes its `m.space.child`).
+#[tauri::command]
+pub async fn add_space_child(
+    state: State<'_, MatrixState>,
+    space_room_id: String,
+    child_room_id: String,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::spaces::add_space_child(&client, &space_room_id, &child_room_id).await
 }
 
 #[tauri::command]

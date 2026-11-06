@@ -134,6 +134,7 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3"
+wiremock = "0.6"
 
 [features]
 default = ["custom-protocol"]

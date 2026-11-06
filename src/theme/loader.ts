@@ -48,8 +48,12 @@ export interface ThemeTypography {
   message_spacing?: number;
 }
 
+/** Every `borders.style` quark draws. FRAME_STYLES must give each one a look. */
+export const BORDER_STYLES = ["single", "double", "rounded", "ascii", "none"] as const;
+export type BorderStyle = (typeof BORDER_STYLES)[number];
+
 export interface ThemeBorders {
-  style?: "single" | "double" | "rounded" | "ascii" | "none";
+  style?: BorderStyle;
   room_list_width?: string;
 }
 
@@ -60,7 +64,6 @@ export interface ThemeEmoji {
 }
 
 export interface ThemePrompt {
-  symbol?: string;
   normal_indicator?: string;
   insert_indicator?: string;
   command_indicator?: string;
@@ -90,27 +93,37 @@ export interface Theme {
   prompt?: ThemePrompt;
 }
 
-// ── Border glyph sets ────────────────────────────────────────────────────────
+// ── Border styles ────────────────────────────────────────────────────────────
 
-const BORDER_GLYPHS: Record<
-  NonNullable<ThemeBorders["style"]>,
-  { h: string; v: string; tl: string; tr: string; bl: string; br: string }
-> = {
-  single: { h: "─", v: "│", tl: "┌", tr: "┐", bl: "└", br: "┘" },
-  double: { h: "═", v: "║", tl: "╔", tr: "╗", bl: "╚", br: "╝" },
-  rounded: { h: "─", v: "│", tl: "╭", tr: "╮", bl: "╰", br: "╯" },
-  ascii: { h: "-", v: "|", tl: "+", tr: "+", bl: "+", br: "+" },
-  none: { h: " ", v: " ", tl: " ", tr: " ", bl: " ", br: " " },
+/**
+ * How `borders.style` draws the UI's frames — the message boxes, the compose
+ * box and the lines between panes. The names come from box-drawing sets, but
+ * the frames are CSS borders, so each maps to a line style, width and corner
+ * radius (`--frame-*` in vars.css). `double` needs 3px for both lines to show.
+ */
+export const FRAME_STYLES: Record<BorderStyle, { line: string; width: string; radius: string }> = {
+  single: { line: "solid", width: "2px", radius: "0px" },
+  double: { line: "double", width: "3px", radius: "0px" },
+  rounded: { line: "solid", width: "2px", radius: "8px" },
+  ascii: { line: "dashed", width: "2px", radius: "0px" },
+  none: { line: "none", width: "0px", radius: "0px" },
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function set(root: HTMLElement, prop: string, value: string): void {
-  root.style.setProperty(prop, value);
-}
-
 function px(n: number): string {
   return `${n}px`;
+}
+
+/**
+ * A CSS string literal for `content:` — quotes, backslashes and newlines
+ * escaped. Takes anything: custom themes reach applyTheme as raw TOML (see
+ * `load_theme`), so `normal_indicator = 3` arrives as a number. That shows as
+ * "3", as it did before indicators were escaped, rather than throwing and
+ * losing the whole theme.
+ */
+function cssString(value: unknown): string {
+  return `"${String(value).replace(/[\\"]/g, "\\$&").replace(/\r?\n|\r/g, "\\a ")}"`;
 }
 
 // ── Cross-fade ───────────────────────────────────────────────────────────────
@@ -145,6 +158,104 @@ function beginThemeTween(root: HTMLElement): void {
 // ── Apply ────────────────────────────────────────────────────────────────────
 
 /**
+ * Map a theme object to the CSS custom properties it sets. Pure — the single
+ * source of truth for how theme fields become CSS, shared by {@link applyTheme}
+ * and the quark.tel theme editor's live preview. Only fields explicitly present
+ * in the theme produce an entry; the rest fall back to the defaults in vars.css.
+ */
+export function themeToCssVars(theme: Theme): Record<string, string> {
+  const vars: Record<string, string> = {};
+  const set = (prop: string, value: string): void => {
+    vars[prop] = value;
+  };
+
+  const c = theme.colors;
+  if (c) {
+    if (c.background) set("--bg", c.background);
+    if (c.foreground) set("--fg", c.foreground);
+    if (c.cursor) set("--cursor", c.cursor);
+    if (c.selection_bg) set("--selection-bg", c.selection_bg);
+    if (c.selection_fg) set("--selection-fg", c.selection_fg);
+    if (c.border) set("--border-color", c.border);
+
+    const a = c.accent;
+    if (a) {
+      if (a.primary) set("--accent-primary", a.primary);
+      if (a.secondary) set("--accent-secondary", a.secondary);
+      if (a.error) set("--accent-error", a.error);
+      if (a.warning) set("--accent-warning", a.warning);
+      if (a.success) set("--accent-success", a.success);
+      if (a.link) set("--accent-link", a.link);
+    }
+
+    const m = c.messages;
+    if (m) {
+      if (m.own) set("--msg-own", m.own);
+      if (m.other) set("--msg-other", m.other);
+      if (m.system) set("--msg-system", m.system);
+      if (m.timestamp) set("--msg-timestamp", m.timestamp);
+      if (m.mention_bg) set("--msg-mention-bg", m.mention_bg);
+      if (m.mention_fg) set("--msg-mention-fg", m.mention_fg);
+      if (m.reply_border) set("--msg-reply-border", m.reply_border);
+      if (m.thread_indicator) set("--msg-thread-indicator", m.thread_indicator);
+    }
+
+    const rl = c.roomlist;
+    if (rl) {
+      if (rl.active_bg) set("--roomlist-active-bg", rl.active_bg);
+      if (rl.active_fg) set("--roomlist-active-fg", rl.active_fg);
+      if (rl.unread) set("--roomlist-unread", rl.unread);
+      if (rl.mention_badge) set("--roomlist-mention-badge", rl.mention_badge);
+      if (rl.muted) set("--roomlist-muted", rl.muted);
+    }
+
+    const rx = c.reactions;
+    if (rx) {
+      if (rx.background) set("--reaction-bg", rx.background);
+      if (rx.border) set("--reaction-border", rx.border);
+      if (rx.own_bg) set("--reaction-own-bg", rx.own_bg);
+      if (rx.count) set("--reaction-count", rx.count);
+    }
+  }
+
+  const t = theme.typography;
+  if (t) {
+    if (t.font_family) set("--font-family", t.font_family);
+    if (t.font_size != null) set("--font-size", px(t.font_size));
+    if (t.line_height != null) set("--line-height", String(t.line_height));
+    if (t.message_spacing != null) set("--message-spacing", px(t.message_spacing));
+  }
+
+  const b = theme.borders;
+  if (b) {
+    if (b.room_list_width) set("--room-list-width", b.room_list_width);
+    const frame = b.style ? FRAME_STYLES[b.style] : undefined;
+    if (frame) {
+      set("--frame-line", frame.line);
+      set("--frame-width", frame.width);
+      set("--frame-radius", frame.radius);
+    }
+  }
+
+  const e = theme.emoji;
+  if (e) {
+    if (e.size != null) set("--emoji-size", px(e.size));
+    if (e.sticker_max_size != null) set("--sticker-max-size", px(e.sticker_max_size));
+    if (e.reaction_size != null) set("--reaction-size", px(e.reaction_size));
+  }
+
+  const p = theme.prompt;
+  if (p) {
+    if (p.normal_indicator != null) set("--mode-normal", cssString(p.normal_indicator));
+    if (p.insert_indicator != null) set("--mode-insert", cssString(p.insert_indicator));
+    if (p.command_indicator != null) set("--mode-command", cssString(p.command_indicator));
+    if (p.visual_indicator != null) set("--mode-visual", cssString(p.visual_indicator));
+  }
+
+  return vars;
+}
+
+/**
  * Apply a theme object (from the Tauri backend) as CSS custom properties on
  * the :root element.  Only properties that are explicitly present in the theme
  * object are written — the rest fall back to the defaults in vars.css.
@@ -154,92 +265,8 @@ export function applyTheme(theme: Theme, root: HTMLElement = document.documentEl
   // properties are rewritten so the transition is armed when values change.
   beginThemeTween(root);
 
-  const c = theme.colors;
-  if (c) {
-    if (c.background) set(root, "--bg", c.background);
-    if (c.foreground) set(root, "--fg", c.foreground);
-    if (c.cursor) set(root, "--cursor", c.cursor);
-    if (c.selection_bg) set(root, "--selection-bg", c.selection_bg);
-    if (c.selection_fg) set(root, "--selection-fg", c.selection_fg);
-    if (c.border) set(root, "--border-color", c.border);
-
-    const a = c.accent;
-    if (a) {
-      if (a.primary) set(root, "--accent-primary", a.primary);
-      if (a.secondary) set(root, "--accent-secondary", a.secondary);
-      if (a.error) set(root, "--accent-error", a.error);
-      if (a.warning) set(root, "--accent-warning", a.warning);
-      if (a.success) set(root, "--accent-success", a.success);
-      if (a.link) set(root, "--accent-link", a.link);
-    }
-
-    const m = c.messages;
-    if (m) {
-      if (m.own) set(root, "--msg-own", m.own);
-      if (m.other) set(root, "--msg-other", m.other);
-      if (m.system) set(root, "--msg-system", m.system);
-      if (m.timestamp) set(root, "--msg-timestamp", m.timestamp);
-      if (m.mention_bg) set(root, "--msg-mention-bg", m.mention_bg);
-      if (m.mention_fg) set(root, "--msg-mention-fg", m.mention_fg);
-      if (m.reply_border) set(root, "--msg-reply-border", m.reply_border);
-      if (m.thread_indicator) set(root, "--msg-thread-indicator", m.thread_indicator);
-    }
-
-    const rl = c.roomlist;
-    if (rl) {
-      if (rl.active_bg) set(root, "--roomlist-active-bg", rl.active_bg);
-      if (rl.active_fg) set(root, "--roomlist-active-fg", rl.active_fg);
-      if (rl.unread) set(root, "--roomlist-unread", rl.unread);
-      if (rl.mention_badge) set(root, "--roomlist-mention-badge", rl.mention_badge);
-      if (rl.muted) set(root, "--roomlist-muted", rl.muted);
-    }
-
-    const rx = c.reactions;
-    if (rx) {
-      if (rx.background) set(root, "--reaction-bg", rx.background);
-      if (rx.border) set(root, "--reaction-border", rx.border);
-      if (rx.own_bg) set(root, "--reaction-own-bg", rx.own_bg);
-      if (rx.count) set(root, "--reaction-count", rx.count);
-    }
-  }
-
-  const t = theme.typography;
-  if (t) {
-    if (t.font_family) set(root, "--font-family", t.font_family);
-    if (t.font_size != null) set(root, "--font-size", px(t.font_size));
-    if (t.line_height != null) set(root, "--line-height", String(t.line_height));
-    if (t.message_spacing != null) set(root, "--message-spacing", px(t.message_spacing));
-  }
-
-  const b = theme.borders;
-  if (b) {
-    if (b.room_list_width) set(root, "--room-list-width", b.room_list_width);
-    if (b.style) {
-      const glyphs = BORDER_GLYPHS[b.style];
-      set(root, "--border-style", b.style);
-      set(root, "--border-h", `"${glyphs.h}"`);
-      set(root, "--border-v", `"${glyphs.v}"`);
-      set(root, "--border-tl", `"${glyphs.tl}"`);
-      set(root, "--border-tr", `"${glyphs.tr}"`);
-      set(root, "--border-bl", `"${glyphs.bl}"`);
-      set(root, "--border-br", `"${glyphs.br}"`);
-    }
-  }
-
-  const e = theme.emoji;
-  if (e) {
-    if (e.size != null) set(root, "--emoji-size", px(e.size));
-    if (e.sticker_max_size != null) set(root, "--sticker-max-size", px(e.sticker_max_size));
-    if (e.reaction_size != null) set(root, "--reaction-size", px(e.reaction_size));
-  }
-
-  const p = theme.prompt;
-  if (p) {
-    if (p.symbol) set(root, "--prompt-symbol", `"${p.symbol}"`);
-    if (p.normal_indicator) set(root, "--mode-normal", `"${p.normal_indicator}"`);
-    if (p.insert_indicator) set(root, "--mode-insert", `"${p.insert_indicator}"`);
-    if (p.command_indicator) set(root, "--mode-command", `"${p.command_indicator}"`);
-    if (p.visual_indicator) set(root, "--mode-visual", `"${p.visual_indicator}"`);
+  for (const [prop, value] of Object.entries(themeToCssVars(theme))) {
+    root.style.setProperty(prop, value);
   }
 }
 
@@ -259,10 +286,9 @@ export function resetTheme(root: HTMLElement = document.documentElement): void {
     "--roomlist-mention-badge", "--roomlist-muted",
     "--reaction-bg", "--reaction-border", "--reaction-own-bg", "--reaction-count",
     "--font-family", "--font-size", "--line-height", "--message-spacing",
-    "--room-list-width", "--border-style",
-    "--border-h", "--border-v", "--border-tl", "--border-tr", "--border-bl", "--border-br",
+    "--room-list-width", "--frame-line", "--frame-width", "--frame-radius",
     "--emoji-size", "--sticker-max-size", "--reaction-size",
-    "--prompt-symbol", "--mode-normal", "--mode-insert", "--mode-command", "--mode-visual",
+    "--mode-normal", "--mode-insert", "--mode-command", "--mode-visual",
   ];
   for (const prop of props) {
     root.style.removeProperty(prop);

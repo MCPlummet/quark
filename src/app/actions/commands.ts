@@ -27,6 +27,7 @@ import {
   type AvailabilityContext,
 } from "../registry.js";
 import { currentAvailability } from "../availability.js";
+import { AppState } from "../state.js";
 
 import { showToast, showError, showSuccess } from "../../ui/NotificationToast.js";
 import packageJson from "../../../package.json";
@@ -39,6 +40,7 @@ import {
   convertRoomDirectness,
   markRoomAsRead,
   setRoomMuted,
+  setOwnRoomNickname,
 } from "./rooms.js";
 import { logout } from "./session.js";
 import { loadTheme } from "./theme.js";
@@ -59,6 +61,8 @@ import { startVerification } from "./verification.js";
 import { openEmojiPicker, openStickerPicker } from "./emoji_picker.js";
 import { openGifPicker } from "./gif.js";
 import { runUpdateCheck } from "../update_check.js";
+import { openInvites } from "./invites.js";
+import { openCreateRoom } from "./space_edit.js";
 
 /**
  * Commands that accept a room ID as their first argument, and so can run with
@@ -376,10 +380,42 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       if (!newName) return usageError(entry);
       try {
         await ipcSetDisplayName(newName);
+        AppState.set("ownDisplayName", newName);
         showSuccess(`Display name set to "${newName}"`);
       } catch (err) {
         showError(`Failed to set display name: ${err instanceof Error ? err.message : String(err)}`);
       }
+      break;
+    }
+
+    case "set-room-nick": {
+      // Bare `:myroomnick` puts the room back on your global display name.
+      const nick = parsed.args.join(" ").trim();
+      try {
+        await setOwnRoomNickname(roomId, nick || null);
+        showSuccess(nick ? `Your name in this room is now "${nick}"` : "Using your global display name in this room");
+      } catch (err) {
+        showError(`Failed to set room nickname: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      break;
+    }
+
+    case "open-invites": {
+      openInvites();
+      break;
+    }
+
+    case "create-room":
+    case "create-space": {
+      // The dialog, prefilled — a typed name alone is not enough to decide
+      // access, encryption and parent space for the user.
+      const isSpace = entry.id === "create-space";
+      await openCreateRoom({
+        kind: isSpace ? "space" : "room",
+        name: parsed.args.join(" ") || undefined,
+        // A room defaults into the space being viewed; a space to the top level.
+        ...(isSpace ? { parentSpaceId: null } : {}),
+      });
       break;
     }
 

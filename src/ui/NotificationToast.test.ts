@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vite
 // Vite's `?raw` loader, resolved by vitest through the same transform pipeline.
 // Read as text rather than via node:fs so the file needs no @types/node — the
 // build's tsc pass covers test files too.
-// @ts-expect-error - no ambient declaration for Vite's ?raw suffix in this project
 import BASE_CSS from "../style/base.css?raw";
 import { showToast, showError, showSuccess, clearToasts } from "./NotificationToast.js";
 

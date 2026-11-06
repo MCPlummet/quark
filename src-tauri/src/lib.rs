@@ -184,7 +184,13 @@ pub fn run() {
             commands::join_room,
             commands::leave_room,
             commands::create_room,
+            commands::get_invites,
+            commands::accept_invite,
+            commands::decline_invite,
+            commands::get_room_nickname,
+            commands::set_room_nickname,
             commands::mark_room_read,
+            commands::set_typing,
             commands::get_room_receipts,
             commands::get_pinned_events,
             commands::search_room_directory,
@@ -267,6 +273,9 @@ pub fn run() {
             commands::pending_verification_requests,
             // Spaces
             commands::get_space_hierarchy,
+            commands::get_space_children,
+            commands::reorder_space_children,
+            commands::add_space_child,
             commands::get_user_spaces,
             // Profile
             commands::get_own_profile,

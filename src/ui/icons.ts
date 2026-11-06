@@ -36,3 +36,43 @@ export function searchIcon(): SVGSVGElement {
     ["line", { x1: "15.5", y1: "15.5", x2: "20.5", y2: "20.5" }],
   ]);
 }
+
+/**
+ * Inbox tray with an arrow dropping in — pending invites. Not an envelope:
+ * that glyph already stands for the Direct Messages pseudo-space.
+ */
+export function inviteIcon(): SVGSVGElement {
+  return strokeIcon([
+    ["path", { d: "M3.5 13.5h4.5l1.5 2.5h5l1.5-2.5h4.5", "stroke-linejoin": "round" }],
+    ["path", { d: "M3.5 13.5V19.5h17v-6", "stroke-linejoin": "round" }],
+    ["line", { x1: "12", y1: "3.5", x2: "12", y2: "11" }],
+    ["polyline", { points: "8.5,8 12,11.5 15.5,8", "stroke-linejoin": "round" }],
+  ]);
+}
+
+/** Gear — settings. Eight teeth around a hub, drawn as strokes. */
+export function settingsIcon(): SVGSVGElement {
+  const teeth: Array<[string, Record<string, string>]> = [];
+  for (let i = 0; i < 8; i++) {
+    const a = (i * Math.PI) / 4;
+    const r1 = 7.2;
+    const r2 = 10;
+    teeth.push(["line", {
+      x1: (12 + r1 * Math.cos(a)).toFixed(2), y1: (12 + r1 * Math.sin(a)).toFixed(2),
+      x2: (12 + r2 * Math.cos(a)).toFixed(2), y2: (12 + r2 * Math.sin(a)).toFixed(2),
+    }]);
+  }
+  return strokeIcon([
+    ["circle", { cx: "12", cy: "12", r: "6" }],
+    ["circle", { cx: "12", cy: "12", r: "2.2" }],
+    ...teeth,
+  ]);
+}
+
+/** Plus — create. */
+export function plusIcon(): SVGSVGElement {
+  return strokeIcon([
+    ["line", { x1: "12", y1: "5", x2: "12", y2: "19" }],
+    ["line", { x1: "5", y1: "12", x2: "19", y2: "12" }],
+  ]);
+}
