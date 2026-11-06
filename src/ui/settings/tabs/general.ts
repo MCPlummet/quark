@@ -145,6 +145,8 @@ export const generalTab: SettingsTab = {
       const receiptsChanged = draft.general.show_read_receipts !== cfg.general.show_read_receipts;
       AppState.set("showReadReceipts", draft.general.show_read_receipts);
       if (receiptsChanged) void applyReadReceiptVisibility();
+      // Opting out withdraws a live announcement (the typing wiring listens).
+      AppState.set("sendTypingNotices", draft.general.send_typing_notifications);
     }));
     content.appendChild(actions);
   },
