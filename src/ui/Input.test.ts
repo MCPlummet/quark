@@ -15,32 +15,21 @@ describe("Input", () => {
   });
 
   describe("setMode", () => {
-    it("shows NOR label in Normal mode", () => {
-      input.setMode(Mode.Normal);
+    // The visible label (NOR/INS/…) is the theme's, drawn by CSS from
+    // --mode-*; the DOM carries the mode's name for screen readers.
+    it.each([
+      [Mode.Normal, ""],
+      [Mode.Insert, "input-bar__mode--insert"],
+      [Mode.Command, "input-bar__mode--command"],
+      [Mode.Visual, "input-bar__mode--visual"],
+    ])("names %s mode for screen readers and tags the badge for its theme label", (mode, cls) => {
+      input.setMode(mode);
 
-      const modeEl = input.getElement().querySelector(".input-bar__mode");
-      expect(modeEl?.textContent).toBe("NOR");
-    });
-
-    it("shows INS label in Insert mode", () => {
-      input.setMode(Mode.Insert);
-
-      const modeEl = input.getElement().querySelector(".input-bar__mode");
-      expect(modeEl?.textContent).toBe("INS");
-    });
-
-    it("shows CMD label in Command mode", () => {
-      input.setMode(Mode.Command);
-
-      const modeEl = input.getElement().querySelector(".input-bar__mode");
-      expect(modeEl?.textContent).toBe("CMD");
-    });
-
-    it("shows VIS label in Visual mode", () => {
-      input.setMode(Mode.Visual);
-
-      const modeEl = input.getElement().querySelector(".input-bar__mode");
-      expect(modeEl?.textContent).toBe("VIS");
+      const modeEl = input.getElement().querySelector(".input-bar__mode")!;
+      expect(modeEl.textContent).toBe(mode);
+      expect(modeEl.querySelector(".input-bar__mode-label")?.getAttribute("aria-hidden")).toBe("true");
+      const modeClasses = [...modeEl.classList].filter((c) => c.startsWith("input-bar__mode--"));
+      expect(modeClasses).toEqual(cls ? [cls] : []);
     });
 
     it("adds insert class in Insert mode", () => {

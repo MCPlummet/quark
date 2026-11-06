@@ -103,9 +103,13 @@ pub struct ThemeEmoji {
     pub reaction_size: u32,
 }
 
+/// Labels for the vim mode badge left of the compose box.
+///
+/// Themes once carried a `symbol` here too, an input prompt glyph the UI no
+/// longer draws. It is gone from the struct; serde ignores unknown keys, so
+/// theme files that still set it keep loading.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ThemePrompt {
-    pub symbol: String,
     pub normal_indicator: String,
     pub insert_indicator: String,
     pub command_indicator: String,
@@ -249,7 +253,7 @@ pub fn default_theme() -> Theme {
                 timestamp: "#444444".to_string(),
                 mention_bg: "#1a1a00".to_string(),
                 mention_fg: "#ffaa00".to_string(),
-                reply_border: "#555555".to_string(),
+                reply_border: "#00aaff".to_string(),
                 thread_indicator: "#00aaff".to_string(),
             },
             roomlist: ThemeRoomlistColors {
@@ -260,7 +264,7 @@ pub fn default_theme() -> Theme {
                 muted: "#444444".to_string(),
             },
             reactions: ThemeReactionColors {
-                background: "#1a1a1a".to_string(),
+                background: "#0a0a0a".to_string(),
                 border: "#333333".to_string(),
                 own_bg: "#1a3a1a".to_string(),
                 count: "#888888".to_string(),
@@ -273,7 +277,7 @@ pub fn default_theme() -> Theme {
             message_spacing: 4,
         },
         borders: ThemeBorders {
-            style: BorderStyle::Single,
+            style: BorderStyle::Rounded,
             room_list_width: "25%".to_string(),
         },
         emoji: ThemeEmoji {
@@ -282,7 +286,6 @@ pub fn default_theme() -> Theme {
             reaction_size: 20,
         },
         prompt: ThemePrompt {
-            symbol: ":>".to_string(),
             normal_indicator: "NOR".to_string(),
             insert_indicator: "INS".to_string(),
             command_indicator: "CMD".to_string(),
@@ -356,7 +359,6 @@ sticker_max_size = 256
 reaction_size = 20
 
 [prompt]
-symbol = ":>"
 normal_indicator = "NOR"
 insert_indicator = "INS"
 command_indicator = "CMD"
@@ -377,7 +379,7 @@ visual_indicator = "VIS"
         assert!((theme.typography.line_height - 1.5).abs() < f32::EPSILON);
         assert_eq!(theme.borders.style, BorderStyle::Single);
         assert_eq!(theme.emoji.size, 32);
-        assert_eq!(theme.prompt.symbol, ":>");
+        assert_eq!(theme.prompt.normal_indicator, "NOR");
     }
 
     #[test]
@@ -608,15 +610,23 @@ name = "Test"
     }
 
     #[test]
-    fn test_default_theme_border_style_is_single() {
+    fn test_default_theme_border_style_is_rounded() {
         let theme = default_theme();
-        assert_eq!(theme.borders.style, BorderStyle::Single);
+        assert_eq!(theme.borders.style, BorderStyle::Rounded);
+    }
+
+    #[test]
+    fn test_retired_prompt_symbol_still_parses() {
+        // Themes written before `prompt.symbol` was dropped must keep loading.
+        let old = PHOSPHOR_TOML.replace("[prompt]\n", "[prompt]\nsymbol = \":>\"\n");
+        assert!(old.contains("symbol"));
+        let theme = parse_theme(&old).expect("a retired key must not break parsing");
+        assert_eq!(theme.prompt.normal_indicator, "NOR");
     }
 
     #[test]
     fn test_default_theme_prompt_has_all_indicators() {
         let theme = default_theme();
-        assert!(!theme.prompt.symbol.is_empty());
         assert!(!theme.prompt.normal_indicator.is_empty());
         assert!(!theme.prompt.insert_indicator.is_empty());
         assert!(!theme.prompt.command_indicator.is_empty());

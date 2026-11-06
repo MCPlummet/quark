@@ -4,11 +4,10 @@ import { createReactionBar, updateReactionBar, type ReactionGroup } from "./Reac
 import { attachLongPress } from "../app/long_press.js";
 import { invoke } from "../ipc/invoke.js";
 import type { SearchResult } from "../ipc/types.js";
-import { appendCaption, buildFileAffordance, renderFormattedBody } from "./message_body.js";
+import { appendCaption, buildFileAffordance, renderMessageText } from "./message_body.js";
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { hashColor } from "./avatarColors.js";
 import { isMobile, viewportPan } from "../app/mobile.js";
-import { appendLinkifiedText } from "../app/links.js";
 import { mountOverlay } from "./overlay.js";
 import { ReceiptIndex, readersSignature, type Reader } from "./receipt_placement.js";
 
@@ -646,11 +645,7 @@ function buildMessageElement(msg: MessageData): HTMLElement {
     const body = document.createElement("div");
     body.className = "message__body";
 
-    if (msg.htmlBody) {
-      renderFormattedBody(body, msg.htmlBody);
-    } else {
-      appendLinkifiedText(body, msg.body);
-    }
+    renderMessageText(body, msg.body, msg.htmlBody);
 
     if (msg.wasEdited) {
       const marker = document.createElement("span");
@@ -2076,14 +2071,11 @@ export class Timeline {
     if (!el) return;
     const bodyEl = el.querySelector<HTMLElement>(".message__body");
     if (!bodyEl) return;
-    if (newHtmlBody) {
-      renderFormattedBody(bodyEl, newHtmlBody);
-    } else {
-      // Re-linkify: assigning textContent would drop the anchors the initial
-      // render produced, leaving an edited message's URLs as dead plain text.
-      bodyEl.textContent = "";
-      appendLinkifiedText(bodyEl, newBody);
-    }
+    // Re-render through the same path as the first render: assigning
+    // textContent would drop the anchors it produced, leaving an edited
+    // message's URLs as dead plain text, and an edit can make a message
+    // emoji-only or stop it being one.
+    renderMessageText(bodyEl, newBody, newHtmlBody);
     // Mark as edited if not already marked
     if (!el.querySelector(".message__edited-marker")) {
       const marker = document.createElement("span");

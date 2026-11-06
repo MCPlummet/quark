@@ -274,10 +274,13 @@ export async function sendMessage(body: string): Promise<void> {
       document.body.appendChild(clone);
       composeBoxEl.style.opacity = "0";
 
+      // The compose box's right-only corners round out into a message box's
+      // as it lands; how round is the theme's (borders.style → --frame-radius).
+      const radius = getComputedStyle(composeBoxEl).getPropertyValue("--frame-radius").trim() || "8px";
       const anim = clone.animate(
         [
-          { transform: "translate(0,0)", borderRadius: "0px 8px 8px 0px" },
-          { transform: `translate(0,${deltaY}px)`, borderRadius: "8px" },
+          { transform: "translate(0,0)", borderRadius: `0 ${radius} ${radius} 0` },
+          { transform: `translate(0,${deltaY}px)`, borderRadius: radius },
         ],
         { duration: 260, easing: "cubic-bezier(0.25, 0.46, 0.45, 0.94)", fill: "forwards" }
       );

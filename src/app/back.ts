@@ -19,6 +19,13 @@
 // iOS has no hardware back button; this module is a no-op on non-Android
 // platforms. We still seed history on every platform — `history.pushState`
 // is harmless and `popstate` is only ever fired by deliberate navigation.
+//
+// The one exception is a page that embeds the client in an iframe (the
+// landing page's live demo, the quark.tel/theme preview). A frame shares the
+// browser's session history with the page around it, so the seeded entry
+// and the re-push on every popstate would take over that page's Back button:
+// its own history steps get swallowed and Back can never leave the page.
+// Framed, there is no hardware back press to catch, so we do nothing.
 
 import { isMobile, isDrawerOpen, openDrawer, closeDrawer } from "./mobile.js";
 import { AppState } from "./state.js";
@@ -33,6 +40,8 @@ const BACK_STATE_TAG = "quark-back";
  * popstate just never fires there.
  */
 export function setupBackButton(_components: AppComponents): void {
+  if (isFramed()) return;
+
   // Seed one history entry so the back-press has somewhere to go.
   history.pushState({ tag: BACK_STATE_TAG }, "");
 
@@ -64,4 +73,14 @@ export function setupBackButton(_components: AppComponents): void {
       openDrawer();
     }
   });
+}
+
+/** Whether this page runs inside another page's iframe. */
+function isFramed(): boolean {
+  try {
+    return window.self !== window.top;
+  } catch {
+    // Some browsers throw on touching a cross-origin `top`: that is framed too.
+    return true;
+  }
 }
