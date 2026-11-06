@@ -2811,9 +2811,12 @@ span.reaction__emoji {
 }
 
 .input-bar__mode {
-  width: 40px;
-  /* flex-shrink: 0; */
-  /* flex-grow: 0; */
+  /* 40px fits the default three-letter labels. Themes set their own
+     (prompt.*_indicator), so a longer one widens the badge instead of
+     spilling over the compose box. */
+  min-width: 40px;
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 10px 4px 12px;
   margin: 8px 0px 8px 4px;
   color: var(--bg);
@@ -2821,7 +2824,6 @@ span.reaction__emoji {
   font-size: calc(var(--font-size) - 1px);
   letter-spacing: 0.05em;
   font-weight: bold;
-  min-width: 0;
   text-align: center;
   user-select: none;
   vertical-align: center;

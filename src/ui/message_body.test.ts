@@ -18,6 +18,8 @@ describe("isEmojiOnly", () => {
     ["flags", "🇳🇿🇯🇵"],
     ["a keycap", "1️⃣"],
     ["a subdivision flag", "🏴󠁧󠁢󠁳󠁣󠁴󠁿"],
+    ["text-default symbols asked for as emoji", "❤️ ☺️ ©️"],
+    ["a text-default symbol with a skin tone", "☝🏽"],
   ])("is true for %s", (_, body) => {
     expect(isEmojiOnly(rendered(body))).toBe(true);
   });
@@ -28,6 +30,10 @@ describe("isEmojiOnly", () => {
     ["digits", "123"],
     ["whitespace only", "   "],
     ["a link", "https://example.org"],
+    // Extended_Pictographic, but drawn as text without U+FE0F.
+    ["©", "©"],
+    ["™", "™"],
+    ["text-style symbols", "‼ ↔ ☺ ®"],
   ])("is false for %s", (_, body) => {
     expect(isEmojiOnly(rendered(body))).toBe(false);
   });

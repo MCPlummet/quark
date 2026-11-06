@@ -95,12 +95,23 @@ export function renderMessageText(el: HTMLElement, body: string, htmlBody?: stri
 }
 
 /**
+ * A pictograph drawn as an emoji. Extended_Pictographic alone also covers
+ * symbols that render as plain text — ©, ®, ™, ‼, ↔, ☺ — and a message of just
+ * "™" must not be blown up to emoji size. So it has to be an emoji by default
+ * (Emoji_Presentation), or one asked for as emoji: followed by the emoji
+ * presentation selector U+FE0F, a skin tone, or a ZWJ into a sequence.
+ */
+const PICTOGRAPH =
+  "(?:(?=\\p{Emoji_Presentation})\\p{Extended_Pictographic}" +
+  "|\\p{Extended_Pictographic}(?=[\\uFE0F\\u200D\\p{Emoji_Modifier}]))";
+
+/**
  * One emoji as people type it: a pictograph with its presentation selector,
  * skin tone, tag sequence (subdivision flags) and ZWJ-joined parts; a flag (a
  * pair of regional indicators); or a keycap.
  */
 const EMOJI =
-  "(?:\\p{Extended_Pictographic}[\\uFE0F\\p{Emoji_Modifier}\\u{E0020}-\\u{E007F}]*" +
+  `(?:${PICTOGRAPH}[\\uFE0F\\p{Emoji_Modifier}\\u{E0020}-\\u{E007F}]*` +
   "(?:\\u200D\\p{Extended_Pictographic}[\\uFE0F\\p{Emoji_Modifier}]*)*" +
   "|\\p{Regional_Indicator}{2}" +
   "|[#*0-9]\\uFE0F?\\u20E3)";
