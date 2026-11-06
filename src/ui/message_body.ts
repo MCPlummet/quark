@@ -7,7 +7,7 @@
 // change to escaping, spoilers or emoji resolution land on every surface at once
 // rather than on whichever one the author had open.
 
-import { decorateMessageLinks } from "../app/links.js";
+import { appendLinkifiedText, decorateMessageLinks } from "../app/links.js";
 
 /**
  * Activate Matrix spoilers (MSC2010 / `data-mx-spoiler`) inside a freshly
@@ -74,6 +74,70 @@ export function renderFormattedBody(el: HTMLElement, html: string): void {
   // app/links.ts, so no per-anchor listener is attached here.
   decorateMessageLinks(el);
   setupSpoilers(el);
+}
+
+/**
+ * Render a text message's body into `el`, replacing what was there: its
+ * `formatted_body` HTML when it has one, else the linkified plain body. Every
+ * surface that draws message text — the timeline, both thread panels, and an
+ * edit landing on any of them — goes through here, so they agree on what
+ * counts as an emoji-only message.
+ */
+export function renderMessageText(el: HTMLElement, body: string, htmlBody?: string): void {
+  if (htmlBody) {
+    renderFormattedBody(el, htmlBody);
+  } else {
+    el.textContent = "";
+    appendLinkifiedText(el, body);
+  }
+  // Shown at the theme's emoji.size — see .message-body--emoji-only.
+  el.classList.toggle("message-body--emoji-only", isEmojiOnly(el));
+}
+
+/**
+ * A pictograph drawn as an emoji. Extended_Pictographic alone also covers
+ * symbols that render as plain text — ©, ®, ™, ‼, ↔, ☺ — and a message of just
+ * "™" must not be blown up to emoji size. So it has to be an emoji by default
+ * (Emoji_Presentation), or one asked for as emoji: followed by the emoji
+ * presentation selector U+FE0F, a skin tone, or a ZWJ into a sequence.
+ */
+const PICTOGRAPH =
+  "(?:(?=\\p{Emoji_Presentation})\\p{Extended_Pictographic}" +
+  "|\\p{Extended_Pictographic}(?=[\\uFE0F\\u200D\\p{Emoji_Modifier}]))";
+
+/**
+ * One emoji as people type it: a pictograph with its presentation selector,
+ * skin tone, tag sequence (subdivision flags) and ZWJ-joined parts; a flag (a
+ * pair of regional indicators); or a keycap.
+ */
+const EMOJI =
+  `(?:${PICTOGRAPH}[\\uFE0F\\p{Emoji_Modifier}\\u{E0020}-\\u{E007F}]*` +
+  "(?:\\u200D\\p{Extended_Pictographic}[\\uFE0F\\p{Emoji_Modifier}]*)*" +
+  "|\\p{Regional_Indicator}{2}" +
+  "|[#*0-9]\\uFE0F?\\u20E3)";
+const EMOJI_ONLY_TEXT = new RegExp(`^(?:\\s|${EMOJI})*$`, "u");
+const HAS_EMOJI = new RegExp(EMOJI, "u");
+
+/**
+ * Whether a rendered body is nothing but emoji — custom emoji images and
+ * Unicode emoji, with whitespace and line breaks between them. Any other text,
+ * a link, a mention or a spoiler makes it an ordinary message.
+ */
+export function isEmojiOnly(el: HTMLElement): boolean {
+  let emoji = false;
+  const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent ?? "";
+      if (!EMOJI_ONLY_TEXT.test(text)) return false;
+      emoji ||= HAS_EMOJI.test(text);
+      continue;
+    }
+    const child = node as Element;
+    if (child.matches("img[data-mx-emoticon]")) emoji = true;
+    else if (!child.matches("p, br, span:not([data-mx-spoiler])")) return false;
+  }
+  return emoji;
 }
 
 /**

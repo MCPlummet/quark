@@ -159,7 +159,7 @@ body.quark-modal-open .input-bar__field {
   overflow-y: auto;
   overflow-x: hidden;
   background-color: var(--bg);
-  border-right: var(--border-width) solid var(--border-color);
+  border-right: var(--frame-width) var(--frame-line) var(--border-color);
   isolation: isolate;
 }
 
@@ -255,7 +255,7 @@ body.quark-modal-open .input-bar__field {
   flex-direction: column;
   overflow: hidden;
   background-color: var(--bg);
-  border-right: var(--border-width) solid var(--border-color);
+  border-right: var(--frame-width) var(--frame-line) var(--border-color);
   position: relative;
   isolation: isolate;
 }
@@ -268,7 +268,7 @@ body.quark-modal-open .input-bar__field {
   font-size: calc(var(--font-size) - 2px);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border-bottom: var(--border-width) solid var(--border-color);
+  border-bottom: var(--frame-width) var(--frame-line) var(--border-color);
   flex-shrink: 0;
 }
 
@@ -694,7 +694,7 @@ body.quark-room-dragging * {
 .member-list {
   grid-column: 4;
   position: relative;
-  border-left: var(--border-width) solid var(--border-color);
+  border-left: var(--frame-width) var(--frame-line) var(--border-color);
 }
 
 /* When the layout class is absent the element still exists in the DOM but
@@ -710,7 +710,7 @@ body.quark-room-dragging * {
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  border-bottom: var(--border-width) solid var(--border-color);
+  border-bottom: var(--frame-width) var(--frame-line) var(--border-color);
   flex-shrink: 0;
 }
 
@@ -834,7 +834,7 @@ body.quark-room-dragging * {
 
 .main-panel__header {
   padding: 4px 12px;
-  border-bottom: var(--border-width) solid var(--border-color);
+  border-bottom: var(--frame-width) var(--frame-line) var(--border-color);
   color: var(--fg);
   flex-shrink: 0;
   white-space: nowrap;
@@ -868,7 +868,7 @@ body.quark-room-dragging * {
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
-  border-bottom: var(--border-width) solid var(--border-color);
+  border-bottom: var(--frame-width) var(--frame-line) var(--border-color);
   flex-shrink: 0;
   min-height: 44px;
   background-color: var(--bg);
@@ -1112,8 +1112,8 @@ body.quark-room-dragging * {
 /* CSS-bordered box with a fieldset-legend–style inline sender label.       */
 
 .message-group {
-  border: var(--border-width) solid var(--border-color);
-  border-radius: 8px;
+  border: var(--frame-width) var(--frame-line) var(--border-color);
+  border-radius: var(--frame-radius);
   position: relative;
   padding-top: calc(var(--font-size) * var(--line-height) * 0.25);
   transition: border-color var(--transition-speed), box-shadow var(--transition-speed);
@@ -1138,7 +1138,7 @@ body.quark-room-dragging * {
 
 .message-group__header {
   position: absolute;
-  top: -1px;
+  top: calc(var(--frame-width) / -2);
   transform: translateY(-50%);
   left: 1.5ch;
   right: 1.5ch;
@@ -1249,9 +1249,10 @@ body.quark-room-dragging * {
   border-top: 1px dashed color-mix(in srgb, var(--border-color) 60%, transparent);
 }
 
+/* typography.message_spacing: the space around each message in a group. */
 .message-group .message {
-  padding-top: 4px;
-  padding-bottom: 8px;
+  padding-top: var(--message-spacing);
+  padding-bottom: calc(var(--message-spacing) * 2);
 }
 
 .message:hover {
@@ -1322,8 +1323,8 @@ body.quark-room-dragging * {
 /* ── Ungrouped messages (system, standalone) ─────────────────────────────── */
 
 .message--ungrouped {
-  border: var(--border-width) solid var(--border-color);
-  border-radius: 8px;
+  border: var(--frame-width) var(--frame-line) var(--border-color);
+  border-radius: var(--frame-radius);
   padding: 4px 10px;
 }
 
@@ -1458,9 +1459,9 @@ body.quark-room-dragging * {
      Right margin matches compose box right margin (20px). */
   margin: 0 20px 4px 44px;
   padding: 4px 10px;
-  border-left: 2px solid var(--accent-secondary);
+  border-left: 2px solid var(--msg-reply-border);
   border-radius: 0 3px 3px 0;
-  background-color: color-mix(in srgb, var(--accent-secondary) 6%, transparent);
+  background-color: color-mix(in srgb, var(--msg-reply-border) 6%, transparent);
   font-size: calc(var(--font-size) - 1px);
   overflow: hidden;
   white-space: nowrap;
@@ -1547,8 +1548,8 @@ body.quark-room-dragging * {
   align-items: baseline;
   gap: 6px;
   padding: 3px 8px;
-  border-left: 2px solid var(--accent-secondary);
-  background-color: color-mix(in srgb, var(--accent-secondary) 6%, transparent);
+  border-left: 2px solid var(--msg-reply-border);
+  background-color: color-mix(in srgb, var(--msg-reply-border) 6%, transparent);
   color: var(--fg);
   font-size: calc(var(--font-size) - 1px);
   margin-bottom: 4px;
@@ -1564,8 +1565,8 @@ body.quark-room-dragging * {
 
 .reply-preview:hover,
 .reply-preview:focus {
-  background-color: color-mix(in srgb, var(--accent-secondary) 14%, transparent);
-  border-color: var(--accent-secondary);
+  background-color: color-mix(in srgb, var(--msg-reply-border) 14%, transparent);
+  border-color: var(--msg-reply-border);
 }
 
 .reply-preview__icon {
@@ -1895,6 +1896,21 @@ img[data-mx-emoticon] {
   display: inline;
 }
 
+/* A message that is nothing but emoji shows them at emoji.size (custom emoji
+   follow, being 1em tall). Set by renderMessageText in ui/message_body.ts. */
+.message-body--emoji-only {
+  font-size: var(--emoji-size);
+  line-height: 1.15;
+}
+
+.message-body--emoji-only img[data-mx-emoticon] {
+  vertical-align: bottom;
+}
+
+.message-body--emoji-only .message__edited-marker {
+  font-size: var(--font-size);
+}
+
 /* ── Spoilers (data-mx-spoiler) ──────────────────────────────────────────────
    Hidden text is blurred and dimmed until clicked/tapped. Inline custom emoji
    inside a spoiler are obscured the same way. JS toggles --revealed. */
@@ -2105,7 +2121,7 @@ img[data-mx-emoticon] {
   gap: 4px;
   margin: 0px 2px;
   padding: 2px 8px;
-  background-color: var(--bg);
+  background-color: var(--reaction-bg);
   border: var(--border-width) solid var(--reaction-border);
   border-radius: 6px;
   color: var(--fg);
@@ -2144,11 +2160,13 @@ img.reaction__emoji {
   vertical-align: middle;
 }
 
+/* emoji.reaction_size, for standard emoji as for custom ones above: the
+   margins match the image's 2px padding so both chips are the same height. */
 span.reaction__emoji {
-  font-size: calc(var(--font-size));
+  font-size: var(--reaction-size);
   line-height: 1;
-  margin-top: 4px;
-  margin-bottom: 4px;
+  margin-top: 2px;
+  margin-bottom: 2px;
   margin-right: 2px;
 }
 
@@ -2598,9 +2616,12 @@ span.reaction__emoji {
 }
 
 .input-bar__mode {
-  width: 40px;
-  /* flex-shrink: 0; */
-  /* flex-grow: 0; */
+  /* 40px fits the default three-letter labels. Themes set their own
+     (prompt.*_indicator), so a longer one widens the badge instead of
+     spilling over the compose box. */
+  min-width: 40px;
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 10px 4px 12px;
   margin: 8px 0px 8px 4px;
   color: var(--bg);
@@ -2608,16 +2629,15 @@ span.reaction__emoji {
   font-size: calc(var(--font-size) - 1px);
   letter-spacing: 0.05em;
   font-weight: bold;
-  min-width: 0;
   text-align: center;
   user-select: none;
   vertical-align: center;
   /* display: flex; */
   align-items: flex-end;
   justify-content: center;
-  border-right: var(--border-width) solid var(--border-color);
+  border-right: var(--frame-width) var(--frame-line) var(--border-color);
   transition: background-color var(--transition-speed), color var(--transition-speed);
-  border-radius: 8px 0px 0px 8px;
+  border-radius: var(--frame-radius) 0 0 var(--frame-radius);
 }
 
 /* Vim off: hide the indicator but keep its box so the compose box stays put.
@@ -2636,6 +2656,13 @@ body.quark-mobile .input-bar__mode--hidden {
   visibility: visible;
   opacity: 0;
 }
+
+/* The visible label is the theme's (prompt.*_indicator), drawn on an
+   aria-hidden child so screen readers get only the mode's name. */
+.input-bar__mode-label::before { content: var(--mode-normal); }
+.input-bar__mode--insert .input-bar__mode-label::before { content: var(--mode-insert); }
+.input-bar__mode--command .input-bar__mode-label::before { content: var(--mode-command); }
+.input-bar__mode--visual .input-bar__mode-label::before { content: var(--mode-visual); }
 
 .input-bar__mode--insert {
   background-color: var(--accent-secondary);
@@ -2657,8 +2684,8 @@ body.quark-mobile .input-bar__mode--hidden {
   flex: 1;
   display: flex;
   align-items: flex-start;
-  border: var(--border-width) solid color-mix(in srgb, var(--border-color) 70%, var(--accent-primary) 30%);
-  border-radius: 0px 8px 8px 0px;
+  border: var(--frame-width) var(--frame-line) color-mix(in srgb, var(--border-color) 70%, var(--accent-primary) 30%);
+  border-radius: 0 var(--frame-radius) var(--frame-radius) 0;
   min-width: 0;
   margin: 8px 0px 8px 0;
   /* Matches .message-group padding-top so text aligns with message body.
@@ -2671,7 +2698,7 @@ body.quark-mobile .input-bar__mode--hidden {
 /* When vim mode is off the mode indicator is invisible but still occupies space,
    so the compose box stays put. Round the left corners to match. */
 .input-bar--no-vim .input-bar__compose-box {
-  border-radius: 8px;
+  border-radius: var(--frame-radius);
 }
 
 .input-bar__compose-box:focus-within {
@@ -2846,11 +2873,18 @@ body.quark-mobile .input-bar__mode--hidden {
   height: 3px;
   border-radius: 50%;
   background-color: currentColor;
+}
+
+/* Only while someone is typing. The indicator is never removed — visibility
+   keeps its row reserved — and visibility does not stop an animation, so on the
+   base rule the dots animated from launch to quit and an idle window never
+   stopped producing frames. */
+.typing-indicator--active .typing-indicator__dots span {
   animation: typingDot 1.4s infinite ease-in-out;
 }
 
-.typing-indicator__dots span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator__dots span:nth-child(3) { animation-delay: 0.4s; }
+.typing-indicator--active .typing-indicator__dots span:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator--active .typing-indicator__dots span:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes typingDot {
   0%, 60%, 100% { opacity: 0.3; transform: scale(1); }
@@ -3169,8 +3203,8 @@ a:hover {
   padding: 2px 6px 4px;
   z-index: 100;
   background-color: var(--bg);
-  border-top: var(--border-width) solid var(--border-color);
-  border-right: var(--border-width) solid var(--border-color);
+  border-top: var(--frame-width) var(--frame-line) var(--border-color);
+  border-right: var(--frame-width) var(--frame-line) var(--border-color);
   user-select: none;
   pointer-events: auto;
 }
@@ -3527,7 +3561,7 @@ a:hover {
 .command-bar {
   display: flex;
   align-items: center;
-  border-top: var(--border-width) solid var(--border-color);
+  border-top: var(--frame-width) var(--frame-line) var(--border-color);
   background-color: var(--bg);
   flex-shrink: 0;
 }

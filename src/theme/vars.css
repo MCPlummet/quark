@@ -23,7 +23,9 @@
   --msg-timestamp: #444444;
   --msg-mention-bg: #1a1a00;
   --msg-mention-fg: #ffaa00;
-  --msg-reply-border: #555555;
+  /* Follows the accent until a theme sets colors.messages.reply_border, so a
+     partial theme keeps the look replies had before the field took effect. */
+  --msg-reply-border: var(--accent-secondary);
   --msg-thread-indicator: #00aaff;
 
   /* ── Room list colors ────────────────────────────────────────────────── */
@@ -34,7 +36,7 @@
   --roomlist-muted: #444444;
 
   /* ── Reaction colors ─────────────────────────────────────────────────── */
-  --reaction-bg: #1a1a1a;
+  --reaction-bg: var(--bg); /* likewise, until colors.reactions.background */
   --reaction-border: #333333;
   --reaction-own-bg: #1a3a1a;
   --reaction-count: #888888;
@@ -61,18 +63,18 @@
     "Noto Color Emoji", "Twemoji Mozilla", "EmojiOne Color", emoji;
   --font-size: 14px;
   --line-height: 1.5;
+  /* typography.message_spacing: padding above each message in a group
+     (twice that below), so 4px gives 4px/8px. */
   --message-spacing: 4px;
 
-  /* ── Border styles ───────────────────────────────────────────────────── */
-  --border-style: rounded;
-  --border-h: "─";
-  --border-v: "│";
-  --border-tl: "╭";
-  --border-tr: "╮";
-  --border-bl: "╰";
-  --border-br: "╯";
+  /* ── Borders ─────────────────────────────────────────────────────────── */
   --border-color: #333333;
   --border-width: 2px;
+  /* borders.style: the frames (message boxes, compose box, pane dividers).
+     These are the "rounded" values; see FRAME_STYLES in loader.ts. */
+  --frame-line: solid;
+  --frame-width: 2px;
+  --frame-radius: 8px;
 
   /* ── Layout ──────────────────────────────────────────────────────────── */
   --space-strip-width: 64px;
@@ -81,12 +83,11 @@
   --status-bar-height: 74px;
 
   /* ── Emoji / sticker sizes ───────────────────────────────────────────── */
-  --emoji-size: 32px;
+  --emoji-size: 32px;       /* emoji in an emoji-only message */
   --sticker-max-size: 256px;
-  --reaction-size: 14px;
+  --reaction-size: 20px;    /* emoji in a reaction chip */
 
-  /* ── Prompt / mode indicator ─────────────────────────────────────────── */
-  --prompt-symbol: ":>";
+  /* ── Mode indicator ──────────────────────────────────────────────────── */
   --mode-normal: "NOR";
   --mode-insert: "INS";
   --mode-command: "CMD";
