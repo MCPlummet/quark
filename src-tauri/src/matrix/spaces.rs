@@ -277,25 +277,33 @@ fn joined_space(client: &Client, space_room_id: &RoomId) -> Option<matrix_sdk::R
 /// those was a (possibly federated) server request per refresh — the shape of
 /// load this app has put on a homeserver before. Their children change rarely
 /// and are only used to draw sections, so a few minutes stale is fine.
-type HierarchyCache = HashMap<String, (std::time::Instant, Vec<SpaceChild>)>;
+///
+/// Failures are cached too, for less time. A subspace this account left but
+/// still knows answers 403 for as long as it stays left; retried on every
+/// refresh, that was the same request storm with an error at the end of it.
+type HierarchyCache = HashMap<String, (std::time::Instant, Result<Vec<SpaceChild>, String>)>;
 static HIERARCHY_CACHE: std::sync::LazyLock<std::sync::Mutex<HierarchyCache>> =
     std::sync::LazyLock::new(Default::default);
 
 const HIERARCHY_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+/// Shorter than [`HIERARCHY_TTL`]: a failure may be the network, not the server
+/// saying no, and a section missing for a minute is cheap.
+const HIERARCHY_FAILURE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
 async fn hierarchy_cached(client: &Client, space_room_id: &str) -> Result<Vec<SpaceChild>, String> {
     if let Ok(cache) = HIERARCHY_CACHE.lock() {
-        if let Some((at, children)) = cache.get(space_room_id) {
-            if at.elapsed() < HIERARCHY_TTL {
-                return Ok(children.clone());
+        if let Some((at, answer)) = cache.get(space_room_id) {
+            let ttl = if answer.is_ok() { HIERARCHY_TTL } else { HIERARCHY_FAILURE_TTL };
+            if at.elapsed() < ttl {
+                return answer.clone();
             }
         }
     }
-    let children = get_space_hierarchy(client, space_room_id, Some(1)).await?;
+    let answer = get_space_hierarchy(client, space_room_id, Some(1)).await;
     if let Ok(mut cache) = HIERARCHY_CACHE.lock() {
-        cache.insert(space_room_id.to_owned(), (std::time::Instant::now(), children.clone()));
+        cache.insert(space_room_id.to_owned(), (std::time::Instant::now(), answer.clone()));
     }
-    Ok(children)
+    answer
 }
 
 /// A space-child removal to write: `(space, child, raw event)`.
@@ -671,5 +679,27 @@ mod tests {
     fn children_without_pending_writes_read_the_store() {
         assert_eq!(effective_order("!other-space:x", "!b:x", None), None);
         assert_eq!(effective_order("!other-space:x", "!b:x", Some("q".into())).as_deref(), Some("q"));
+    }
+
+    use crate::matrix::test_support::TestHomeserver;
+    use serde_json::json;
+
+    const FORBIDDEN: fn() -> serde_json::Value =
+        || json!({ "errcode": "M_FORBIDDEN", "error": "You are not allowed to peek" });
+
+    /// The room list re-reads every subspace on every room-list change. A
+    /// subspace this account left but still knows answers `/hierarchy` with a
+    /// 403, and an uncached failure was one (possibly federated) request per
+    /// refresh — the load the cache exists to prevent.
+    #[tokio::test]
+    async fn a_failed_hierarchy_is_not_retried_on_every_refresh() {
+        let hs = TestHomeserver::new().await;
+        let space = "!left-subspace-fails:example.org";
+        hs.mount_hierarchy(space, 403, FORBIDDEN()).await;
+
+        assert!(get_space_children(&hs.client, space).await.is_err());
+        assert!(get_space_children(&hs.client, space).await.is_err());
+
+        assert_eq!(hs.requests_to("/hierarchy").await, 1);
     }
 }
