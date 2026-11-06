@@ -11,8 +11,12 @@ import {
   themeSlug,
   themeToToml,
   validateTheme,
+  BORDER_STYLES,
+  UNTITLED_THEME_NAME,
+  U32_MAX,
   type CompleteTheme,
 } from "./share.js";
+import { FRAME_STYLES } from "./loader.js";
 
 /** themes/*.toml by file name, e.g. `nord.toml`. */
 const THEME_FILES: Record<string, string> = Object.fromEntries(
@@ -140,6 +144,15 @@ describe("validateTheme", () => {
     expect(paths(setField(phosphor, "prompt.normal_indicator", 3))).toEqual(["prompt.normal_indicator"]);
     expect(paths(setField(phosphor, "meta.name", "  "))).toEqual(["meta.name"]);
   });
+
+  it("caps every integer at u32, bounded in the editor or not", () => {
+    const paths = (t: unknown) => validateTheme(t).map((i) => i.path);
+    expect(paths(setField(phosphor, "typography.message_spacing", U32_MAX))).toEqual([]);
+    expect(paths(setField(phosphor, "typography.message_spacing", U32_MAX + 1))).toEqual(["typography.message_spacing"]);
+    // Past i64, and past the point String() switches to exponent notation.
+    expect(paths(setField(phosphor, "emoji.sticker_max_size", 1e20))).toEqual(["emoji.sticker_max_size"]);
+    expect(paths(setField(phosphor, "emoji.reaction_size", 1e21))).toEqual(["emoji.reaction_size"]);
+  });
 });
 
 describe("completeTheme", () => {
@@ -175,6 +188,26 @@ describe("completeTheme", () => {
     expect(getField(theme, "colors.accent.tertiary")).toBeUndefined();
   });
 
+  it("names a nameless theme as untitled, not after the base", () => {
+    const { theme, issues } = completeTheme({ colors: { background: "#000000" } }, phosphor);
+    expect(theme.meta.name).toBe(UNTITLED_THEME_NAME);
+    expect(themeSlug(theme.meta.name)).not.toBe("phosphor");
+    expect(issues.find((i) => i.path === "meta.name")).toMatchObject({
+      kind: "missing",
+      message: `missing — using "${UNTITLED_THEME_NAME}"`,
+    });
+
+    const blank = completeTheme(setField(phosphor, "meta.name", " "), phosphor);
+    expect(blank.theme.meta.name).toBe(UNTITLED_THEME_NAME);
+  });
+
+  it("leaves out an invalid author rather than crediting the base's", () => {
+    const base = setField(phosphor, "meta.author", "Base Author");
+    const { theme, issues } = completeTheme(setField(phosphor, "meta.author", 42), base);
+    expect(theme.meta.author).toBe("");
+    expect(issues.find((i) => i.path === "meta.author")?.message).toMatch(/— left out$/);
+  });
+
   it("drops retired settings without reporting them", () => {
     const { theme, issues } = completeTheme(setField(phosphor, "prompt.symbol", ":>"), phosphor);
     expect(issues).toEqual([]);
@@ -185,6 +218,14 @@ describe("completeTheme", () => {
     const before = JSON.stringify(phosphor);
     completeTheme({ meta: { name: "x" }, colors: { background: "#000" } }, phosphor);
     expect(JSON.stringify(phosphor)).toBe(before);
+  });
+});
+
+describe("borders.style", () => {
+  it("offers exactly the styles the app knows how to draw", () => {
+    const field = THEME_FIELDS.find((f) => f.path === "borders.style")!.field;
+    expect(field.kind).toEqual({ type: "enum", options: BORDER_STYLES });
+    expect([...BORDER_STYLES].sort()).toEqual(Object.keys(FRAME_STYLES).sort());
   });
 });
 

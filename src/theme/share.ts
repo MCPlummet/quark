@@ -10,7 +10,9 @@
 // struct (src-tauri/src/config/theme.rs): every field is required there, so a
 // theme this module emits always carries all of them.
 
-import type { Theme } from "./loader.js";
+import { BORDER_STYLES, type Theme } from "./loader.js";
+
+export { BORDER_STYLES };
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,8 +33,9 @@ export type FieldKind =
   /** `#rgb`, `#rrggbb` or `#rrggbbaa`. */
   | { type: "color" }
   | { type: "string"; required?: boolean }
-  /** A u32 in Rust. `min`/`max` are hard limits when `enforce` is set (they
-   *  mirror `validate_theme`), otherwise sensible bounds for an editor input. */
+  /** A u32 in Rust, so never above {@link U32_MAX}. `min`/`max` are hard
+   *  limits when `enforce` is set (they mirror `validate_theme`), otherwise
+   *  sensible bounds for an editor input. */
   | { type: "int"; min: number; max: number; enforce?: boolean }
   | { type: "float"; min: number; max: number; step: number }
   | { type: "enum"; options: readonly string[] };
@@ -70,8 +73,6 @@ const text = (key: string, hint: string, extra: Partial<ThemeField> = {}): Theme
   hint,
   ...extra,
 });
-
-export const BORDER_STYLES = ["single", "double", "rounded", "ascii", "none"] as const;
 
 /** Field order here is the order fields are written to TOML. */
 export const THEME_SCHEMA: readonly ThemeSection[] = [
@@ -220,6 +221,12 @@ export function setField<T>(theme: T, path: string, value: unknown): T {
 
 const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
+/**
+ * The largest integer setting quark can read: its fields are `u32`. Anything
+ * above fails to deserialize, and from 2^63 up isn't even a TOML integer.
+ */
+export const U32_MAX = 4_294_967_295;
+
 /** Same rule as the Rust `is_valid_hex_color`. */
 export function isHexColor(value: unknown): value is string {
   return typeof value === "string" && HEX_COLOR.test(value);
@@ -245,6 +252,7 @@ export function checkField(field: ThemeField, value: unknown): string | null {
         return "must be a whole number ≥ 0";
       }
       if (k.enforce && (value < k.min || value > k.max)) return `must be between ${k.min} and ${k.max}`;
+      if (value > U32_MAX) return `must be at most ${U32_MAX}`;
       return null;
     case "float":
       return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -273,10 +281,25 @@ export function validateTheme(theme: unknown): ThemeIssue[] {
   return issues;
 }
 
+/** The name a theme gets when it arrives without a usable one. */
+export const UNTITLED_THEME_NAME = "Untitled theme";
+
+/**
+ * What a missing or invalid field becomes. Most take the base theme's value,
+ * but not the ones that say whose theme it is: a nameless import named after
+ * the base would pass itself off as that built-in (and download as
+ * `phosphor.toml`), and one with a bad `author` would credit the base's.
+ */
+function fallbackFor(path: string, field: ThemeField, base: CompleteTheme): unknown {
+  if (path === "meta.name") return UNTITLED_THEME_NAME;
+  if (field.optional) return "";
+  return getField(base, path);
+}
+
 /**
  * Fill a parsed (possibly partial or partly invalid) theme into a complete one.
- * Each field missing or invalid in `input` takes `base`'s value and is reported;
- * keys the schema doesn't know are reported and dropped.
+ * Each field missing or invalid in `input` is replaced (see fallbackFor) and
+ * reported; keys the schema doesn't know are reported and dropped.
  */
 export function completeTheme(
   input: unknown,
@@ -287,23 +310,18 @@ export function completeTheme(
 
   for (const { path, field } of THEME_FIELDS) {
     const value = getField(input, path);
-    if (value === undefined) {
-      if (field.optional) {
-        theme = setField(theme, path, "");
-      } else {
-        issues.push({ path, kind: "missing", message: `missing — using ${show(getField(base, path))}` });
-      }
+    const problem = value === undefined ? null : checkField(field, value);
+    if (value !== undefined && !problem) {
+      theme = setField(theme, path, value);
       continue;
     }
-    const problem = checkField(field, value);
-    if (problem) {
-      issues.push({
-        path,
-        kind: "invalid",
-        message: `${show(value)} ${problem} — using ${show(getField(base, path))}`,
-      });
+    const fallback = fallbackFor(path, field, base);
+    theme = setField(theme, path, fallback);
+    const instead = fallback === "" ? "left out" : `using ${show(fallback)}`;
+    if (value === undefined) {
+      if (!field.optional) issues.push({ path, kind: "missing", message: `missing — ${instead}` });
     } else {
-      theme = setField(theme, path, value);
+      issues.push({ path, kind: "invalid", message: `${show(value)} ${problem} — ${instead}` });
     }
   }
 

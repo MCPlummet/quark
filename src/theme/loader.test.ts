@@ -159,6 +159,14 @@ describe("theme/loader", () => {
       // Empty is a choice (no label), not a missing field.
       expect(vars["--mode-command"]).toBe('""');
     });
+
+    it("shows a non-string indicator rather than throwing", () => {
+      // Custom themes arrive as raw TOML, unchecked: `normal_indicator = 3`.
+      const raw = JSON.parse('{"prompt":{"normal_indicator":3,"insert_indicator":true}}');
+      const vars = themeToCssVars(raw);
+      expect(vars["--mode-normal"]).toBe('"3"');
+      expect(vars["--mode-insert"]).toBe('"true"');
+    });
   });
 
   describe("partial theme", () => {

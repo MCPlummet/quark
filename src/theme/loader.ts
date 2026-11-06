@@ -48,8 +48,12 @@ export interface ThemeTypography {
   message_spacing?: number;
 }
 
+/** Every `borders.style` quark draws. FRAME_STYLES must give each one a look. */
+export const BORDER_STYLES = ["single", "double", "rounded", "ascii", "none"] as const;
+export type BorderStyle = (typeof BORDER_STYLES)[number];
+
 export interface ThemeBorders {
-  style?: "single" | "double" | "rounded" | "ascii" | "none";
+  style?: BorderStyle;
   room_list_width?: string;
 }
 
@@ -97,10 +101,7 @@ export interface Theme {
  * the frames are CSS borders, so each maps to a line style, width and corner
  * radius (`--frame-*` in vars.css). `double` needs 3px for both lines to show.
  */
-export const FRAME_STYLES: Record<
-  NonNullable<ThemeBorders["style"]>,
-  { line: string; width: string; radius: string }
-> = {
+export const FRAME_STYLES: Record<BorderStyle, { line: string; width: string; radius: string }> = {
   single: { line: "solid", width: "2px", radius: "0px" },
   double: { line: "double", width: "3px", radius: "0px" },
   rounded: { line: "solid", width: "2px", radius: "8px" },
@@ -114,9 +115,15 @@ function px(n: number): string {
   return `${n}px`;
 }
 
-/** A CSS string literal for `content:` — quotes, backslashes and newlines escaped. */
-function cssString(text: string): string {
-  return `"${text.replace(/[\\"]/g, "\\$&").replace(/\r?\n|\r/g, "\\a ")}"`;
+/**
+ * A CSS string literal for `content:` — quotes, backslashes and newlines
+ * escaped. Takes anything: custom themes reach applyTheme as raw TOML (see
+ * `load_theme`), so `normal_indicator = 3` arrives as a number. That shows as
+ * "3", as it did before indicators were escaped, rather than throwing and
+ * losing the whole theme.
+ */
+function cssString(value: unknown): string {
+  return `"${String(value).replace(/[\\"]/g, "\\$&").replace(/\r?\n|\r/g, "\\a ")}"`;
 }
 
 // ── Cross-fade ───────────────────────────────────────────────────────────────
