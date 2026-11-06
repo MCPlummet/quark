@@ -171,6 +171,8 @@
 .te-install{font-size:.82rem;color:var(--ink-2);padding:0 .2rem}
 .te-install h2{margin:0 0 .4rem;font-size:.86rem;color:var(--ink)}
 .te-install ol{margin:0;padding-left:1.2rem;line-height:1.8}
+/* the macOS folder alone is wider than a phone-width sidebar */
+.te-install .kbd{white-space:normal;overflow-wrap:anywhere}
 
 /* ---------- import dialog ---------- */
 .te-dialog{

@@ -6,7 +6,8 @@
 // fragment never reaches a server.
 //
 // History: small edits replace the current entry; switching preset or
-// importing pushes a new one, so Back undoes them.
+// importing pushes a new one, so Back undoes them. Edits reach the URL on a
+// debounce (see HASH_DEBOUNCE_MS), and at once when a control commits.
 
 import { BUILTIN_THEME_MAP } from "../theme/builtins.js";
 import {
@@ -38,15 +39,22 @@ function $<T extends HTMLElement = HTMLElement>(id: string): T {
 // ── State ────────────────────────────────────────────────────────────────────
 
 let theme: CompleteTheme = structuredClone(BASE);
-/** The share string currently in (or about to be written to) the URL. */
+/** The share string last written to, or loaded from, the URL. */
 let shareString = "";
+/** `theme` has edits the URL doesn't carry yet; flushHash writes them. */
+let dirty = false;
 let hashTimer: ReturnType<typeof setTimeout> | undefined;
 
-const form = new ThemeForm($("form"), (path, value) => {
+const formEl = $("form");
+const form = new ThemeForm(formEl, (path, value) => {
   theme = setField(theme, path, value);
   render();
   scheduleHash();
 });
+// A finished edit — a colour picked, a slider let go, a field left — goes into
+// the URL now. The debounce then only covers a drag in progress, which is the
+// only time an edit can still miss its history entry (see loadFromHash).
+formEl.addEventListener("change", flushHash);
 const preview = new Preview($("stage"), "../demo/?debug");
 
 function currentShare(): string {
@@ -58,7 +66,7 @@ function linkFor(share: string): string {
 }
 
 function scheduleHash(): void {
-  shareString = currentShare();
+  dirty = true;
   clearTimeout(hashTimer);
   hashTimer = setTimeout(flushHash, HASH_DEBOUNCE_MS);
 }
@@ -66,6 +74,10 @@ function scheduleHash(): void {
 function flushHash(): void {
   clearTimeout(hashTimer);
   hashTimer = undefined;
+  if (!dirty) return;
+  dirty = false;
+  // Encoded here rather than per edit: a colour drag fires dozens a second.
+  shareString = currentShare();
   if (location.hash.slice(1) !== shareString) {
     history.replaceState(null, "", `#${shareString}`);
   }
@@ -75,6 +87,7 @@ function flushHash(): void {
 function replaceTheme(next: CompleteTheme): void {
   flushHash(); // the entry we're leaving keeps the latest edits
   theme = next;
+  dirty = false;
   shareString = currentShare();
   history.pushState(null, "", `#${shareString}`);
   form.load(theme);
@@ -95,22 +108,25 @@ function buildPresetOptions(): void {
   }
 }
 
-function matchingPreset(): string {
-  const toml = themeToToml(theme);
-  return Object.keys(PRESETS).find((key) => themeToToml(PRESETS[key]) === toml) ?? CUSTOM_OPTION;
-}
+/** Each preset's canonical TOML → its key, to spot when the theme is one. */
+const PRESET_BY_TOML = new Map(Object.entries(PRESETS).map(([key, preset]) => [themeToToml(preset), key]));
 
+/** Runs on every edit — keep it to one TOML serialization. */
 function render(): void {
   preview.setTheme(theme);
 
+  const toml = themeToToml(theme);
   const slug = themeSlug(theme.meta.name);
   $("title-name").textContent = slug;
   $("preview-title").textContent = `quark — ${theme.meta.name}`;
   $("toml-filename").textContent = `${slug}.toml`;
-  $("toml-out").textContent = themeFileText(theme);
+  $("toml-out").textContent = themeFileText(theme, toml);
   document.title = `${theme.meta.name} · Quark theme editor`;
-  presetSelect.value = matchingPreset();
+  presetSelect.value = PRESET_BY_TOML.get(toml) ?? CUSTOM_OPTION;
 
+  // Should always be empty — controls commit only valid values and imports
+  // are completed — but it costs microseconds, and it is what would catch a
+  // control that started committing values quark can't load.
   const problems = validateTheme(theme);
   const badge = $("valid-badge");
   badge.textContent = problems.length ? `✗ ${problems.length} problem(s)` : "✓ loads in quark";
@@ -150,9 +166,12 @@ function reportImport(issues: ThemeIssue[], what: string): void {
     hideReport();
     return;
   }
-  const listed = issues.filter((i) => i.kind !== "missing");
+  // A missing name isn't filled in from the base (it gets a placeholder; see
+  // completeTheme), so it keeps its own line.
+  const folds = (i: ThemeIssue) => i.kind === "missing" && i.path !== "meta.name";
+  const listed = issues.filter((i) => !folds(i));
   const missing = new Map<string, string[]>();
-  for (const { path } of issues.filter((i) => i.kind === "missing")) {
+  for (const { path } of issues.filter(folds)) {
     const table = path.slice(0, path.lastIndexOf("."));
     missing.set(table, [...(missing.get(table) ?? []), path.slice(table.length + 1)]);
   }
@@ -173,8 +192,13 @@ function reportImport(issues: ThemeIssue[], what: string): void {
  */
 function loadFromHash(force = false): void {
   const hash = location.hash.slice(1);
-  if (hash === shareString && !force) return;
+  if (hash === shareString && !force && !dirty) return;
+  // Edits still waiting on the debounce belonged to the entry we just left,
+  // and replaceState can only write the one we're on now, so they go. The
+  // flush on `change` keeps that to an edit that was still mid-drag.
   clearTimeout(hashTimer);
+  hashTimer = undefined;
+  dirty = false;
   if (!hash) {
     theme = structuredClone(BASE);
     shareString = "";
@@ -221,7 +245,7 @@ function flash(button: HTMLElement, text: string): void {
 
 $("copy-link").addEventListener("click", (e) => {
   const button = e.currentTarget as HTMLElement;
-  shareString = currentShare();
+  dirty = true; // write it even untouched: the link has to carry the theme
   flushHash();
   copyText(linkFor(shareString)).then(
     () => flash(button, "✓ copied"),
@@ -287,8 +311,14 @@ dialog.addEventListener("keydown", (e) => {
   }
 });
 // Clicking the backdrop (the dialog element itself, outside its content).
+// The press has to start there too: a drag that selects text in the textarea
+// and is released outside the box also clicks the dialog, and must not throw
+// the paste away.
+let pressedOnBackdrop = false;
+dialog.addEventListener("pointerdown", (e) => (pressedOnBackdrop = e.target === dialog));
 dialog.addEventListener("click", (e) => {
-  if (e.target === dialog) dialog.close();
+  if (e.target === dialog && pressedOnBackdrop) dialog.close();
+  pressedOnBackdrop = false;
 });
 
 async function importFile(file: File): Promise<void> {

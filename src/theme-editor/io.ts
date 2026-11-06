@@ -64,14 +64,27 @@ export function importTheme(text: string, base: CompleteTheme): ImportedTheme {
   return parseThemeToml(trimmed, base);
 }
 
-/** The .toml file as downloaded: a short header, then the canonical TOML. */
-export function themeFileText(theme: CompleteTheme): string {
+/**
+ * Control characters, which TOML allows nowhere in a comment but tab. A name
+ * carrying one is fine as a value (tomlString escapes it); copied into the
+ * header comment it would make the whole file unparseable.
+ */
+const COMMENT_UNSAFE = /[\u0000-\u0008\u000a-\u001f\u007f]+/g;
+
+/**
+ * The .toml file as downloaded: a short header, then the canonical TOML
+ * (pass `toml` when it is already serialized).
+ */
+export function themeFileText(theme: CompleteTheme, toml = themeToToml(theme)): string {
   return [
-    `# ${theme.meta.name.replace(/[\r\n]+/g, " ")} — a Quark theme`,
-    "# Install: save to ~/.config/quark/themes/, then pick it in Settings → Themes.",
+    `# ${theme.meta.name.replace(COMMENT_UNSAFE, " ")} — a Quark theme`,
+    "# Install: save to Quark's themes folder, then pick it in Settings → Themes.",
+    "#   Linux    ~/.config/quark/themes/",
+    "#   macOS    ~/Library/Application Support/quark/themes/",
+    "#   Windows  %APPDATA%\\quark\\config\\themes\\",
     "# Edit: open https://quark.tel/theme/ and import this file.",
     "",
-    themeToToml(theme),
+    toml,
   ].join("\n");
 }
 
