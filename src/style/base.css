@@ -2875,11 +2875,18 @@ body.quark-mobile .input-bar__mode--hidden {
   height: 3px;
   border-radius: 50%;
   background-color: currentColor;
+}
+
+/* Only while someone is typing. The indicator is never removed — visibility
+   keeps its row reserved — and visibility does not stop an animation, so on the
+   base rule the dots animated from launch to quit and an idle window never
+   stopped producing frames. */
+.typing-indicator--active .typing-indicator__dots span {
   animation: typingDot 1.4s infinite ease-in-out;
 }
 
-.typing-indicator__dots span:nth-child(2) { animation-delay: 0.2s; }
-.typing-indicator__dots span:nth-child(3) { animation-delay: 0.4s; }
+.typing-indicator--active .typing-indicator__dots span:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator--active .typing-indicator__dots span:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes typingDot {
   0%, 60%, 100% { opacity: 0.3; transform: scale(1); }
