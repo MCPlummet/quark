@@ -6,9 +6,15 @@
 // are `!important` on purpose: the app applies its own startup theme as inline
 // custom properties on :root, and an important author declaration outranks a
 // normal inline one — so the preview wins regardless of when the app boots or
-// whether someone types `:theme` inside it. The CSS comes from the same
+// whether someone types `:theme` inside it. The values come from the same
 // themeToCssVars the app's applyTheme uses, so the preview cannot drift from
 // what quark renders.
+//
+// They go in through CSSOM setProperty, never as stylesheet text, for the same
+// reason: a value is parsed as one property value or rejected, exactly as
+// applyTheme's setProperty does. Pasted into CSS text, a `;` or `}` in a free
+// text field (font_family, room_list_width) would end the rule and let a
+// shared link inject arbitrary CSS into the preview.
 
 import { themeToCssVars, type Theme } from "../theme/loader.js";
 
@@ -22,16 +28,21 @@ const MOBILE_H = 760;
 /** Narrower than this, a scaled desktop layout is unreadable: show mobile. */
 const STAGE_DESKTOP_MIN = 560;
 
-export function themeCss(theme: Theme): string {
-  const decls = Object.entries(themeToCssVars(theme))
-    .map(([prop, value]) => `  ${prop}: ${value} !important;`)
-    .join("\n");
-  return `:root {\n${decls}\n}\n`;
+/**
+ * Write a theme's custom properties into a stylesheet's single `:root` rule,
+ * each `!important`. Values the CSS parser rejects are left out, as
+ * applyTheme's setProperty leaves them out of the app.
+ */
+export function applyThemeVars(sheet: CSSStyleSheet, vars: Record<string, string>): void {
+  if (!sheet.cssRules.length) sheet.insertRule(":root {}");
+  const decls = (sheet.cssRules[0] as CSSStyleRule).style;
+  decls.cssText = "";
+  for (const [prop, value] of Object.entries(vars)) decls.setProperty(prop, value, "important");
 }
 
 export class Preview {
   private readonly iframe: HTMLIFrameElement;
-  private css = "";
+  private vars: Record<string, string> = {};
   private frame = 0;
 
   constructor(
@@ -53,7 +64,7 @@ export class Preview {
   }
 
   setTheme(theme: Theme): void {
-    this.css = themeCss(theme);
+    this.vars = themeToCssVars(theme);
     // Colour pickers fire input events far faster than frames; coalesce.
     if (!this.frame) {
       this.frame = requestAnimationFrame(() => {
@@ -83,8 +94,10 @@ export class Preview {
       style.id = STYLE_ID;
     }
     // Keep it last in <head> so it also follows any stylesheet added later.
+    // Moving a <style> rebuilds its sheet from its (empty) text, dropping the
+    // rule; applyThemeVars re-creates it.
     if (style !== doc.head.lastElementChild) doc.head.append(style);
-    if (style.textContent !== this.css) style.textContent = this.css;
+    if (style.sheet) applyThemeVars(style.sheet, this.vars);
   }
 
   /**
