@@ -220,79 +220,31 @@ body.quark-modal-open .input-bar__field {
   flex-shrink: 0;
 }
 
-.space-strip__spacer {
-  flex: 1;
-}
-
-.space-strip__settings-btn {
+/* The `+` closing the space list — create a space. Same footprint as a space
+ * item, drawn quieter: a dashed outline rather than a filled tile. */
+.space-strip__add {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 56px;
-  height: 56px;
-  border-radius: 2px;
+  height: 40px;
+  flex-shrink: 0;
   cursor: pointer;
   font-size: 18px;
   color: var(--roomlist-muted);
-  user-select: none;
-  flex-shrink: 0;
+  border-radius: 2px;
   outline: none;
+  user-select: none;
   transition: color var(--transition-speed), background-color var(--transition-speed);
-  margin-bottom: 4px;
 }
 
-.space-strip__settings-btn:hover {
+.space-strip__add:hover {
   color: var(--accent-primary);
   background-color: var(--roomlist-active-bg);
 }
 
-.space-strip__settings-btn:focus {
+.space-strip__add:focus-visible {
   box-shadow: 0 0 0 var(--focus-width) var(--focus-color);
-  outline: none;
-}
-
-/* Profile button sits at the very bottom of the strip, below settings.
- * Same footprint as a space item but renders either the user's avatar or
- * a coloured initial. Acts as the universal "my profile" entry point.
- * The 12px bottom margin gives visible breathing room above the status
- * bar overlay (or the iOS home indicator on mobile). */
-.space-strip__profile-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  margin: 2px auto 12px;
-  border-radius: var(--icon-radius);
-  cursor: pointer;
-  flex-shrink: 0;
-  outline: none;
-  overflow: hidden;
-  font-size: 16px;
-  font-weight: bold;
-  color: var(--fg);
-  background-color: var(--surface-hover-active);
-  transition: box-shadow var(--transition-speed), opacity var(--transition-speed);
-}
-
-.space-strip__profile-btn:hover {
-  opacity: 0.85;
-}
-
-.space-strip__profile-btn:focus {
-  box-shadow: 0 0 0 var(--focus-width) var(--focus-color);
-  outline: none;
-}
-
-.space-strip__profile-btn--fallback {
-  color: var(--accent-primary);
-  background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
-}
-
-.space-strip__profile-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 /* ── Room list panel ─────────────────────────────────────────────────────── */
@@ -400,6 +352,25 @@ body.quark-mobile .room-list__header-btn {
   background-color: var(--roomlist-active-bg);
   color: var(--roomlist-active-fg);
   text-shadow: 0 0 var(--glow-radius) var(--glow-color);
+}
+
+/* Drag-to-reorder within a space (room_list_drag.ts): the row being moved
+ * fades, and a rule marks where it will land. */
+.room-list__item--dragging {
+  opacity: 0.45;
+}
+
+.room-list__item--drop-before {
+  box-shadow: inset 0 2px 0 var(--accent-primary);
+}
+
+.room-list__item--drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent-primary);
+}
+
+body.quark-room-dragging,
+body.quark-room-dragging * {
+  cursor: grabbing !important;
 }
 
 .room-list__item--unread {
@@ -3212,75 +3183,207 @@ a:hover {
   text-shadow: 0 0 4px color-mix(in srgb, var(--accent-link) 40%, transparent);
 }
 
-/* ── Status bar ──────────────────────────────────────────────────────── */
+/* ── Status line ─────────────────────────────────────────────────────
+ *
+ * Two rows at the foot of the space strip + room list: you (avatar, name) and
+ * the app controls (invites, search, settings) on top, your presence status on
+ * its own line below. Fixed over both columns on desktop (they reserve
+ * --status-bar-height of bottom padding for it); the foot of the drawer on
+ * mobile, where App.ts reparents it. */
 
 .status-bar {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
   position: fixed;
   bottom: 0;
   left: 0;
   width: calc(var(--space-strip-width) + var(--room-list-width));
-  min-height: var(--status-bar-height);
+  height: var(--status-bar-height);
+  padding: 2px 6px 4px;
   z-index: 100;
   background-color: var(--bg);
   border-top: var(--frame-width) var(--frame-line) var(--border-color);
   border-right: var(--frame-width) var(--frame-line) var(--border-color);
-  font-size: calc(var(--font-size) - 2px);
   user-select: none;
   pointer-events: auto;
 }
 
-.status-bar__sep {
-  color: var(--border-color);
+.status-bar button {
+  font-family: var(--font-family);
 }
 
-.status-bar__room {
-  padding: 2px 8px;
+.status-bar__main {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+}
+
+/* You: avatar + name, one button that opens your profile. Takes the row's
+ * spare width, so a long name ellipsizes rather than pushing the controls. */
+.status-bar__profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 6px 0 2px;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
   color: var(--fg);
+  cursor: pointer;
+  outline: none;
+  text-align: left;
+  transition: background-color var(--transition-speed);
+}
+
+.status-bar__profile:hover {
+  background-color: var(--roomlist-active-bg);
+}
+
+.status-bar__profile:focus-visible {
+  box-shadow: 0 0 0 var(--focus-width) var(--focus-color);
+}
+
+/* The avatar, with the connection state as a dot on its corner. */
+.status-bar__avatar {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--icon-radius);
+  background-color: var(--surface-hover-active);
+}
+
+.status-bar__avatar--fallback {
+  color: var(--accent-primary);
+  background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+
+.status-bar__profile-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
+.status-bar__profile-initial {
+  display: block;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 30px;
+  text-align: center;
+}
+
+.status-bar__conn-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  box-sizing: content-box;
+  background-color: var(--roomlist-muted);
+  transition: background-color var(--transition-speed);
+}
+
+.status-bar__conn-dot--online {
+  background-color: var(--accent-success);
+}
+
+.status-bar__conn-dot--offline {
+  background-color: var(--accent-error);
+}
+
+.status-bar--offline .status-bar__profile-img,
+.status-bar--offline .status-bar__profile-initial {
+  opacity: 0.55;
+}
+
+.status-bar__name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--font-size);
+  font-weight: bold;
 }
 
-.status-bar__spacer {
-  flex: 1;
-}
-
-.status-bar__encryption {
-  padding: 2px 4px;
-}
-
-.status-bar__encryption--on {
-  filter: drop-shadow(0 0 3px var(--accent-success));
-}
-
-.status-bar__connection {
-  padding: 2px 8px;
+/* Invites / search / settings: square, finger-sized even on desktop, and
+ * quiet until hovered. */
+.status-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-width: 40px;
+  height: 40px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
   color: var(--roomlist-muted);
-  transition: color var(--transition-speed);
+  font-size: calc(var(--font-size) + 6px);
+  cursor: pointer;
+  outline: none;
+  transition: color var(--transition-speed), background-color var(--transition-speed);
 }
 
-.status-bar__connection--online {
-  color: var(--accent-success);
-  text-shadow: 0 0 4px var(--glow-color);
+.status-bar__btn:hover {
+  color: var(--accent-primary);
+  background-color: var(--roomlist-active-bg);
 }
 
-.status-bar__connection--offline {
-  color: var(--accent-error);
+.status-bar__btn:focus-visible {
+  box-shadow: 0 0 0 var(--focus-width) var(--focus-color);
+}
+
+.status-bar__count {
+  font-size: var(--font-size);
+  font-weight: bold;
+  line-height: 1;
+}
+
+.status-bar__count:empty {
+  display: none;
+}
+
+/* Invites waiting: the button lights up, so it reads from across the room. */
+.status-bar__invites--pending {
+  color: var(--accent-primary);
+  text-shadow: 0 0 var(--glow-radius) var(--glow-color);
+}
+
+/* The status line: lined up under your name, and the full width after it. */
+.status-bar__line {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+  padding-left: 40px;
+  font-size: calc(var(--font-size) - 2px);
 }
 
 .status-bar__status {
-  padding: 2px 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 1px 0;
   color: var(--accent-secondary);
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  outline: none;
   transition: color var(--transition-speed);
 }
 
-.status-bar__status:hover {
+.status-bar__status:hover,
+.status-bar__status:focus-visible {
   color: var(--fg);
 }
 
@@ -3290,14 +3393,15 @@ a:hover {
 }
 
 .status-bar__status-input {
+  flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--accent-secondary);
   color: var(--fg);
   font-family: var(--font-family);
   font-size: calc(var(--font-size) - 2px);
-  padding: 0 4px;
-  width: 120px;
+  padding: 0;
   outline: none;
 }
 
@@ -4701,6 +4805,51 @@ body.quark-mobile .profile-edit-dialog__panel {
 }
 
 /* Muted explanatory line under a setting (status readouts, OS pointers). */
+/* A field that saves itself (settings/commit_field.ts) and the line under it
+ * saying what is happening: unsaved, saving, saved, or why it failed. */
+.settings-dialog__field .settings-dialog__text-input,
+.settings-dialog__field .settings-dialog__select {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-dialog__field-status {
+  height: 1.3em;
+  line-height: 1.3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 0 0 110px;
+  font-size: calc(var(--font-size) - 2px);
+  color: var(--roomlist-muted);
+}
+
+.settings-dialog__field-status--dirty {
+  color: var(--accent-secondary);
+}
+
+.settings-dialog__field-status--saved {
+  color: var(--accent-success);
+}
+
+.settings-dialog__field-status--error {
+  color: var(--accent-error);
+}
+
+body.quark-mobile .settings-dialog__field-status {
+  padding-left: 0;
+}
+
+/* An error can be longer than one line; let it wrap rather than hide. */
+.settings-dialog__field-status--error {
+  height: auto;
+  white-space: normal;
+}
+
+.settings-dialog__hint--lead {
+  margin-bottom: 10px;
+}
+
 .settings-dialog__hint {
   color: var(--roomlist-muted);
   font-size: calc(var(--font-size) - 2px);
@@ -5665,6 +5814,182 @@ body.quark-mobile .profile-edit-dialog__panel {
   font-size: calc(var(--font-size) - 2px);
   flex-shrink: 0;
   background-color: var(--surface-dim);
+}
+
+/* ── Invites dialog ───────────────────────────────────────────────────────────
+ * The room directory's list, with two answers per row instead of one. */
+
+.invites-dialog__item {
+  padding-right: 190px;
+}
+
+.invites-dialog__tag {
+  margin-left: 8px;
+  padding: 0 4px;
+  border: var(--border-width) solid var(--border-color);
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) - 3px);
+  font-weight: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  vertical-align: 1px;
+}
+
+.invites-dialog__actions {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 6px;
+}
+
+.invites-dialog__btn {
+  background: transparent;
+  border: var(--border-width) solid var(--border-color);
+  color: var(--roomlist-muted);
+  font-family: var(--font-mono);
+  font-size: calc(var(--font-size) - 1px);
+  cursor: pointer;
+  padding: 2px 6px;
+  outline: none;
+}
+
+.invites-dialog__accept {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.invites-dialog__accept:hover,
+.invites-dialog__accept:focus-visible {
+  background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+}
+
+.invites-dialog__decline:hover,
+.invites-dialog__decline:focus-visible {
+  border-color: var(--accent-error);
+  color: var(--accent-error);
+}
+
+.invites-dialog__btn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.invites-dialog__item--busy {
+  opacity: 0.7;
+}
+
+/* Phones: the answers drop below the text instead of crowding it. */
+body.quark-mobile .invites-dialog__item {
+  padding-right: 12px;
+}
+
+body.quark-mobile .invites-dialog__actions {
+  position: static;
+  transform: none;
+  margin-top: 6px;
+}
+
+body.quark-mobile .invites-dialog__btn {
+  min-height: 40px;
+  padding: 6px 14px;
+  font-size: var(--font-size);
+}
+
+body.quark-mobile .invites-dialog .room-dir-dialog__panel {
+  width: 100vw;
+  width: 100dvw;
+  max-height: 100vh;
+  max-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  border: none;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ── Create room / space dialog ──────────────────────────────────────────── */
+
+.create-room-dialog .settings-dialog__panel {
+  width: min(520px, calc(100vw - 40px));
+  max-height: min(600px, calc(100vh - 60px));
+}
+
+.create-room-dialog__body {
+  padding: 10px 14px;
+}
+
+.create-room-dialog__body .settings-dialog__row {
+  padding: 4px 0;
+}
+
+.create-room-dialog__body .settings-dialog__label {
+  min-width: 80px;
+}
+
+.create-room-dialog__body .settings-dialog__text-input,
+.create-room-dialog__body .settings-dialog__select {
+  flex: 1;
+  min-width: 0;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.create-room-dialog__kinds {
+  display: flex;
+  gap: 16px;
+}
+
+.create-room-dialog__alias {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.create-room-dialog__affix {
+  color: var(--roomlist-muted);
+  white-space: nowrap;
+}
+
+.create-room-dialog__affix:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.create-room-dialog__error {
+  padding: 4px 14px;
+  color: var(--accent-error);
+  font-size: calc(var(--font-size) - 1px);
+}
+
+.create-room-dialog__actions {
+  justify-content: flex-end;
+}
+
+.create-room-dialog__create:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+body.quark-mobile .create-room-dialog__body .settings-dialog__row {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+body.quark-mobile .create-room-dialog__body .settings-dialog__text-input,
+body.quark-mobile .create-room-dialog__body .settings-dialog__select {
+  min-height: 40px;
+  /* iOS zooms into any control under 16px. */
+  font-size: max(16px, var(--font-size));
+}
+
+body.quark-mobile .create-room-dialog__actions .settings-dialog__btn {
+  min-height: 44px;
+  padding: 6px 16px;
 }
 
 /* ── Quick navigation palette ─────────────────────────────────────────────── */
@@ -6837,10 +7162,6 @@ body.quark-mobile textarea {
   font-size: max(16px, var(--font-size));
 }
 
-.space-strip__search-btn {
-  font-size: calc(var(--font-size) + 4px);
-}
-
 /* Inline SVG icons (src/ui/icons.ts). Sized by the host's font-size and drawn
  * in its text colour, so a button's hover/focus colour carries over. */
 .icon {
@@ -6856,10 +7177,14 @@ body.quark-mobile textarea {
   margin-right: 0.35em;
 }
 
-body.quark-mobile .space-strip__item,
-body.quark-mobile .space-strip__settings-btn {
+body.quark-mobile .space-strip__item {
   width: 56px;
   height: 56px;
+}
+
+body.quark-mobile .space-strip__add {
+  width: 56px;
+  height: 48px;
 }
 
 /* Vertically center the compose row's controls (#33).
@@ -6969,28 +7294,52 @@ body.quark-mobile.quark-member-dragging .member-list {
   box-shadow: 0 0 24px var(--shadow-color);
 }
 
-/* Status bar stays out of the way on mobile — hidden by default, the mobile
- * top bar carries the relevant info. */
-/* Mobile: the status bar lives at the foot of the room-list drawer rather than
- * floating over the timeline, where it would sit under the compose box. It is
- * reparented there by App.ts — hiding it (as this rule used to) took presence
- * status, connection state and the encryption indicator with it, and presence
- * has no other touch affordance since `S` needs vim. */
+/* Mobile: the status line is the foot of the room-list drawer rather than
+ * floating over the timeline, where it would sit under the compose box. App.ts
+ * reparents it there. Same two rows, with finger-sized targets. */
 body.quark-mobile .status-bar {
   position: static;
   width: 100%;
-  min-height: 44px;
+  height: auto;
   /* The safe-area strip moves here from .room-list__scroll — the status bar is
-   * now the drawer's last child, so it is what sits against the home bar. */
-  padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
+   * the drawer's last child, so it is what sits against the home bar. */
+  padding: 4px 8px calc(6px + env(safe-area-inset-bottom)) 8px;
   border-top: var(--border-width) solid var(--border-color);
   border-right: none;
   flex-shrink: 0;
+}
+
+body.quark-mobile .status-bar__main {
+  min-height: 48px;
+}
+
+body.quark-mobile .status-bar__profile {
+  height: 44px;
+}
+
+body.quark-mobile .status-bar__avatar {
+  width: 34px;
+  height: 34px;
+}
+
+body.quark-mobile .status-bar__profile-initial {
+  font-size: 16px;
+  line-height: 34px;
+}
+
+body.quark-mobile .status-bar__btn {
+  min-width: 44px;
+  height: 44px;
+}
+
+body.quark-mobile .status-bar__line {
+  min-height: 32px;
+  padding-left: 46px;
   font-size: var(--font-size);
 }
 
 body.quark-mobile .status-bar__status {
-  padding: 4px 0;
+  padding: 6px 0;
 }
 
 /* Long press means "open the action sheet", and nothing else (#100).

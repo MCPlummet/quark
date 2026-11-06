@@ -549,6 +549,54 @@ pub async fn create_room(
     crate::matrix::rooms::create_room(&client, options).await
 }
 
+/// Pending invites (rooms in the invited state). Local store read only.
+#[tauri::command]
+pub async fn get_invites(
+    state: State<'_, MatrixState>,
+) -> Result<Vec<crate::matrix::invites::InviteInfo>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::invites::get_invites(&client).await
+}
+
+#[tauri::command]
+pub async fn accept_invite(
+    state: State<'_, MatrixState>,
+    room_id: String,
+) -> Result<String, String> {
+    let client = get_client(&state)?;
+    crate::matrix::invites::accept_invite(&client, &room_id).await
+}
+
+#[tauri::command]
+pub async fn decline_invite(
+    state: State<'_, MatrixState>,
+    room_id: String,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::invites::decline_invite(&client, &room_id).await
+}
+
+#[tauri::command]
+pub async fn get_room_nickname(
+    state: State<'_, MatrixState>,
+    room_id: String,
+) -> Result<Option<String>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::rooms::get_room_nickname(&client, &room_id).await
+}
+
+/// Set (or with `None`, reset to the global name) this account's display name
+/// in one room.
+#[tauri::command]
+pub async fn set_room_nickname(
+    state: State<'_, MatrixState>,
+    room_id: String,
+    nickname: Option<String>,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::rooms::set_room_nickname(&client, &room_id, nickname).await
+}
+
 #[tauri::command]
 pub async fn mark_room_read(
     state: State<'_, MatrixState>,
@@ -2059,6 +2107,39 @@ pub async fn get_space_hierarchy(
 ) -> Result<Vec<SpaceChild>, String> {
     let client = get_client(&state)?;
     crate::matrix::spaces::get_space_hierarchy(&client, &space_room_id, max_depth).await
+}
+
+/// Direct children of a space in listing order, from local state when the
+/// space is joined (see `spaces::get_space_children`).
+#[tauri::command]
+pub async fn get_space_children(
+    state: State<'_, MatrixState>,
+    space_room_id: String,
+) -> Result<Vec<SpaceChild>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::spaces::get_space_children(&client, &space_room_id).await
+}
+
+/// Reorder the listed rooms of a space. Returns the number of events written.
+#[tauri::command]
+pub async fn reorder_space_children(
+    state: State<'_, MatrixState>,
+    space_room_id: String,
+    room_ids: Vec<String>,
+) -> Result<usize, String> {
+    let client = get_client(&state)?;
+    crate::matrix::spaces::reorder_space_children(&client, &space_room_id, &room_ids).await
+}
+
+/// List `child_room_id` in a space (writes its `m.space.child`).
+#[tauri::command]
+pub async fn add_space_child(
+    state: State<'_, MatrixState>,
+    space_room_id: String,
+    child_room_id: String,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::spaces::add_space_child(&client, &space_room_id, &child_room_id).await
 }
 
 #[tauri::command]

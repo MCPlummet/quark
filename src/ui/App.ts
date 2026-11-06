@@ -30,6 +30,8 @@ import { ImageLightbox } from "./ImageLightbox.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { MentionPreview } from "./MentionPreview.js";
 import { RoomDialog } from "./RoomDialog.js";
+import { InvitesDialog } from "./InvitesDialog.js";
+import { CreateRoomDialog } from "./CreateRoomDialog.js";
 import { SpaceSettingsDialog } from "./SpaceSettingsDialog.js";
 import { DebugViewer } from "./DebugViewer.js";
 import { RevisionHistoryDialog } from "./RevisionHistoryDialog.js";
@@ -86,6 +88,8 @@ export interface AppComponents {
   commandPalette: CommandPalette;
   mentionPreview: MentionPreview;
   roomDialog: RoomDialog;
+  invitesDialog: InvitesDialog;
+  createRoomDialog: CreateRoomDialog;
   spaceSettingsDialog: SpaceSettingsDialog;
   debugViewer: DebugViewer;
   revisionHistoryDialog: RevisionHistoryDialog;
@@ -146,6 +150,8 @@ export function mountApp(container: HTMLElement): AppComponents {
   const commandPalette = new CommandPalette();
   const mentionPreview = new MentionPreview();
   const roomDialog = new RoomDialog();
+  const invitesDialog = new InvitesDialog();
+  const createRoomDialog = new CreateRoomDialog();
   const spaceSettingsDialog = new SpaceSettingsDialog();
   const debugViewer = new DebugViewer();
   const revisionHistoryDialog = new RevisionHistoryDialog();
@@ -313,9 +319,9 @@ export function mountApp(container: HTMLElement): AppComponents {
   syncComposeRight();
   new ResizeObserver(syncComposeRight).observe(timelineEl);
 
-  // ── Status bar ───────────────────────────────────────────────────────────
-  // Desktop: fixed bottom-right, floating over content. Mobile: reparented into
-  // the room-list drawer as a footer row.
+  // ── Status line ──────────────────────────────────────────────────────────
+  // Desktop: fixed at the foot of the space strip + room list. Mobile:
+  // reparented into the room-list drawer as its footer row.
   //
   // Mobile used to simply `display: none` it, which took presence status,
   // connection state and the encryption indicator with it — presence had no
@@ -349,6 +355,8 @@ export function mountApp(container: HTMLElement): AppComponents {
   mountOverlay(imageLightbox.getElement());
   mountOverlay(commandPalette.getElement());
   mountOverlay(roomDialog.getElement());
+  mountOverlay(invitesDialog.getElement());
+  mountOverlay(createRoomDialog.getElement());
   mountOverlay(spaceSettingsDialog.getElement());
   mountOverlay(debugViewer.getElement());
   mountOverlay(revisionHistoryDialog.getElement());
@@ -385,6 +393,8 @@ export function mountApp(container: HTMLElement): AppComponents {
     commandPalette,
     mentionPreview,
     roomDialog,
+    invitesDialog,
+    createRoomDialog,
     spaceSettingsDialog,
     debugViewer,
     revisionHistoryDialog,

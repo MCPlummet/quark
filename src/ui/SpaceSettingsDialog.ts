@@ -6,6 +6,8 @@ import type { SpaceChild } from "../ipc/types.js";
 import { setRoomName, setRoomTopic } from "../ipc/room_settings.js";
 import { getSpaceChildren } from "../ipc/spaces.js";
 import { DialogBase } from "./DialogBase.js";
+import { commitTextRow } from "./settings/commit_field.js";
+import { applyLocalRoomMeta } from "../app/actions.js";
 
 type SpaceSettingsTab = "general" | "children";
 
@@ -92,29 +94,6 @@ export class SpaceSettingsDialog extends DialogBase {
     return el;
   }
 
-  private _makeSaveButton(label: string, onClick: () => Promise<void>): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "settings-dialog__btn";
-    btn.textContent = `[${label}]`;
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      btn.textContent = "[saving...]";
-      try {
-        await onClick();
-        btn.textContent = "[saved!]";
-      } catch (err) {
-        btn.textContent = "[error]";
-        console.error("Space settings save error:", err);
-      }
-      setTimeout(() => {
-        btn.textContent = `[${label}]`;
-        btn.disabled = false;
-      }, 2000);
-    });
-    return btn;
-  }
-
   // ── General tab ───────────────────────────────────────────────────────────────
 
   private async _buildGeneralTab(): Promise<void> {
@@ -131,18 +110,27 @@ export class SpaceSettingsDialog extends DialogBase {
     const section = this._makeSection();
     section.appendChild(this._makeTitle("Space Identity"));
 
-    let draft = {
-      name: spaceInfo?.name ?? "",
-      topic: spaceInfo?.topic ?? "",
-    };
-
-    const makeTextRow = (label: string, value: string, placeholder: string, onChange: (v: string) => void): void => {
-      const { row } = this.makeTextRow(label, value, placeholder, onChange, "room-settings-dialog__wide-input");
-      section.appendChild(row);
-    };
-
-    makeTextRow("name", draft.name, "Space name", (v) => { draft = { ...draft, name: v }; });
-    makeTextRow("topic", draft.topic, "Space description", (v) => { draft = { ...draft, topic: v }; });
+    // Saves itself on Enter or when you leave the field (commit_field.ts).
+    section.appendChild(commitTextRow({
+      label: "name",
+      value: spaceInfo?.name ?? "",
+      placeholder: "Space name",
+      ariaLabel: "Space name",
+      save: async (v) => {
+        await setRoomName(spaceId, v.trim());
+        applyLocalRoomMeta(spaceId, { name: v.trim() });
+      },
+    }).row);
+    section.appendChild(commitTextRow({
+      label: "topic",
+      value: spaceInfo?.topic ?? "",
+      placeholder: "Space description",
+      ariaLabel: "Space description",
+      save: async (v) => {
+        await setRoomTopic(spaceId, v.trim());
+        applyLocalRoomMeta(spaceId, { topic: v.trim() });
+      },
+    }).row);
 
     const infoSection = this._makeSection();
     infoSection.appendChild(this._makeTitle("Space Info"));
@@ -162,18 +150,6 @@ export class SpaceSettingsDialog extends DialogBase {
     addInfo("space id", spaceId);
     addInfo("members", String(spaceInfo?.member_count ?? "?"));
 
-    const actions = this._makeSection();
-    actions.className += " settings-dialog__actions";
-    actions.appendChild(this._makeSaveButton("save", async () => {
-      const tasks: Promise<void>[] = [];
-      if (draft.name !== (spaceInfo?.name ?? "")) {
-        tasks.push(setRoomName(spaceId, draft.name));
-      }
-      if (draft.topic !== (spaceInfo?.topic ?? "")) {
-        tasks.push(setRoomTopic(spaceId, draft.topic));
-      }
-      await Promise.all(tasks);
-    }));
   }
 
   // ── Children tab ──────────────────────────────────────────────────────────────

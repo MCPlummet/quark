@@ -765,11 +765,74 @@ pub async fn get_room_receipts(client: &Client, room_id: &str) -> Result<Vec<Rea
 pub struct CreateRoomOptions {
     pub name: Option<String>,
     pub topic: Option<String>,
+    /// The room's address: a bare localpart (`dev`) or a full alias
+    /// (`#dev:example.org`, whose server part must be ours).
     pub alias: Option<String>,
     pub is_public: bool,
     pub is_direct: bool,
     pub invite: Vec<String>,
     pub enable_encryption: bool,
+    /// Create a space (`m.space` room type) rather than a room.
+    #[serde(default)]
+    pub is_space: bool,
+    /// The space this room is being created in. Recorded in the new room as
+    /// its `m.space.parent`; listing it in the space is the separate
+    /// `add_space_child`, so the caller can say which half failed.
+    #[serde(default)]
+    pub parent_space_id: Option<String>,
+    /// With a parent space and not public: let members of that space join
+    /// without an invite (the `restricted` join rule).
+    #[serde(default)]
+    pub space_members_can_join: bool,
+}
+
+/// The localpart to request for a room address typed as `dev` or `#dev:server`.
+fn alias_localpart(alias: &str) -> Result<Option<String>, String> {
+    let alias = alias.trim();
+    if alias.is_empty() {
+        return Ok(None);
+    }
+    let local = alias.strip_prefix('#').unwrap_or(alias);
+    let local = match local.split_once(':') {
+        Some((local, _server)) => local,
+        None => local,
+    };
+    if local.is_empty() || local.chars().any(|c| c.is_whitespace() || c == ':' || c == '#') {
+        return Err(format!("Invalid room address: {alias}"));
+    }
+    Ok(Some(local.to_owned()))
+}
+
+/// The `initial_state` events `create_room` sends, as JSON.
+fn initial_state_events(options: &CreateRoomOptions, via: &[String]) -> Vec<serde_json::Value> {
+    let mut events = Vec::new();
+    if options.enable_encryption && !options.is_space {
+        // In the creation request itself rather than a follow-up call, so the
+        // room is never briefly unencrypted.
+        events.push(serde_json::json!({
+            "type": "m.room.encryption",
+            "state_key": "",
+            "content": { "algorithm": "m.megolm.v1.aes-sha2" },
+        }));
+    }
+    if let Some(parent) = options.parent_space_id.as_deref() {
+        events.push(serde_json::json!({
+            "type": "m.space.parent",
+            "state_key": parent,
+            "content": { "via": via, "canonical": true },
+        }));
+        if options.space_members_can_join && !options.is_public {
+            events.push(serde_json::json!({
+                "type": "m.room.join_rules",
+                "state_key": "",
+                "content": {
+                    "join_rule": "restricted",
+                    "allow": [{ "type": "m.room_membership", "room_id": parent }],
+                },
+            }));
+        }
+    }
+    events
 }
 
 /// Find the existing DM room shared with `user_id`, if any.
@@ -829,14 +892,16 @@ fn pick_best_dm(mut candidates: Vec<(u8, u64, String)>) -> Option<String> {
     candidates.into_iter().next().map(|(_, _, room_id)| room_id)
 }
 
-/// Create a new room.
+/// Create a new room or space.
 pub async fn create_room(
     client: &Client,
     options: CreateRoomOptions,
 ) -> Result<String, String> {
     use matrix_sdk::ruma::{
-        api::client::room::create_room::v3::RoomPreset,
-        RoomAliasId,
+        api::client::room::create_room::v3::{CreationContent, RoomPreset},
+        events::AnyInitialStateEvent,
+        room::RoomType,
+        serde::Raw,
     };
 
     let mut request = CreateRoomRequest::new();
@@ -850,9 +915,7 @@ pub async fn create_room(
     }
 
     if let Some(ref alias) = options.alias {
-        let alias_id = RoomAliasId::parse(alias)
-            .map_err(|e| format!("Invalid room alias: {e}"))?;
-        request.room_alias_name = Some(alias_id.alias().to_owned());
+        request.room_alias_name = alias_localpart(alias)?;
     }
 
     request.preset = Some(if options.is_public {
@@ -864,6 +927,27 @@ pub async fn create_room(
     });
 
     request.is_direct = options.is_direct;
+
+    if options.is_space {
+        let mut creation = CreationContent::new();
+        creation.room_type = Some(RoomType::Space);
+        request.creation_content =
+            Some(Raw::new(&creation).map_err(|e| format!("Failed to build the space: {e}"))?);
+    }
+
+    let via = options
+        .parent_space_id
+        .as_deref()
+        .and_then(|id| RoomId::parse(id).ok())
+        .map(|id| crate::matrix::spaces::space_via(client, &id))
+        .unwrap_or_default();
+    request.initial_state = initial_state_events(&options, &via)
+        .into_iter()
+        .map(|event| {
+            serde_json::from_value::<Raw<AnyInitialStateEvent>>(event)
+                .map_err(|e| format!("Failed to build the room's initial state: {e}"))
+        })
+        .collect::<Result<_, _>>()?;
 
     // Add invites
     let invite_ids: Vec<_> = options
@@ -879,18 +963,73 @@ pub async fn create_room(
         .map_err(|e| format!("Failed to create room: {e}"))?;
 
     let room_id = response.room_id().to_string();
-
-    // Enable encryption if requested
-    if options.enable_encryption {
-        if let Some(room) = client.get_room(response.room_id()) {
-            room.enable_encryption()
-                .await
-                .map_err(|e| format!("Failed to enable encryption: {e}"))?;
-        }
-    }
-
-    info!(room_id = %room_id, "Created room");
+    info!(room_id = %room_id, space = options.is_space, "Created room");
     Ok(room_id)
+}
+
+/// This account's display name in one room — its own `m.room.member`
+/// `displayname`, which starts as the global name and can be set per room.
+pub async fn get_room_nickname(client: &Client, room_id: &str) -> Result<Option<String>, String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client.get_room(&room_id).ok_or_else(|| format!("Room {room_id} not found"))?;
+    let own = client.user_id().ok_or("Not logged in")?;
+    let member = room
+        .get_member_no_sync(own)
+        .await
+        .map_err(|e| format!("Failed to read your membership: {e}"))?;
+    Ok(member.and_then(|m| m.display_name().map(str::to_owned)))
+}
+
+/// Set this account's display name in one room, or with `None` put it back to
+/// the global display name.
+///
+/// "Back to global" has to write the global name rather than drop the field:
+/// a member event with no `displayname` shows as the bare user ID localpart,
+/// not as the profile name.
+pub async fn set_room_nickname(
+    client: &Client,
+    room_id: &str,
+    nickname: Option<String>,
+) -> Result<(), String> {
+    use matrix_sdk::ruma::events::room::member::{MembershipState, RoomMemberEventContent};
+
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client.get_room(&room_id).ok_or_else(|| format!("Room {room_id} not found"))?;
+    let own = client.user_id().ok_or("Not logged in")?.to_owned();
+
+    let nickname = match nickname.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()) {
+        Some(n) => Some(n),
+        None => client
+            .account()
+            .get_display_name()
+            .await
+            .map_err(|e| format!("Failed to read your display name: {e}"))?,
+    };
+
+    let current = room
+        .get_member_no_sync(&own)
+        .await
+        .map_err(|e| format!("Failed to read your membership: {e}"))?;
+    // Start from the current join event so the per-room avatar survives.
+    let mut content = current
+        .as_ref()
+        .and_then(|m| m.event().original_content().cloned())
+        .filter(|c| c.membership == MembershipState::Join)
+        .unwrap_or_else(|| RoomMemberEventContent::new(MembershipState::Join));
+    content.displayname = nickname;
+    // Fields that describe how we *joined*, not who we are. Re-sending them in
+    // a join→join update is at best noise, and `join_authorised_via_users_server`
+    // is worse: in a room joined through a restricted (space-members) rule, the
+    // homeserver rejects the event unless the authorising server signed it —
+    // which it did for the original join, not for this one.
+    content.join_authorized_via_users_server = None;
+    content.third_party_invite = None;
+    content.reason = None;
+
+    room.send_state_event_for_key(&own, content)
+        .await
+        .map_err(|e| format!("Failed to set your room nickname: {e}"))?;
+    Ok(())
 }
 
 /// A single pinned event's content, resolved from the room timeline.
@@ -1675,6 +1814,9 @@ mod tests {
             is_direct: false,
             invite: vec!["@alice:example.com".to_string()],
             enable_encryption: true,
+            is_space: false,
+            parent_space_id: None,
+            space_members_can_join: false,
         };
         let json = serde_json::to_string(&opts).expect("serialize");
         let back: CreateRoomOptions = serde_json::from_str(&json).expect("deserialize");
@@ -1711,12 +1853,94 @@ mod tests {
             is_direct: true,
             invite: vec![],
             enable_encryption: false,
+            is_space: false,
+            parent_space_id: None,
+            space_members_can_join: false,
         };
         let json = serde_json::to_string(&opts).expect("serialize");
         let back: CreateRoomOptions = serde_json::from_str(&json).expect("deserialize");
         assert!(back.invite.is_empty());
         assert!(back.is_direct);
         assert!(!back.enable_encryption);
+    }
+
+    #[test]
+    fn create_room_options_from_older_frontends_default_the_new_fields() {
+        // The DM path sends only the original seven fields.
+        let back: CreateRoomOptions = serde_json::from_str(
+            r#"{"name":null,"topic":null,"alias":null,"is_public":false,"is_direct":true,"invite":[],"enable_encryption":true}"#,
+        )
+        .expect("deserialize");
+        assert!(!back.is_space);
+        assert!(back.parent_space_id.is_none());
+        assert!(!back.space_members_can_join);
+    }
+
+    #[test]
+    fn a_room_address_can_be_typed_bare_or_whole() {
+        assert_eq!(alias_localpart("dev").unwrap().as_deref(), Some("dev"));
+        assert_eq!(alias_localpart("#dev").unwrap().as_deref(), Some("dev"));
+        assert_eq!(alias_localpart("#dev:example.org").unwrap().as_deref(), Some("dev"));
+        assert_eq!(alias_localpart("  ").unwrap(), None);
+        assert!(alias_localpart("two words").is_err());
+        assert!(alias_localpart("#:example.org").is_err());
+    }
+
+    fn base_options() -> CreateRoomOptions {
+        CreateRoomOptions {
+            name: Some("dev".into()),
+            topic: None,
+            alias: None,
+            is_public: false,
+            is_direct: false,
+            invite: vec![],
+            enable_encryption: false,
+            is_space: false,
+            parent_space_id: None,
+            space_members_can_join: false,
+        }
+    }
+
+    fn state_types(events: &[serde_json::Value]) -> Vec<&str> {
+        events.iter().map(|e| e["type"].as_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn encryption_is_part_of_the_creation_request() {
+        let opts = CreateRoomOptions { enable_encryption: true, ..base_options() };
+        assert_eq!(state_types(&initial_state_events(&opts, &[])), ["m.room.encryption"]);
+    }
+
+    #[test]
+    fn a_space_is_never_encrypted() {
+        let opts = CreateRoomOptions { enable_encryption: true, is_space: true, ..base_options() };
+        assert!(initial_state_events(&opts, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_room_in_a_space_names_its_parent_and_can_admit_its_members() {
+        let opts = CreateRoomOptions {
+            parent_space_id: Some("!space:example.org".into()),
+            space_members_can_join: true,
+            ..base_options()
+        };
+        let events = initial_state_events(&opts, &["example.org".into()]);
+        assert_eq!(state_types(&events), ["m.space.parent", "m.room.join_rules"]);
+        assert_eq!(events[0]["state_key"], "!space:example.org");
+        assert_eq!(events[0]["content"]["via"][0], "example.org");
+        assert_eq!(events[1]["content"]["join_rule"], "restricted");
+        assert_eq!(events[1]["content"]["allow"][0]["room_id"], "!space:example.org");
+    }
+
+    #[test]
+    fn a_public_room_in_a_space_stays_public() {
+        let opts = CreateRoomOptions {
+            is_public: true,
+            parent_space_id: Some("!space:example.org".into()),
+            space_members_can_join: true,
+            ..base_options()
+        };
+        assert_eq!(state_types(&initial_state_events(&opts, &[])), ["m.space.parent"]);
     }
 
     // #68: [message] in the profile view created a second DM when the existing

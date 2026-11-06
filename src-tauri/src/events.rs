@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Manager};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 /// Wall-clock time (ms since UNIX epoch) when the app finished initializing.
 ///
@@ -82,7 +82,7 @@ pub(crate) fn claim_notification(event_id: &str) -> bool {
 }
 
 use crate::{
-    matrix::{rooms::RoomInfo, timeline::TimelineEvent},
+    matrix::timeline::TimelineEvent,
     notifications::NotificationConfig,
 };
 
@@ -117,11 +117,14 @@ pub struct SyncNewMessage {
     pub event: TimelineEvent,
 }
 
-/// Emitted when the room list changes (join/leave/name change/etc.).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncRoomUpdate {
-    pub rooms: Vec<RoomInfo>,
-}
+/// Emitted when the room list changes (join/leave/invite/rename/space edit).
+///
+/// A signal, not a snapshot: the frontend re-reads rooms, spaces and invites
+/// itself, debounced, so a burst of changes costs one refresh. Shipping the
+/// room list in the payload made every emit pay for a `get_rooms` the listener
+/// then threw away.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncRoomUpdate {}
 
 /// Emitted when typing indicators change in a room.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -717,21 +720,12 @@ pub(crate) fn convert_room_message_event(ev: OriginalSyncRoomMessageEvent) -> Op
     })
 }
 
-// ─── Async room-list helper ───────────────────────────────────────────────────
+// ─── Room-list change signal ──────────────────────────────────────────────────
 
-/// Collect current joined rooms into `RoomInfo` structs and emit a room update.
-pub async fn emit_room_update(client: &Client, app_handle: &tauri::AppHandle) {
-    let recency = app_handle.state::<crate::matrix::rooms::RecencyState>();
-    match crate::matrix::rooms::get_rooms(client, &recency).await {
-        Ok(rooms) => {
-            let payload = SyncRoomUpdate { rooms };
-            if let Err(e) = app_handle.emit(EVENT_ROOM_UPDATE, &payload) {
-                error!("Failed to emit {}: {}", EVENT_ROOM_UPDATE, e);
-            }
-        }
-        Err(e) => {
-            warn!("emit_room_update: failed to fetch rooms: {}", e);
-        }
+/// Tell the frontend the room list changed. See [`SyncRoomUpdate`].
+pub fn emit_room_list_changed(app_handle: &tauri::AppHandle) {
+    if let Err(e) = app_handle.emit(EVENT_ROOM_UPDATE, SyncRoomUpdate::default()) {
+        error!("Failed to emit {}: {}", EVENT_ROOM_UPDATE, e);
     }
 }
 
@@ -835,11 +829,9 @@ mod tests {
     // ── SyncRoomUpdate ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_sync_room_update_empty() {
-        let payload = SyncRoomUpdate { rooms: vec![] };
-        let json = serde_json::to_string(&payload).expect("serialize");
-        let back: SyncRoomUpdate = serde_json::from_str(&json).expect("deserialize");
-        assert!(back.rooms.is_empty());
+    fn test_sync_room_update_is_an_empty_signal() {
+        let json = serde_json::to_string(&SyncRoomUpdate::default()).expect("serialize");
+        assert_eq!(json, "{}");
     }
 
     // ── SyncTypingUpdate ──────────────────────────────────────────────────────

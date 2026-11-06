@@ -30,14 +30,31 @@ describe("pointer reachability gap-fills", () => {
     expect(actionById("check-for-updates")?.chrome).toContain("settings");
   });
 
-  it("declares the room directory reachable from the drawer", () => {
-    expect(actionById("open-directory")?.chrome).toContain("drawer");
+  // The room list header's `+` now opens a menu (new room, new space,
+  // directory) rather than the directory outright (#14).
+  it("declares the room directory reachable from the create menu", () => {
+    expect(actionById("open-directory")?.menus?.map((m) => m.surface)).toContain("create");
   });
 
-  // The button moved out of the room-list header and into the space strip,
-  // which is inside the drawer on mobile — so it stays touch-reachable.
-  it("declares the palette reachable from the space strip", () => {
-    expect(actionById("open-command-palette")?.chrome).toContain("space-strip");
+  // The button moved from the room-list header to the space strip, and then to
+  // the status line — the drawer's footer on mobile, so it stays touch-reachable.
+  it("declares the palette reachable from the status line", () => {
+    expect(actionById("open-command-palette")?.chrome).toContain("status-bar");
+  });
+
+  it("gives creating rooms and spaces, and invites, real affordances", () => {
+    expect(actionById("create-room")?.menus?.map((m) => m.surface)).toEqual(
+      expect.arrayContaining(["create", "space", "section"]),
+    );
+    expect(actionById("create-space")?.chrome).toContain("space-strip");
+    expect(actionById("open-invites")?.chrome).toContain("status-bar");
+    expect(actionById("set-room-nick")?.chrome).toContain("settings");
+  });
+
+  it("reorders rooms from the keyboard and the room menu", () => {
+    expect(actionById("move-room-up")?.bindings).toEqual([{ sequence: "K", context: "roomlist" }]);
+    expect(actionById("move-room-down")?.bindings).toEqual([{ sequence: "J", context: "roomlist" }]);
+    expect(actionById("move-room-up")?.menus?.[0]?.surface).toBe("room");
   });
 });
 

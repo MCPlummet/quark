@@ -1,8 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { SpaceStrip } from "./SpaceStrip.js";
 
 const SPACE_ICON = "data:image/png;base64,SPACE";
-const OWN_AVATAR = "data:image/png;base64,OWN";
 const SPACE_ID = "!s:server";
 
 describe("SpaceStrip", () => {
@@ -30,13 +29,6 @@ describe("SpaceStrip", () => {
       expect(iconSrc()).toBe(SPACE_ICON);
     });
 
-    // The original bug: _loadOwnProfile() re-renders the whole strip when the
-    // user's own avatar download lands, racing the space avatar downloads.
-    it("keeps the icon when the own-profile avatar resolves afterwards", () => {
-      strip.setOwnProfile("C", OWN_AVATAR);
-      expect(iconSrc()).toBe(SPACE_ICON);
-    });
-
     it("keeps the icon across a refreshRooms() setSpaces() call", () => {
       strip.setSpaces([{ id: SPACE_ID, name: "Space" }]);
       expect(iconSrc()).toBe(SPACE_ICON);
@@ -53,11 +45,31 @@ describe("SpaceStrip", () => {
     });
   });
 
-  it("draws the search button as an SVG icon, not a font glyph", () => {
+  it("holds spaces only — profile, settings and search live on the status line", () => {
+    strip.setSpaces([{ id: SPACE_ID, name: "Space" }]);
+    const el = strip.getElement();
+    expect(el.querySelector(".space-strip__profile-btn")).toBeNull();
+    expect(el.querySelector(".space-strip__settings-btn")).toBeNull();
+    expect(el.querySelector(".space-strip__search-btn")).toBeNull();
+  });
+
+  it("ends the space list with a + that creates a space", () => {
+    const onCreate = vi.fn();
+    strip.onCreateSpaceClick(onCreate);
+    strip.setSpaces([{ id: SPACE_ID, name: "Space" }]);
+    const add = strip.getElement().querySelector<HTMLElement>(".space-strip__add")!;
+    expect(add.querySelector("svg.icon")).not.toBeNull();
+    // Directly after the last space, before the closing rule.
+    expect(add.previousElementSibling).toBe(itemEl());
+    expect(add.nextElementSibling?.classList.contains("space-strip__divider")).toBe(true);
+    add.click();
+    add.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    expect(onCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the + even with no spaces yet", () => {
     strip.setSpaces([]);
-    const btn = strip.getElement().querySelector(".space-strip__search-btn")!;
-    expect(btn.querySelector("svg.icon")).not.toBeNull();
-    expect(btn.textContent).toBe("");
+    expect(strip.getElement().querySelector(".space-strip__add")).not.toBeNull();
   });
 
   it("shows the letter fallback until an avatar resolves", () => {

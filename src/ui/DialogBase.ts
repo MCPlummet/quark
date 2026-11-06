@@ -52,6 +52,19 @@ export interface DialogBaseOptions {
  */
 export type DialogKeyOutcome = "handled" | "ignored";
 
+/** Whether keys sent to `target` are text input rather than commands. */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target instanceof HTMLInputElement) {
+    // Buttons and toggles take no typing; everything else (text, search,
+    // number, password, url…) does.
+    return !["button", "submit", "reset", "checkbox", "radio", "range", "color", "file", "image"].includes(target.type);
+  }
+  return false;
+}
+
 export abstract class DialogBase implements Modal {
   /** Root overlay element appended to document.body by App. */
   protected readonly root: HTMLElement;
@@ -198,6 +211,12 @@ export abstract class DialogBase implements Modal {
   }
 
   hide(): void {
+    // Let a focused field finish first: fields that save themselves do so on
+    // blur (settings/commit_field.ts), and hiding a focused element does not
+    // reliably fire blur — nor does clicking the close button on engines where
+    // a click does not take focus (macOS WebKit).
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && this.root.contains(focused)) focused.blur();
     this.root.style.display = "none";
     modalManager.remove(this);
     if (this._resetSequenceOnHide) keymapManager.resetSequence();
@@ -258,6 +277,19 @@ export abstract class DialogBase implements Modal {
    * decide whether to fall through to other behaviour.
    */
   protected routeKey(e: KeyboardEvent): DialogKeyOutcome {
+    // Escape closes from anywhere, a text field included. Dialogs that
+    // override handleKeydown (room, settings, space settings) reach Escape only
+    // through here, so it is checked before the field test below.
+    if (this.isEscape(e)) {
+      e.preventDefault();
+      this.hide();
+      return "handled";
+    }
+    // A key typed into a text field is text. Routing it through the picker
+    // keymap swallowed the first `g` of every "g" typed (it starts the `gg`
+    // sequence), so typing "gg" was needed to get one — in every text field of
+    // every dialog that delegates here.
+    if (isEditableTarget(e.target)) return "ignored";
     const result = keymapManager.resolveKey(e.key, "picker");
     if (result.kind === "action" && result.action === "close") {
       e.preventDefault();

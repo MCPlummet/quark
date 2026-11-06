@@ -1,6 +1,6 @@
 // Application state manager — single source of truth for Quark's runtime state
 
-import type { RoomInfo, TimelineEvent } from "../ipc/types.js";
+import type { RoomInfo, TimelineEvent, InviteInfo } from "../ipc/types.js";
 import type { UpdateInfo } from "../ipc/index.js";
 import type { SendKeyBehavior } from "../ipc/app_config.js";
 
@@ -32,6 +32,8 @@ export interface AppStateSnapshot {
   roomListCache: RoomInfo[];
   /** Room IDs that belong to at least one space (used to filter home view). */
   spaceRoomIds: string[];
+  /** Pending room invites, refreshed with the room list. */
+  invites: InviteInfo[];
   currentTimeline: TimelineEvent[];
   replyToEventId: string | null;
   /** Event ID of the message currently being edited inline, or null. */
@@ -125,6 +127,7 @@ class AppStateManager {
     activePanel: "roomlist",
     roomListCache: [],
     spaceRoomIds: [],
+    invites: [],
     currentTimeline: [],
     replyToEventId: null,
     editingEventId: null,

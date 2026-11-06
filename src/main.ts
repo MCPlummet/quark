@@ -147,11 +147,14 @@ components.spaceStrip.onSelect((spaceId) => {
   void selectSpace(spaceId);
 });
 
-components.spaceStrip.onSettingsClick(() => {
+// ── Status line wiring ───────────────────────────────────────────────────────
+// Search and invites are wired in setupKeyboard, beside the palette and dialogs.
+
+components.statusBar.onSettingsClick(() => {
   openSettings();
 });
 
-components.spaceStrip.onProfileClick(() => {
+components.statusBar.onProfileClick(() => {
   void openOwnProfile();
 });
 

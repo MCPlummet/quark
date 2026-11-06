@@ -57,6 +57,15 @@ import {
   startVerification,
   setupCrossSigning,
   logout,
+  openInvites,
+  acceptInvite,
+  declineInvite,
+  openCreateRoom,
+  createRoomFromForm,
+  applySpaceOrder,
+  moveRoomInSpace,
+  canMoveRoom,
+  roomForReorder,
 } from "./actions.js";
 import { AppState } from "./state.js";
 import { resolveComposeSubmit } from "./compose_submit.js";
@@ -368,6 +377,26 @@ export function dispatchAction(action: string, components: AppComponents): void 
     case "open-directory":
       openRoomDirectory();
       break;
+
+    case "open-invites":
+      openInvites();
+      break;
+
+    case "create-room":
+      void openCreateRoom({ kind: "room" });
+      break;
+
+    case "create-space":
+      // A new top-level space; "New subspace" on a space's menu nests one.
+      void openCreateRoom({ kind: "space", parentSpaceId: null });
+      break;
+
+    case "move-room-up":
+    case "move-room-down": {
+      const roomId = roomForReorder();
+      if (roomId) void moveRoomInSpace(roomId, action === "move-room-up" ? -1 : 1);
+      break;
+    }
 
     case "open-sticker-picker":
       modeManager.transition(Mode.Insert);
@@ -1179,6 +1208,9 @@ export function setupKeyboard(components: AppComponents): void {
       "mute-room": room?.muted ? undefined : () => toggleMute(roomId, true),
       "unmute-room": room?.muted ? () => toggleMute(roomId, false) : undefined,
       "leave-room-confirm": () => void selectRoom(roomId).then(() => confirmAndLeaveRoom()),
+      // Only inside a space's list, and only where there's somewhere to go.
+      "move-room-up": canMoveRoom(roomId, -1) ? () => void moveRoomInSpace(roomId, -1) : undefined,
+      "move-room-down": canMoveRoom(roomId, 1) ? () => void moveRoomInSpace(roomId, 1) : undefined,
     }));
   });
 
@@ -1186,6 +1218,7 @@ export function setupKeyboard(components: AppComponents): void {
   roomList.onSectionContextMenu((spaceId, x, y) => {
     contextMenu.show(x, y, buildMenu("section", currentAvailability({ spaceId }), {
       "open-space-settings": () => void openSpaceSettings(spaceId),
+      "create-room": () => void openCreateRoom({ kind: "room", parentSpaceId: spaceId }),
     }));
   });
 
@@ -1215,18 +1248,54 @@ export function setupKeyboard(components: AppComponents): void {
   spaceStrip.onContextMenu((spaceId, x, y) => {
     contextMenu.show(x, y, buildMenu("space", currentAvailability({ spaceId }), {
       "open-space-settings": () => void openSpaceSettings(spaceId),
+      "create-room": () => void openCreateRoom({ kind: "room", parentSpaceId: spaceId }),
+      "create-space": () => void openCreateRoom({ kind: "space", parentSpaceId: spaceId }),
     }));
   });
+
+  // The room list header's `+`: new room / new space / directory.
+  roomList.onCreateClick((x, y) => {
+    contextMenu.show(x, y, buildMenu("create", currentAvailability(), {
+      "create-room": () => void openCreateRoom({ kind: "room" }),
+      "create-space": () => void openCreateRoom({ kind: "space", parentSpaceId: null }),
+      "open-directory": () => openRoomDirectory(),
+    }));
+  });
+
+  // The `+` closing the space strip's list.
+  spaceStrip.onCreateSpaceClick(() => void openCreateRoom({ kind: "space", parentSpaceId: null }));
+
+  // Drag-to-reorder within a space's section.
+  roomList.onReorder((spaceId, roomIds) => void applySpaceOrder(spaceId, roomIds));
+
+  // Invites: the status line's button and count, and the dialog's answers.
+  const { statusBar, invitesDialog, createRoomDialog } = components;
+  // The status line shows your name beside your avatar.
+  const showOwnName = (): void =>
+    statusBar.setOwnName(AppState.get("ownDisplayName") || AppState.get("ownUserId") || "");
+  showOwnName();
+  AppState.on("ownDisplayName", showOwnName);
+  AppState.on("ownUserId", showOwnName);
+  statusBar.onInvitesClick(() => openInvites());
+  statusBar.setInviteCount(AppState.get("invites").length);
+  AppState.on("invites", (_key, invites) => {
+    statusBar.setInviteCount(invites.length);
+    invitesDialog.setInvites(invites);
+  });
+  invitesDialog.setInvites(AppState.get("invites"));
+  invitesDialog.onAccept((roomId) => acceptInvite(roomId));
+  invitesDialog.onDecline((roomId) => declineInvite(roomId));
+
+  createRoomDialog.onCreate((req) => createRoomFromForm(req));
 
   // ── User keybindings ──────────────────────────────────────────────────────
   void loadQuarkrc().then(applyRcDirectives).catch(() => { /* no rc file is fine */ });
 
   // Wire quick nav palette → selectRoom
-  // Visible palette affordance in the space strip, beside the other app-level
-  // controls. The strip is inside the drawer on mobile, so the palette still
-  // does not depend on knowing Ctrl+K or finding the pull-down gesture.
-  spaceStrip.onSearchClick(() => commandPalette.show());
-  roomList.onDirectoryClick(() => openRoomDirectory());
+  // Visible palette affordance on the status line, beside the other app-level
+  // controls. The status line is the drawer's footer on mobile, so the palette
+  // still does not depend on knowing Ctrl+K or finding the pull-down gesture.
+  statusBar.onSearchClick(() => commandPalette.show());
 
   commandPalette.onSelectRoom((roomId) => {
     void selectRoom(roomId);

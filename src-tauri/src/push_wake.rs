@@ -994,9 +994,19 @@ async fn sync_and_collect(
     config: crate::notifications::NotificationConfig,
     out: std::sync::Arc<std::sync::Mutex<Vec<crate::notify::NotificationSpec>>>,
 ) -> Result<(), String> {
+    let client = background_client(data_dir).await?;
+    wake_sync(&client, config, out).await
+}
+
+/// One push wake's sync on `client`, collecting what it should notify about
+/// into `out`.
+async fn wake_sync(
+    client: &matrix_sdk::Client,
+    config: crate::notifications::NotificationConfig,
+    out: std::sync::Arc<std::sync::Mutex<Vec<crate::notify::NotificationSpec>>>,
+) -> Result<(), String> {
     use matrix_sdk::config::SyncSettings;
 
-    let client = background_client(data_dir).await?;
     // Only one party syncs on a client at a time. When the app's client is the
     // one handed back, a warm loop started while this wake runs waits for its
     // turn instead of flushing E2EE requests alongside it. Held until this
@@ -1008,7 +1018,7 @@ async fn sync_and_collect(
     // Held until this function returns, at which point the handlers come off
     // the client again — see `register_collectors`.
     let _collectors = register_collectors(
-        &client,
+        client,
         Collector {
             config: std::sync::Arc::new(config),
             out: out.clone(),
@@ -1030,7 +1040,7 @@ async fn sync_and_collect(
     // traffic and is invisible from outside: the read-marker filter renders
     // zero either way. Logged as a short fingerprint — the token is not a
     // secret, but it is long and only its identity matters here.
-    let token_before = crate::matrix::client::stored_sync_token(&client).await;
+    let token_before = crate::matrix::client::stored_sync_token(client).await;
     tracing::info!("Push wake starting from sync token: {}", describe_token(&token_before));
 
     let mut settings = SyncSettings::default()
@@ -1050,6 +1060,9 @@ async fn sync_and_collect(
         .sync_once(settings)
         .await
         .map_err(|e| format!("Push sync failed: {e}"))?;
+    // What the warm loop does with every response. This sync advances the
+    // stored token, so the warm loop will never see this response itself.
+    crate::matrix::room_list_watch::apply_sync_response(client, &response, app_handle()).await;
 
     // A room comes back `limited` when the server could not give a delta and
     // resent a chunk of timeline instead. One or two is ordinary; all of them
@@ -1063,7 +1076,7 @@ async fn sync_and_collect(
         );
     }
 
-    let token_after = crate::matrix::client::stored_sync_token(&client).await;
+    let token_after = crate::matrix::client::stored_sync_token(client).await;
     if token_before == token_after {
         tracing::warn!(
             "Push wake did not advance the stored sync token ({}) — the next wake \
@@ -1926,5 +1939,37 @@ mod tests {
 
         assert_eq!(specs.len(), MAX_WAKE_NOTIFICATIONS);
         assert_eq!(specs.last().unwrap().event_id, format!("$e{}", MAX_WAKE_NOTIFICATIONS + 4));
+    }
+
+    /// A push wake's sync advances the stored token like the warm loop's, so
+    /// whatever it does not do for a response, nothing ever will. The warm
+    /// loop writes back the space-child removals the SDK drops (see
+    /// `room_list_watch::removed_space_children`); a wake that skipped that
+    /// left the removed room listed in its space.
+    #[tokio::test]
+    async fn a_push_wake_keeps_a_space_child_removal() {
+        use crate::matrix::test_support::{joined_rooms, own_join, space_child, space_create, state_event, TestHomeserver, ME};
+        use matrix_sdk::ruma::events::StateEventType;
+
+        let hs = TestHomeserver::new().await;
+        let (space, child) = ("!wake-space:example.org", "!wake-child:example.org");
+        hs.sync(joined_rooms(&[(space, vec![space_create(), own_join(), space_child(child)])])).await;
+
+        let removal = state_event("m.space.child", child, ME, serde_json::json!({}));
+        let _wake = hs.mount_sync(joined_rooms(&[(space, vec![removal])])).await;
+        let out = Arc::new(std::sync::Mutex::new(Vec::new()));
+        wake_sync(&hs.client, crate::notifications::NotificationConfig::default(), out).await.unwrap();
+
+        let room = hs.client.get_room(&matrix_sdk::ruma::RoomId::parse(space).unwrap()).unwrap();
+        let stored = room
+            .get_state_event(StateEventType::SpaceChild, child)
+            .await
+            .unwrap()
+            .expect("the child event is stored");
+        let matrix_sdk::deserialized_responses::RawAnySyncOrStrippedState::Sync(raw) = stored else {
+            panic!("a joined room's state is not stripped");
+        };
+        let content = raw.get_field::<serde_json::Value>("content").unwrap().unwrap();
+        assert_eq!(content, serde_json::json!({}), "the stored child is the removal, not the old live event");
     }
 }

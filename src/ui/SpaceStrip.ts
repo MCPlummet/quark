@@ -3,7 +3,7 @@
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { PSEUDO_SPACES, isPseudoSpace } from "../app/pseudo_spaces.js";
 import { attachLongPress } from "../app/long_press.js";
-import { searchIcon } from "./icons.js";
+import { plusIcon } from "./icons.js";
 
 export interface SpaceItem {
   id: string;
@@ -20,13 +20,12 @@ export class SpaceStrip {
    * Resolved space avatars, keyed by space ID.
    *
    * `_render()` rebuilds the strip from scratch (`innerHTML = ""`), and it has
-   * more than one trigger: `setSpaces()` on every room refresh, and
-   * `setOwnProfile()` when the user's own avatar download lands. Those two race
-   * at startup, so without somewhere durable to keep them, an already-resolved
-   * space icon is destroyed by whichever render happens to come last — and
-   * nothing re-fetches it, because the download loop lives in `refreshRooms()`,
-   * which on a warm session restore runs exactly once. Icons then stay letters
-   * for the rest of the session.
+   * more than one trigger (every room refresh calls `setSpaces()`, and the own
+   * profile used to live here too and re-render on its avatar landing). Those
+   * raced at startup, so without somewhere durable to keep them, an
+   * already-resolved space icon was destroyed by whichever render came last —
+   * and nothing re-fetched it, because the download loop lives in
+   * `refreshRooms()`, which only fetches avatars it hasn't resolved yet.
    *
    * Keeping the resolved data URLs here makes `_render()` idempotent: every
    * render path restores what has already been downloaded.
@@ -34,12 +33,8 @@ export class SpaceStrip {
   private _resolvedAvatars = new Map<string, string>();
   private _activeId: string | null = null;
   private _onSelect: ((id: string) => void) | null = null;
-  private _onSettings: (() => void) | null = null;
-  private _onProfile: (() => void) | null = null;
   private _onContextMenu: ((spaceId: string, x: number, y: number) => void) | null = null;
-  private _onSearch: (() => void) | null = null;
-  private _ownAvatarUrl: string | null = null;
-  private _ownInitial: string = "?";
+  private _onCreateSpace: (() => void) | null = null;
 
   constructor() {
     this._el = document.createElement("div");
@@ -70,28 +65,9 @@ export class SpaceStrip {
     this._onSelect = handler;
   }
 
-  /** Wire the search button to the command palette. */
-  onSearchClick(handler: () => void): void {
-    this._onSearch = handler;
-  }
-
-  onSettingsClick(handler: () => void): void {
-    this._onSettings = handler;
-  }
-
-  onProfileClick(handler: () => void): void {
-    this._onProfile = handler;
-  }
-
-  /**
-   * Update the profile-button avatar. Pass `null` to render a colored initial
-   * fallback derived from `initial` (typically the first character of the
-   * user's display name or MXID localpart).
-   */
-  setOwnProfile(initial: string, avatarUrl: string | null): void {
-    this._ownAvatarUrl = avatarUrl;
-    this._ownInitial = (initial && initial[0]) ? initial[0].toUpperCase() : "?";
-    this._render();
+  /** Wire the `+` at the end of the space list (create a space). */
+  onCreateSpaceClick(handler: () => void): void {
+    this._onCreateSpace = handler;
   }
 
   onContextMenu(handler: (spaceId: string, x: number, y: number) => void): void {
@@ -210,92 +186,20 @@ export class SpaceStrip {
       this._el.appendChild(this._createItem({ id: ps.id, name: ps.label }, ps.icon));
     }
 
-    if (this._items.length > 0) {
-      this._el.appendChild(this._createDivider());
-    }
-
+    // The spaces, and the `+` that makes a new one, as one group between rules.
+    this._el.appendChild(this._createDivider());
     for (const item of this._items) {
       this._el.appendChild(this._createItem(item));
     }
-
-    if (this._items.length > 0) {
-      this._el.appendChild(this._createDivider());
-    }
+    this._el.appendChild(this._createAddButton());
+    this._el.appendChild(this._createDivider());
 
     for (const ps of bottomPseudos) {
       this._el.appendChild(this._createItem({ id: ps.id, name: ps.label }, ps.icon));
     }
 
-    // Spacer pushes the settings + profile buttons to the bottom
-    const spacer = document.createElement("div");
-    spacer.className = "space-strip__spacer";
-    spacer.setAttribute("aria-hidden", "true");
-    this._el.appendChild(spacer);
-
-    // Search button — the command palette's visible affordance. It sits with
-    // the other app-level controls at the foot of the strip rather than in the
-    // room-list header, where it read as a filter for the list beneath it
-    // instead of a search across rooms *and* commands.
-    const searchBtn = document.createElement("div");
-    searchBtn.className = "space-strip__settings-btn space-strip__search-btn";
-    searchBtn.setAttribute("role", "button");
-    searchBtn.setAttribute("tabindex", "0");
-    searchBtn.setAttribute("aria-label", "Search rooms and commands");
-    searchBtn.title = "Search rooms and commands (Ctrl+K)";
-    searchBtn.appendChild(searchIcon());
-    searchBtn.addEventListener("click", () => this._onSearch?.());
-    searchBtn.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        this._onSearch?.();
-      }
-    });
-    this._el.appendChild(searchBtn);
-
-    // Settings button — sits above the profile button so the profile (your
-    // identity) is the very last item, closest to the screen edge / thumb.
-    const settingsBtn = document.createElement("div");
-    settingsBtn.className = "space-strip__settings-btn";
-    settingsBtn.setAttribute("role", "button");
-    settingsBtn.setAttribute("tabindex", "0");
-    settingsBtn.setAttribute("aria-label", "Settings");
-    settingsBtn.title = "Settings (?)";
-    settingsBtn.textContent = "⚙";
-    settingsBtn.addEventListener("click", () => this._onSettings?.());
-    settingsBtn.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        this._onSettings?.();
-      }
-    });
-    this._el.appendChild(settingsBtn);
-
-    // Profile button — the avatar (or coloured initial fallback) is the
-    // universal entry point to "my profile" on both desktop and mobile.
-    const profileBtn = document.createElement("div");
-    profileBtn.className = "space-strip__profile-btn";
-    profileBtn.setAttribute("role", "button");
-    profileBtn.setAttribute("tabindex", "0");
-    profileBtn.setAttribute("aria-label", "Your profile");
-    profileBtn.title = "Profile";
-    if (this._ownAvatarUrl) {
-      const img = document.createElement("img");
-      img.src = this._ownAvatarUrl;
-      img.alt = "";
-      img.className = "space-strip__profile-img";
-      profileBtn.appendChild(img);
-    } else {
-      profileBtn.classList.add("space-strip__profile-btn--fallback");
-      profileBtn.textContent = this._ownInitial;
-    }
-    profileBtn.addEventListener("click", () => this._onProfile?.());
-    profileBtn.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        this._onProfile?.();
-      }
-    });
-    this._el.appendChild(profileBtn);
+    // Profile, settings and search used to be stacked here, at the foot of the
+    // strip; they are in the status line now (StatusBar.ts).
 
     this._updateActive();
   }
@@ -337,6 +241,24 @@ export class SpaceStrip {
     });
 
     return el;
+  }
+
+  private _createAddButton(): HTMLElement {
+    const btn = document.createElement("div");
+    btn.className = "space-strip__add";
+    btn.setAttribute("role", "button");
+    btn.setAttribute("tabindex", "0");
+    btn.setAttribute("aria-label", "Create a space");
+    btn.title = "Create a space (:createspace)";
+    btn.appendChild(plusIcon());
+    btn.addEventListener("click", () => this._onCreateSpace?.());
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        this._onCreateSpace?.();
+      }
+    });
+    return btn;
   }
 
   private _createDivider(): HTMLElement {

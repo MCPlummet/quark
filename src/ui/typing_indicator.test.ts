@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
-// @ts-expect-error - no ambient declaration for Vite's ?raw suffix in this project
+// Vite's `?raw` loader; `src/vite-env.d.ts` types it.
 import BASE_CSS from "../style/base.css?raw";
 
 /**
@@ -12,7 +12,7 @@ import BASE_CSS from "../style/base.css?raw";
  */
 function loadStylesheet(): void {
   const style = document.createElement("style");
-  style.textContent = BASE_CSS as string;
+  style.textContent = BASE_CSS;
   document.head.appendChild(style);
 }
 
