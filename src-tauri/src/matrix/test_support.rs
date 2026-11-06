@@ -75,9 +75,13 @@ impl TestHomeserver {
     }
 
     /// Answer `GET /hierarchy` for `space` with `status` and `body`.
+    ///
+    /// Matched by suffix: the SDK picks the stable `v1` path or MSC2946's
+    /// unstable one from the server's advertised versions.
     pub async fn mount_hierarchy(&self, space: &str, status: u16, body: Value) {
+        let suffix = format!("/rooms/{space}/hierarchy");
         Mock::given(method("GET"))
-            .and(path(format!("/_matrix/client/v1/rooms/{space}/hierarchy")))
+            .and(move |req: &wiremock::Request| req.url.path().ends_with(&suffix))
             .respond_with(ResponseTemplate::new(status).set_body_json(body))
             .mount(&self.server)
             .await;

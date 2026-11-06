@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::space_order::{between, compare_children, order_updates, sanitize_order, ChildKey};
 
@@ -442,9 +442,12 @@ async fn reconcile_children(client: &Client, space: &matrix_sdk::Room, local: &[
 /// a reorder or a new child until the server's own view caught up. It is kept
 /// as the fallback for a space this account has not joined.
 ///
-/// Children are described from the local room when this account knows it;
-/// one it has never seen has only its ID, and is never shown in the room list
-/// anyway (that lists joined rooms).
+/// Children are described from the local room when this account knows it.
+/// One it has never seen is described from the space's `/hierarchy` (cached,
+/// and asked only when there is such a child). That matters most for whether
+/// the child is a space: an unjoined subspace gets a section in its parent, and
+/// that section is where the rooms this account did join inside it are listed.
+/// When the server will not answer, an unknown child has only its ID.
 pub async fn get_space_children(
     client: &Client,
     space_room_id: &str,
@@ -459,6 +462,15 @@ pub async fn get_space_children(
         events = read_child_events(&space).await?;
     }
 
+    let known_room = |id: &str| RoomId::parse(id).ok().and_then(|id| client.get_room(&id));
+    let mut described = HashMap::new();
+    if events.iter().any(|event| known_room(&event.room_id).is_none()) {
+        match hierarchy_cached(client, space_room_id).await {
+            Ok(listed) => described.extend(listed.into_iter().map(|c| (c.room_id.clone(), c))),
+            Err(e) => debug!(space = %space_room_id, "Unknown children left undescribed: {e}"),
+        }
+    }
+
     let mut children = Vec::new();
     for event in events {
         let stored = event
@@ -467,8 +479,7 @@ pub async fn get_space_children(
             .and_then(|v| v.as_str())
             .map(str::to_owned);
         let order = effective_order(space_room_id, &event.room_id, stored);
-        let known = RoomId::parse(&event.room_id).ok().and_then(|id| client.get_room(&id));
-        let child = match known {
+        let child = match known_room(&event.room_id) {
             Some(room) => SpaceChild {
                 room_id: event.room_id,
                 name: room.compute_display_name().await.ok().map(|n| n.to_string()),
@@ -479,15 +490,20 @@ pub async fn get_space_children(
                 order,
                 canonical_alias: room.canonical_alias().map(|a| a.to_string()),
             },
-            None => SpaceChild {
-                room_id: event.room_id,
-                name: None,
-                topic: None,
-                avatar_url: None,
-                is_space: false,
-                member_count: None,
-                order,
-                canonical_alias: None,
+            // The order is the store's either way: it is current with sync,
+            // and the cached hierarchy may predate a reorder.
+            None => match described.remove(&event.room_id) {
+                Some(listed) => SpaceChild { order, ..listed },
+                None => SpaceChild {
+                    room_id: event.room_id,
+                    name: None,
+                    topic: None,
+                    avatar_url: None,
+                    is_space: false,
+                    member_count: None,
+                    order,
+                    canonical_alias: None,
+                },
             },
         };
         children.push(child);
@@ -681,7 +697,7 @@ mod tests {
         assert_eq!(effective_order("!other-space:x", "!b:x", Some("q".into())).as_deref(), Some("q"));
     }
 
-    use crate::matrix::test_support::TestHomeserver;
+    use crate::matrix::test_support::{joined_rooms, own_join, space_child, space_create, TestHomeserver, ME};
     use serde_json::json;
 
     const FORBIDDEN: fn() -> serde_json::Value =
@@ -701,5 +717,72 @@ mod tests {
         assert!(get_space_children(&hs.client, space).await.is_err());
 
         assert_eq!(hs.requests_to("/hierarchy").await, 1);
+    }
+
+    /// A `/hierarchy` entry, and the `children_state` a space's own entry lists.
+    fn hierarchy_room(id: &str, name: &str, room_type: Option<&str>, children: &[&str]) -> serde_json::Value {
+        let children_state: Vec<_> = children
+            .iter()
+            .map(|c| json!({
+                "type": "m.space.child", "state_key": c, "sender": ME,
+                "origin_server_ts": 1_700_000_000_000u64, "content": { "via": ["example.org"] },
+            }))
+            .collect();
+        json!({
+            "room_id": id, "name": name, "num_joined_members": 3,
+            "world_readable": false, "guest_can_join": false,
+            "room_type": room_type, "children_state": children_state,
+        })
+    }
+
+    /// A joined space whose children are a subspace this account never
+    /// joined and a room it did.
+    async fn space_with_unjoined_subspace(hs: &TestHomeserver, space: &str, sub: &str, room: &str) {
+        hs.sync(joined_rooms(&[
+            (space, vec![space_create(), own_join(), space_child(sub), space_child(room)]),
+            (room, vec![own_join()]),
+        ]))
+        .await;
+    }
+
+    /// The store holds nothing about a room this account never joined, so
+    /// whether such a child is a space has to come from the server. Answered
+    /// `false`, an unjoined subspace was dropped from its parent's list along
+    /// with every room this account did join inside it.
+    #[tokio::test]
+    async fn an_unjoined_subspace_of_a_joined_space_is_a_space() {
+        let hs = TestHomeserver::new().await;
+        let (space, sub, room) = ("!work-a:example.org", "!eng-a:example.org", "!general-a:example.org");
+        space_with_unjoined_subspace(&hs, space, sub, room).await;
+        hs.mount_hierarchy(space, 200, json!({ "rooms": [
+            hierarchy_room(space, "Work", Some("m.space"), &[sub, room]),
+            hierarchy_room(sub, "Eng", Some("m.space"), &[]),
+            hierarchy_room(room, "General", None, &[]),
+        ] }))
+        .await;
+
+        let children = get_space_children(&hs.client, space).await.unwrap();
+
+        let eng = children.iter().find(|c| c.room_id == sub).expect("the subspace is listed");
+        assert!(eng.is_space, "the server says it is a space");
+        assert_eq!(eng.name.as_deref(), Some("Eng"));
+        let general = children.iter().find(|c| c.room_id == room).expect("the joined room is listed");
+        assert!(!general.is_space);
+    }
+
+    /// Describing unknown children is best effort: a joined space still lists
+    /// its children, from the store, when the server will not say more.
+    #[tokio::test]
+    async fn a_joined_space_lists_its_children_when_the_hierarchy_fails() {
+        let hs = TestHomeserver::new().await;
+        let (space, sub, room) = ("!work-b:example.org", "!eng-b:example.org", "!general-b:example.org");
+        space_with_unjoined_subspace(&hs, space, sub, room).await;
+        hs.mount_hierarchy(space, 403, FORBIDDEN()).await;
+
+        let children = get_space_children(&hs.client, space).await.unwrap();
+
+        let mut ids: Vec<_> = children.iter().map(|c| c.room_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, [sub, room]);
     }
 }

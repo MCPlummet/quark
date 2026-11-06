@@ -939,9 +939,14 @@ child event with an empty or missing `via` is a removed child and is skipped.
 `/hierarchy` is only the fallback for a space this account has not joined. It
 used to serve every read, and the room list reads every space's children on
 every refresh: a server round-trip per space per room-list change, which also
-lagged a reorder until the server's own view caught up. One consequence: a
-child this account knows nothing about (an unjoined subspace) has only its ID,
-so its section is not drawn — the room list lists joined rooms anyway.
+lagged a reorder until the server's own view caught up. A child this account
+knows nothing about — never joined, so not in the store — is described from the
+space's `/hierarchy` instead, which is asked only when the space has such a
+child, and cached. Whether it is a space is the part that matters: an unjoined
+subspace still gets its section, and that section is where the rooms this
+account *did* join inside it are listed. (For a while the store alone answered,
+calling every unknown child a room, and those rooms vanished from the parent.)
+If the server won't answer, unknown children are listed by ID only.
 
 Removed children need help from us. The spec removes a child by replacing its
 event with one that has no `via`, and matrix-sdk 0.9 drops any state event it
@@ -996,10 +1001,12 @@ reorders run one at a time, each computed from the last. A refused write shows
 the error and redraws the server's order. Rooms the list doesn't show (unjoined
 children, subspaces) keep their slots.
 
-`/hierarchy` answers for unjoined subspaces are cached for five minutes
+`/hierarchy` answers — for unjoined subspaces, and for describing a joined
+space's unknown children — are cached for five minutes, and failures for one
 (`HIERARCHY_CACHE`, `matrix/spaces.rs`): the open space is re-read on every
-room-list change, and without the cache each unjoined subspace in it cost a
-possibly-federated server request per refresh.
+room-list change, and without the cache each such space in it cost a
+possibly-federated server request per refresh. Failures count: a subspace this
+account left but still knows answers 403 for as long as it stays left.
 
 **Creating rooms and spaces.** The room list header's `+` opens a menu — **New
 room**, **New space**, **Browse room directory** — and the space strip's `+`, a
