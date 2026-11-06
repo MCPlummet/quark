@@ -26,11 +26,13 @@ import { refreshRooms, applyCacheConfig } from "./rooms.js";
 import { loadThemeFromConfig } from "./theme.js";
 
 /** Apply persisted runtime preferences from config at session start: the
- *  in-memory cache budgets and the read-receipt display setting (non-critical). */
+ *  in-memory cache budgets, the read-receipt display setting and the typing
+ *  opt-out (non-critical). */
 function _applyStartupConfig(): void {
   void getAppConfig().then((cfg) => {
     applyCacheConfig(cfg);
     AppState.set("showReadReceipts", cfg.general.show_read_receipts);
+    AppState.set("sendTypingNotices", cfg.general.send_typing_notifications);
   }).catch(() => { /* defaults stand */ });
 }
 

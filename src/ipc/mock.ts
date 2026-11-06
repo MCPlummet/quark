@@ -450,6 +450,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "join_room":
     case "leave_room":
     case "mark_room_read":
+    case "set_typing":
     case "send_reaction":
     case "edit_message":
     case "redact_message":
@@ -822,7 +823,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     }
     case "get_app_config":
       return {
-        general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true },
+        general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: true, send_read_receipts: true, show_read_receipts: true, send_typing_notifications: true, prompt_session_verification: true },
         sync: { timeline_limit: 50 },
         media: { auto_load_images: true, inline_video: true, max_image_width: 600, max_image_height: 400, sticker_max_size: 256, cache_size_mb: 500 },
         gif: { provider: "klipy", api_key: "", rating: "pg", cache_results: true },

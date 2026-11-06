@@ -49,6 +49,9 @@ export interface AppStateSnapshot {
   sendKeyBehavior: SendKeyBehavior;
   /** When false, other users' read-receipt avatars are not rendered in the timeline. */
   showReadReceipts: boolean;
+  /** When false, typing is not announced (mirrors general.send_typing_notifications;
+   *  the backend enforces it as well, so the default before config loads is safe). */
+  sendTypingNotices: boolean;
   /** Active text-selection target, or null if not in text-select mode. */
   textSelectMode: TextSelectMode;
   /** Metadata for an available update, or null when none/up to date. */
@@ -137,6 +140,7 @@ class AppStateManager {
     vimMode: true,
     sendKeyBehavior: "auto",
     showReadReceipts: true,
+    sendTypingNotices: true,
     textSelectMode: null,
     updateAvailable: null,
   };

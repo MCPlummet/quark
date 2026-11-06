@@ -15,6 +15,9 @@ export interface GeneralConfig {
   send_read_receipts: boolean;
   /** Show other users' read-receipt avatars in the timeline. */
   show_read_receipts: boolean;
+  /** Tell a room when you are typing in it (m.typing). Others' typing is shown
+   *  either way. */
+  send_typing_notifications: boolean;
   /** Prompt to verify a new/unverified session on startup (until verified or the
    *  user picks "Never ask"). */
   prompt_session_verification: boolean;
@@ -88,7 +91,7 @@ export interface AppConfig {
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
-  general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: true, send_read_receipts: true, show_read_receipts: true, prompt_session_verification: true, send_key_behavior: "auto" },
+  general: { theme: "phosphor", notifications: true, confirm_redact: true, icon_radius: "50%", vim_mode: true, send_read_receipts: true, show_read_receipts: true, send_typing_notifications: true, prompt_session_verification: true, send_key_behavior: "auto" },
   sync: { timeline_limit: 50 },
   media: { auto_load_images: true, inline_video: true, max_image_width: 600, max_image_height: 400, sticker_max_size: 256, cache_size_mb: 500 },
   gif: { provider: "klipy", api_key: "", rating: "pg", cache_results: true },

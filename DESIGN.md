@@ -1330,7 +1330,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 
 | Tab | Contents |
 |-----|----------|
-| **General** | Theme selector, notification toggles, send-key behaviour, read-receipt toggles, confirm-redact toggle |
+| **General** | Theme selector, notification toggles, send-key behaviour, read-receipt toggles, typing-notice toggle, confirm-redact toggle |
 | **Account** | Devices & Verification — see below |
 | **Media** | Image auto-load, max dimensions, cache-size limit |
 | **GIF** | Provider (Klipy / Giphy), API key, content rating |
@@ -1456,7 +1456,32 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
       place, so a hovered reader list survives incoming messages. An open
       reader list follows its cluster as the timeline scrolls and closes once
       the cluster is out of view.
-- [x] Typing indicators
+- [x] Typing indicators (`m.typing`), both ways.
+    - **Sending**: Insert-mode edits to the compose box announce typing.
+      `app/typing.ts` owns the schedule: an announcement goes out on the
+      first keystroke and is renewed every 3 s while keystrokes continue, and
+      the keystrokes in between make no call at all. The backend's
+      `set_typing` sends exactly what it is asked, each announcement lasting
+      4 s on the server (the same timings as matrix-sdk's
+      `Room::typing_notice`, which it bypasses: that throttle, started a
+      moment after the frontend's, would drop some of the renewals and let
+      the announcement lapse mid-sentence). The announcement is withdrawn when
+      the message is sent, the box is emptied, Insert mode is left, the room
+      changes or an edit starts, unless it has already lapsed. Editing a sent
+      message announces nothing. Requests go one at a time, so a stop never
+      overtakes the start it withdraws. Settings → General → Typing
+      (`general.send_typing_notifications`) turns announcing off, in the
+      frontend (no calls) and in the backend (enforced, failing closed if the
+      config can't be read). Others' typing is still shown.
+    - **Receiving**: the latest list is kept for every room, not just the
+      open one, because the server pushes it only when it changes. A room
+      opened mid-sentence shows the dots straight away. A room's list is
+      dropped when the room leaves the room list (left, kicked or banned),
+      since no update will come to correct it. The server's list includes
+      the reader; the backend drops them using the session's own user ID.
+      The indicator follows the open room, clearing when none is open, and
+      names are display names: "A is typing…", "A and B are typing…",
+      "A, B and C are typing…", "A, B and N others are typing…".
 - [x] Presence (when homeserver enables it)
 - [x] Authenticated media (MSC3916)
 - [x] Room summary previews (MSC3266)
@@ -1921,6 +1946,7 @@ theme = "phosphor"            # the active theme; outranks quarkrc's `colorschem
                               # (see Theme precedence below)
 notifications = true
 confirm_redact = true
+send_typing_notifications = true  # tell rooms when you are typing (m.typing)
 send_key_behavior = "auto"    # auto | enter | newline — what the Enter key does
                               #   auto:    send on desktop, newline on mobile
                               #   enter:   always send (Shift+Enter inserts a newline)

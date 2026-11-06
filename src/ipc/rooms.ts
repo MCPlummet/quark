@@ -111,6 +111,17 @@ export async function markRoomRead(roomId: string): Promise<void> {
 }
 
 /**
+ * Tell the room this user is (or has stopped) typing. Each call sends a request
+ * (an announcement lasts 4 s on the server), so call it on `TypingNotifier`'s
+ * schedule in `app/typing.ts`, not per keystroke. The backend skips announcing
+ * when `general.send_typing_notifications` is off. Matches the Rust
+ * `set_typing` command.
+ */
+export async function setTyping(roomId: string, typing: boolean): Promise<void> {
+  return invoke<void>("set_typing", { roomId, typing });
+}
+
+/**
  * Get other members' latest public read positions for a room (initial seed for
  * the read-receipt avatars). Matches the Rust `get_room_receipts` command.
  */

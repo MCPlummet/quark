@@ -6,6 +6,7 @@ import type { TimelineEvent, IncomingVerificationRequest, VerificationUpdate, Ve
 import { refreshRooms, selectRoom, resolveDisplayName, applyIncomingReaction, handleIncomingVerificationRequest, handleVerificationUpdate, handleOwnTrustChanged, catchUpPendingVerificationRequests, ensureSenderAvatarDownloaded, applyIncomingRedaction, isInContextView, reloadCurrentRoomTimeline, refreshPinnedMessagesIfOpen, homeViewHandlePresence, recordLiveEvent, renderLiveEvent } from "./actions.js";
 import { showToast } from "../ui/NotificationToast.js";
 import { handleIncomingMessage } from "./notifications.js";
+import { recordTyping, setupTypingIndicator, clearTypingState } from "./typing.js";
 
 // ── Tauri event types ─────────────────────────────────────────────────────────
 
@@ -261,25 +262,13 @@ export async function startSync(components: AppComponents): Promise<() => void> 
   const unlistenTyping = await tauriListen<SyncTypingPayload>(
     "quark://sync/typing",
     (payload) => {
-      const currentRoom = AppState.get("currentRoomId");
-      if (payload.room_id !== currentRoom) return;
-
-      const { typingIndicator } = components;
-      const textEl = typingIndicator.querySelector(".typing-indicator__text");
-
-      if (payload.user_ids.length > 0) {
-        const names = payload.user_ids.join(", ");
-        const label = payload.user_ids.length === 1
-          ? `${names} is typing…`
-          : `${names} are typing…`;
-        if (textEl) textEl.textContent = label;
-        typingIndicator.classList.add("typing-indicator--active");
-      } else {
-        if (textEl) textEl.textContent = "";
-        typingIndicator.classList.remove("typing-indicator--active");
-      }
+      // Kept for every room, not just the open one: the server pushes the
+      // list only when it changes, so a room opened mid-sentence has no new
+      // update coming to say someone is typing. Repaints if it is the open one.
+      recordTyping(payload.room_id, payload.user_ids);
     }
   );
+  const unbindTypingIndicator = setupTypingIndicator(typingIndicator);
 
   // ── quark://sync/presence ─────────────────────────────────────────────────
   const unlistenPresence = await tauriListen<SyncPresencePayload>(
@@ -402,6 +391,7 @@ export async function startSync(components: AppComponents): Promise<() => void> 
     unlistenUnread,
     unlistenRooms,
     unlistenTyping,
+    unbindTypingIndicator,
     unlistenPresence,
     unlistenConnected,
     unlistenReaction,
@@ -427,6 +417,8 @@ export async function startSync(components: AppComponents): Promise<() => void> 
  * Stop all sync listeners.
  */
 export function stopSync(): void {
+  // Cleared while the indicator is still bound, so it is repainted empty.
+  clearTypingState();
   for (const unlisten of _unlisteners) {
     unlisten();
   }

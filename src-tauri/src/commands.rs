@@ -613,6 +613,33 @@ pub async fn mark_room_read(
     crate::matrix::rooms::mark_room_read(&client, &room_id, send_public).await
 }
 
+/// Announce that the user is (or has stopped) typing in a room. The frontend
+/// decides when (`src/app/typing.ts`) and already skips announcing when the
+/// user has opted out; the opt-out is enforced here as well, since the
+/// frontend's copy of the setting arrives after startup. A stop always passes
+/// through, which covers opting out mid-sentence — and needs no config read,
+/// so a poisoned config lock refuses announcements without blocking stops.
+#[tauri::command]
+pub async fn set_typing(
+    state: State<'_, MatrixState>,
+    config_state: State<'_, Mutex<AppConfig>>,
+    room_id: String,
+    typing: bool,
+) -> Result<(), String> {
+    if typing {
+        let enabled = config_state
+            .lock()
+            .map_err(|_| "App config lock poisoned")?
+            .general
+            .send_typing_notifications;
+        if !enabled {
+            return Ok(());
+        }
+    }
+    let client = get_client(&state)?;
+    crate::matrix::rooms::set_typing(&client, &room_id, typing).await
+}
+
 /// Load other members' latest public read positions for a room (initial seed).
 #[tauri::command]
 pub async fn get_room_receipts(

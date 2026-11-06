@@ -69,6 +69,7 @@ import {
 } from "./actions.js";
 import { AppState } from "./state.js";
 import { resolveComposeSubmit } from "./compose_submit.js";
+import { setupTypingNotices, typingNotifier } from "./typing.js";
 import { setupFileDrop } from "./file_drop.js";
 import {
   enterMessageTextSelect,
@@ -819,6 +820,7 @@ function submitComposeBox(components: AppComponents): void {
     editingEventId: AppState.get("editingEventId"),
     hasStagedAttachments: input.hasStagedAttachments(),
   });
+  if (plan.kind !== "none") typingNotifier.stop();
   switch (plan.kind) {
     case "none":
       return;
@@ -1502,6 +1504,8 @@ export function setupKeyboard(components: AppComponents): void {
     }
     input.focus();
   });
+
+  setupTypingNotices(input);
 
   input.onInput((value) => {
     if (modeManager.current !== Mode.Insert) return;

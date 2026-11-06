@@ -3,16 +3,18 @@ use matrix_sdk::{
     room::RoomMemberRole,
     ruma::{
         api::client::room::create_room::v3::Request as CreateRoomRequest,
+        api::client::typing::create_typing_event::{self, v3::Typing},
         events::receipt::ReceiptThread,
         RoomId,
     },
-    Client, RoomMemberships,
+    Client, RoomMemberships, RoomState,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::Semaphore;
 use tracing::info;
 
@@ -624,6 +626,37 @@ pub async fn get_room_members(client: &Client, room_id: &str) -> Result<Vec<Room
             }
         })
         .collect())
+}
+
+/// How long a typing announcement lasts on the server. The frontend renews it
+/// every 3 s while typing continues (`RESEND_MS` in `src/app/typing.ts`), a
+/// second before it would lapse — the same timings as matrix-sdk's
+/// `Room::typing_notice`.
+const TYPING_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Send a typing notice for a room, every time it is asked. The frontend owns
+/// the schedule, so this bypasses `Room::typing_notice`: its own 3 s throttle,
+/// started a moment after the frontend's, would drop some of the frontend's
+/// renewals and let the announcement lapse mid-sentence.
+pub async fn set_typing(client: &Client, room_id: &str, typing: bool) -> Result<(), String> {
+    let room_id = RoomId::parse(room_id).map_err(|e| format!("Invalid room ID: {e}"))?;
+    let room = client
+        .get_room(&room_id)
+        .ok_or_else(|| format!("Room {room_id} not found"))?;
+    if room.state() != RoomState::Joined {
+        return Err(format!("Not joined to room {room_id}"));
+    }
+    let typing = if typing { Typing::Yes(TYPING_TIMEOUT) } else { Typing::No };
+    let request = create_typing_event::v3::Request::new(
+        room.own_user_id().to_owned(),
+        room_id,
+        typing,
+    );
+    client
+        .send(request, None)
+        .await
+        .map_err(|e| format!("Failed to send typing notice: {e}"))?;
+    Ok(())
 }
 
 /// Mark a room as fully read by sending a read receipt for the latest event.

@@ -30,6 +30,7 @@ import { getPseudoSpace, sortByRecency } from "../pseudo_spaces.js";
 import { clearRoomNotificationsIpc } from "../../ipc/notifications.js";
 import { muteRoom, unmuteRoom } from "../notifications.js";
 import { enterHomeView, exitHomeView } from "./home.js";
+import { refreshTypingIndicator } from "../typing.js";
 
 import type { RoomMember, TimelineEvent, EventContextPage } from "../../ipc/types.js";
 import type { AppConfig } from "../../ipc/app_config.js";
@@ -231,7 +232,7 @@ export async function selectRoom(
   roomId: string,
   opts: { keepPanelFocus?: boolean } = {},
 ): Promise<void> {
-  const { roomList, roomHeader, timeline, memberList, statusBar, typingIndicator } = getComponents();
+  const { roomList, roomHeader, timeline, memberList, statusBar } = getComponents();
   const prevRoom = AppState.get("currentRoomId");
 
   // Opening any room dismisses the Home canvas — selectRoom is reachable
@@ -278,11 +279,6 @@ export async function selectRoom(
   // appear blank while waiting for message data — but skip it when we can paint
   // instantly from the per-room cache below (revisit), to avoid a skeleton flash.
   if (!_roomTimelineCache.has(roomId)) timeline.showSkeleton();
-
-  // Clear typing indicator when switching rooms
-  const typingTextEl = typingIndicator.querySelector(".typing-indicator__text");
-  if (typingTextEl) typingTextEl.textContent = "";
-  typingIndicator.classList.remove("typing-indicator--active");
 
   // Clear unread badge optimistically in local cache, then send read receipt.
   // Use updateRoomBadge (not setRooms) so the current space filter is preserved.
@@ -379,6 +375,10 @@ export async function selectRoom(
     void _downloadReactionEmoji(cachedTimeline.events, timeline);
     _downloadInlineEmoji(timeline);
   }
+  // The indicator was painted for the incoming room when currentRoomId changed,
+  // while the outgoing room's names were still loaded; repaint with this room's
+  // (restored from cache on a revisit; raw IDs until members load otherwise).
+  refreshTypingIndicator();
 
   try {
     // Authoritative fetch — runs even when we painted from cache, to reconcile
@@ -440,6 +440,7 @@ export async function selectRoom(
           timeline.updateSenderName(m.user_id, m.display_name);
         }
       }
+      refreshTypingIndicator();
 
       // Populate the member list sidebar
       memberList.setMembers(members.map(roomMemberToEntry));
