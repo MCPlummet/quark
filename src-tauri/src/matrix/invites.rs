@@ -65,7 +65,12 @@ pub async fn get_invites(client: &Client) -> Result<Vec<InviteInfo>, String> {
             inviter_id,
             is_direct,
             is_space: room.is_space(),
-            is_encrypted: room.is_encrypted().await.unwrap_or(false),
+            // The stored value, which the stripped `m.room.encryption` sets —
+            // not `Room::is_encrypted`, which asks the server whenever a sync
+            // has not marked the encryption state known. Stripped state never
+            // does, and the server refuses a non-member's state read, so that
+            // was a failing request per invite on every refresh.
+            is_encrypted: matrix_sdk::BaseRoom::is_encrypted(&room),
         });
     }
     // Stable order for the dialog: the server gives no invite timestamp in
@@ -139,6 +144,39 @@ mod tests {
         assert_eq!(real_name(RoomDisplayName::EmptyWas("Alice".into())), None);
         assert_eq!(real_name(RoomDisplayName::Named("dev".into())).as_deref(), Some("dev"));
         assert_eq!(real_name(RoomDisplayName::Calculated("Bob".into())).as_deref(), Some("Bob"));
+    }
+
+    /// `get_invites` runs on every room-list refresh. `Room::is_encrypted`
+    /// fetches the encryption state from the server until a sync has marked it
+    /// known, which stripped invite state never does — and the server refuses
+    /// a non-member's state read, so it never becomes known: one failing
+    /// request per invite per refresh, forever, and the flag always false.
+    #[tokio::test]
+    async fn listing_invites_reads_only_the_stripped_state() {
+        use crate::matrix::test_support::{TestHomeserver, ME};
+        use serde_json::json;
+
+        let hs = TestHomeserver::new().await;
+        let alice = "@alice:example.org";
+        let stripped = |kind: &str, key: &str, content: serde_json::Value| {
+            json!({ "type": kind, "state_key": key, "sender": alice, "content": content })
+        };
+        hs.sync(json!({
+            "next_batch": "s1",
+            "rooms": { "invite": { "!secret:example.org": { "invite_state": { "events": [
+                stripped("m.room.name", "", json!({ "name": "Secret plans" })),
+                stripped("m.room.encryption", "", json!({ "algorithm": "m.megolm.v1.aes-sha2" })),
+                stripped("m.room.member", ME, json!({ "membership": "invite" })),
+            ] } } } },
+        }))
+        .await;
+
+        let invites = get_invites(&hs.client).await.unwrap();
+
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].name.as_deref(), Some("Secret plans"));
+        assert!(invites[0].is_encrypted, "the stripped state says the room is encrypted");
+        assert_eq!(hs.requests_to("/state/").await, 0, "listing invites must not read state from the server");
     }
 
     #[test]
