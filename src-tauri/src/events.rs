@@ -22,6 +22,7 @@ use matrix_sdk::{
         SyncEphemeralRoomEvent, SyncMessageLikeEvent, ToDeviceEvent,
     },
     ruma::serde::Raw,
+    ruma::{OwnedUserId, UserId},
     Client, Room,
 };
 use serde::{Deserialize, Serialize};
@@ -130,7 +131,20 @@ pub struct SyncRoomUpdate {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncTypingUpdate {
     pub room_id: String,
+    /// Everyone typing except this user — see [`others_typing`].
     pub user_ids: Vec<String>,
+}
+
+/// The server's `m.typing` list for a room without this user in it. The list
+/// includes the reader, and the session's own ID is always known here, where
+/// the frontend learns it only once the profile fetch succeeds — so the reader
+/// is dropped before the list leaves the backend.
+fn others_typing(user_ids: &[OwnedUserId], own_user_id: &UserId) -> Vec<String> {
+    user_ids
+        .iter()
+        .filter(|u| **u != *own_user_id)
+        .map(|u| u.to_string())
+        .collect()
 }
 
 /// Emitted when a read receipt is received.
@@ -527,8 +541,7 @@ pub fn setup_sync_event_handlers(client: &Client, app_handle: &tauri::AppHandle)
     client.add_event_handler(
         |ev: SyncTypingEvent, room: Room, Ctx(app): Ctx<tauri::AppHandle>| async move {
             let room_id = room.room_id().to_string();
-            let user_ids: Vec<String> =
-                ev.content.user_ids.iter().map(|u| u.to_string()).collect();
+            let user_ids = others_typing(&ev.content.user_ids, room.own_user_id());
             let payload = SyncTypingUpdate { room_id, user_ids };
             if let Err(e) = app.emit(EVENT_TYPING, &payload) {
                 error!("Failed to emit {}: {}", EVENT_TYPING, e);
@@ -847,6 +860,20 @@ mod tests {
         assert_eq!(back.room_id, "!room:example.com");
         assert_eq!(back.user_ids.len(), 2);
         assert_eq!(back.user_ids[0], "@alice:example.com");
+    }
+
+    #[test]
+    fn typing_list_leaves_out_the_reader() {
+        let own = UserId::parse("@me:x").unwrap();
+        let ids = |s: &[&str]| -> Vec<OwnedUserId> {
+            s.iter().map(|u| UserId::parse(*u).unwrap()).collect()
+        };
+        assert!(others_typing(&ids(&["@me:x"]), &own).is_empty());
+        assert_eq!(
+            others_typing(&ids(&["@alice:x", "@me:x", "@bob:x"]), &own),
+            vec!["@alice:x", "@bob:x"],
+        );
+        assert!(others_typing(&[], &own).is_empty());
     }
 
     #[test]
