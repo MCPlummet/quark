@@ -7,15 +7,37 @@
 //! joined, left or renamed from another client did not appear here until the
 //! app was restarted, and an invite never appeared at all.
 //!
-//! The sync loop runs [`room_list_changed`] on every response, after the SDK
-//! has already folded it into the store, and emits the event when it says so.
+//! Every sync — the warm loop's and a push wake's — hands its response to
+//! [`apply_sync_response`] after the SDK has folded it into the store. That
+//! writes back the space-child removals the SDK drops, then runs
+//! [`room_list_changed`] and emits the event when it says so. Both paths
+//! advance the stored sync token, so a response one of them skips is never
+//! seen again.
 //! It is deliberately a cheap, conservative test over the raw events rather
 //! than a diff of the room list: a false positive costs one debounced refresh,
 //! a false negative is the bug this module exists to fix.
 
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::sync::SyncResponse;
+use matrix_sdk::Client;
 use serde::Deserialize;
+
+/// What one sync response means for the room list, whichever sync made it.
+///
+/// Writes back the space-child removals the SDK dropped, then — when there is
+/// an app to tell — signals the frontend if the list changed. The removals go
+/// first so the refresh the signal triggers reads a store that has them. A
+/// push wake in a process with no app passes `None`: the store is what the app
+/// reads when it next starts.
+pub async fn apply_sync_response(client: &Client, response: &SyncResponse, app: Option<&tauri::AppHandle>) {
+    let removals = removed_space_children(response);
+    crate::matrix::spaces::persist_child_removals(client, removals).await;
+    let Some(app) = app else { return };
+    let own_user_id = client.user_id().map(|u| u.to_string()).unwrap_or_default();
+    if room_list_changed(response, &own_user_id) {
+        crate::events::emit_room_list_changed(app);
+    }
+}
 
 /// State event types whose change alters a room's row, its place in a space,
 /// or whether it is listed at all.

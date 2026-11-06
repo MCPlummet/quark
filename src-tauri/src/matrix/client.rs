@@ -510,7 +510,6 @@ fn spawn_sync_loop(
         let mut cursor = SyncCursor::new(stored_sync_token(&client).await);
         let mut was_connected = false;
         let mut backoff_secs: u64 = 1;
-        let own_user_id = client.user_id().map(|u| u.to_string()).unwrap_or_default();
 
         loop {
             // `sync_with_callback` rather than `sync`, for the callback alone:
@@ -526,20 +525,11 @@ fn spawn_sync_loop(
             // refresh the frontend makes on the event already sees the room
             // that was joined, left or renamed (see `room_list_watch`).
             let progress = |response: matrix_sdk::sync::SyncResponse| {
-                let notify = app_handle.as_ref().filter(|_| {
-                    crate::matrix::room_list_watch::room_list_changed(&response, &own_user_id)
-                });
-                let notify = notify.cloned();
-                let removals = crate::matrix::room_list_watch::removed_space_children(&response);
                 let client = client.clone();
+                let app = app_handle.clone();
                 async move {
                     crate::push_wake::note_warm_sync_progress();
-                    // Before the signal, so the refresh it triggers reads the
-                    // store with the removal in it.
-                    crate::matrix::spaces::persist_child_removals(&client, removals).await;
-                    if let Some(app) = notify {
-                        crate::events::emit_room_list_changed(&app);
-                    }
+                    crate::matrix::room_list_watch::apply_sync_response(&client, &response, app.as_ref()).await;
                     matrix_sdk::LoopCtrl::Continue
                 }
             };

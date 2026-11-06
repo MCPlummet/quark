@@ -124,14 +124,19 @@ pub fn space_child(child: &str) -> Value {
 }
 
 /// A `/sync` body whose `rooms.join` holds each `(room ID, state events)`.
+///
+/// Each body gets its own `next_batch`: the SDK skips a response whose token
+/// matches the one it already holds, as a repeat.
 pub fn joined_rooms(rooms: &[(&str, Vec<Value>)]) -> Value {
+    static BATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let batch = BATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let join: serde_json::Map<String, Value> = rooms
         .iter()
         .map(|(id, state)| {
             (id.to_string(), json!({ "state": { "events": state }, "timeline": { "events": [] } }))
         })
         .collect();
-    json!({ "next_batch": "test-batch", "rooms": { "join": join } })
+    json!({ "next_batch": format!("test-batch-{batch}"), "rooms": { "join": join } })
 }
 
 /// The `m.room.create` that makes a room a space.
