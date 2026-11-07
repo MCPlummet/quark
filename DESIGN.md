@@ -1218,7 +1218,7 @@ handler is now a compile error, not a silent no-op.
 :verify <user-id>                              Start verification with a user
 :cross-sign / :setup-cross-signing [password]  Set up cross-signing
 :logout                                        Log out
-:theme <name>                                  Switch to a colour theme
+:theme <name>                                  Switch to a colour theme (built-in name, or a custom theme's file name)
 :version                                       Show the running version
 :update                                        Check for updates (desktop only)
 :upload <path>                                 Upload a file — not yet implemented
@@ -1336,7 +1336,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 | **GIF** | Provider (Klipy / Giphy), API key, content rating |
 | **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
 | **Notifications** | Enable / preview / sender toggles, push controls, test notification |
-| **Themes** | Theme picker and hot-reload path |
+| **Themes** | Theme picker, custom themes (with the folder's path on desktop), import from a theme link |
 | **About** | App version, Quark on GitHub link, Updates section (desktop only — see below) |
 
 The tab strip never scrolls horizontally; long option text is constrained within each tab's panel.
@@ -1813,6 +1813,10 @@ alongside `openExternalUrl` opened every link twice.
 
 Themes are TOML files in the `themes/` folder of Quark's config directory: `~/.config/quark/themes/` on Linux, `~/Library/Application Support/quark/themes/` on macOS, `%APPDATA%\quark\config\themes\` on Windows (the `directories` crate's config dir for `quark`). The active theme is set in `config.toml` beside it.
 
+On iOS and Android the folder exists too, inside the app sandbox (Tauri's app config dir), where the user can't reach it. Themes get there by [importing a link](#importing-a-theme), which works the same on every platform. Settings → Themes shows the folder's path on desktop and doesn't mention a folder on mobile.
+
+A custom theme is named by its **file name** in that folder, e.g. `nord-tweaked.toml`. That is what Settings writes to `config.toml`'s `theme`, and what `:theme` accepts (`:theme nord-tweaked` works too, since `.toml` is implied). It is not an absolute path because iOS moves the app container on update, so a stored path would stop resolving. Absolute paths still load (older configs stored them, and `:theme /some/where.toml` is fine), and Settings still marks those as current.
+
 ### Theme File Structure
 
 ```toml
@@ -1914,7 +1918,18 @@ The fragment never reaches a server. The address bar is the editor's state — e
 
 The editor writes **canonical TOML**: every field, in the table and key order of the [structure above](#theme-file-structure) and the files in `/themes/`. Unlike the app's lenient custom-theme loader, the output satisfies the strict Rust `Theme` struct and `validate_theme`. Importing a partial or partly invalid theme fills in or replaces those fields from Phosphor and lists each change — except the fields that say whose theme it is: a missing or blank `meta.name` becomes "Untitled theme" (not "Phosphor", which would pass it off as the built-in), and an invalid `author`/`version` is left out. Integer fields are `u32` in Rust, so values above 4294967295 are rejected.
 
-Implementation: `src/theme/share.ts` holds a schema mirroring the Rust struct, which drives the TOML output, the validation and the share codec (shared with the app for a future in-app import). `themeToCssVars` in `src/theme/loader.ts` is the single field→CSS mapping, used by both `applyTheme` and the preview. The page is `src/theme-editor/`, built into `docs/theme/` by `pnpm build:theme-editor`. That output is committed like `docs/demo`, so rebuild it after changing either directory.
+Implementation: `src/theme/share.ts` holds a schema mirroring the Rust struct, which drives the TOML output, the validation and the share codec. `src/theme/import.ts` turns pasted text (link, share string or TOML) into a complete theme plus its issues; the editor and the app's importer both use it. `themeToCssVars` in `src/theme/loader.ts` is the single field→CSS mapping, used by both `applyTheme` and the preview. The page is `src/theme-editor/`, built into `docs/theme/` by `pnpm build:theme-editor`. That output is committed like `docs/demo`, so rebuild it after changing either directory.
+
+### Importing a theme
+
+Settings → Themes → **Import a theme** takes anything the editor's import takes: a quark.tel/theme link, a bare share string, or theme TOML. Enter or **[import]** runs it:
+
+1. The text is read with the editor's importer (`src/theme/import.ts`): decoded if it's a link, parsed, then completed from Phosphor the same way the editor completes an import. Text that isn't a theme is refused with the reason, before anything is written.
+2. It's saved as canonical TOML, under a short header, to `<themes folder>/<slug>.toml`, where the slug comes from `meta.name` (`themeSlug`, capped at 64 characters). The backend (`import_custom_theme`) accepts only slug-shaped names (lowercase ASCII letters, digits, single inner hyphens), caps files at 64 KiB, checks that the text parses as TOML, and writes through a temporary file.
+3. If a theme already has that file name, nothing is written. The button becomes **[replace]** for that same text, and the status line names the installed theme. Editing the text turns it back into **[import]**.
+4. Once saved, the theme is listed, applied, and stored as `general.theme`. The status line says how many settings had to be filled in or fixed.
+
+The import doesn't fetch anything: the theme is in the link's fragment. Tapping a quark.tel/theme link on a phone still opens the web editor, so the way into the app is copying the link and pasting it here. Making those links open Quark directly would need universal links / app links.
 
 ### Theme Hot-Reloading
 Themes reload on file save (watched via `notify` crate / filesystem events passed through Tauri). No restart required.
