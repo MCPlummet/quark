@@ -135,7 +135,8 @@ export {
 export { setupCrossSigning } from "./actions/crypto.js";
 
 // Theme loading.
-export { loadTheme, loadThemeFromConfig, configThemeOverridesRc, DEFAULT_THEME } from "./actions/theme.js";
+export { loadTheme, loadThemeFromConfig, configThemeOverridesRc, DEFAULT_THEME, importThemeText } from "./actions/theme.js";
+export type { ThemeImportResult } from "./actions/theme.js";
 
 // Member list.
 export { toggleMemberList } from "./actions/members.js";
