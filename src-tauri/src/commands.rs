@@ -2719,15 +2719,22 @@ pub fn update_supported() -> bool {
 
 /// Load a theme file and return it as a JSON value.
 ///
+/// `theme_path` is an absolute path, or the name of a file in the themes
+/// folder (`nord-tweaked.toml`, or `nord-tweaked`) — see
+/// [`crate::config::theme::resolve_theme_path`].
+///
 /// The TOML is parsed leniently — only valid TOML syntax is required; missing
 /// theme fields are fine because the TypeScript `applyTheme` already handles
 /// partial data (all fields optional).  Strict per-field color validation
 /// (validate_theme) is NOT run here: bad values just fall back to CSS defaults
 /// on the frontend, which is better UX than blocking with an error.
 #[tauri::command]
-pub async fn load_theme(theme_path: String) -> Result<serde_json::Value, String> {
-    let path = Path::new(&theme_path);
-    let content = std::fs::read_to_string(path)
+pub async fn load_theme(
+    paths: State<'_, crate::Paths>,
+    theme_path: String,
+) -> Result<serde_json::Value, String> {
+    let path = crate::config::theme::resolve_theme_path(&paths.config_dir, &theme_path);
+    let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read theme file '{}': {e}", path.display()))?;
     let toml_val: toml::Value = toml::from_str(&content)
         .map_err(|e| format!("Failed to parse theme TOML: {e}"))?;
@@ -2735,72 +2742,52 @@ pub async fn load_theme(theme_path: String) -> Result<serde_json::Value, String>
         .map_err(|e| format!("Failed to convert theme to JSON: {e}"))
 }
 
-/// A custom theme entry returned by `list_custom_themes`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomThemeEntry {
-    /// Display name from the [meta] section of the TOML file.
-    pub name: String,
-    /// Absolute path to the .toml file on disk.
-    pub path: String,
-}
-
-/// Lenient TOML shape used only for extracting a display name from a theme
-/// file without requiring every field to be present.
-#[derive(Deserialize)]
-struct PartialThemeMeta {
-    name: Option<String>,
-}
-#[derive(Deserialize)]
-struct PartialTheme {
-    meta: Option<PartialThemeMeta>,
-}
-
-/// Scan `<config_dir>/themes/` for *.toml files and return their names and
-/// paths.  Every .toml file is included regardless of whether it is a complete
-/// valid theme — display name falls back to the filename stem when the [meta]
-/// table is absent.  Full validation happens later when the user clicks Apply.
+/// Scan `<config_dir>/themes/` for *.toml files and return their names, ids
+/// and paths.  Every .toml file is included regardless of whether it is a
+/// complete valid theme — display name falls back to the filename stem when
+/// the [meta] table is absent.  Full validation happens later when the user
+/// clicks Apply.
 #[tauri::command]
 pub async fn list_custom_themes(
     paths: State<'_, crate::Paths>,
-) -> Result<Vec<CustomThemeEntry>, String> {
-    let themes_dir = paths.config_dir.join("themes");
+) -> Result<Vec<crate::config::theme::CustomThemeEntry>, String> {
+    crate::config::theme::list_custom_themes_in(&paths.config_dir)
+}
 
-    if !themes_dir.exists() {
-        return Ok(vec![]);
+/// Save an imported theme as `<file_stem>.toml` in the themes folder. Without
+/// `overwrite`, an existing file of that name is left alone and reported.
+#[tauri::command]
+pub async fn import_custom_theme(
+    paths: State<'_, crate::Paths>,
+    file_stem: String,
+    content: String,
+    overwrite: bool,
+) -> Result<crate::config::theme::SaveThemeOutcome, String> {
+    crate::config::theme::save_custom_theme(&paths.config_dir, &file_stem, &content, overwrite)
+}
+
+/// The themes folder as the user would find it, or `None` where they can't:
+/// on iOS and Android it sits inside the app sandbox, so the UI talks about
+/// importing instead of a folder.
+///
+/// The folder is created here if it doesn't exist yet: Settings tells the user
+/// to put theme files in it, and on a fresh install nothing else has made it.
+#[tauri::command]
+pub fn custom_themes_dir(paths: State<'_, crate::Paths>) -> Option<String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = paths;
+        None
     }
-
-    let mut entries = Vec::new();
-    let read = std::fs::read_dir(&themes_dir)
-        .map_err(|e| format!("Failed to read themes directory: {e}"))?;
-
-    for entry in read.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("toml") {
-            continue;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let dir = crate::config::theme::themes_dir(&paths.config_dir);
+        // Still worth naming if this fails: the user can make it themselves.
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!("Failed to create themes folder {}: {e}", dir.display());
         }
-
-        // Try a lenient parse just to get the display name; fall back to the
-        // filename stem so even incomplete themes appear in the list.
-        let display_name = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| toml::from_str::<PartialTheme>(&content).ok())
-            .and_then(|t| t.meta)
-            .and_then(|m| m.name)
-            .unwrap_or_else(|| {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string()
-            });
-
-        entries.push(CustomThemeEntry {
-            name: display_name,
-            path: path.to_string_lossy().into_owned(),
-        });
+        Some(dir.to_string_lossy().into_owned())
     }
-
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(entries)
 }
 
 #[tauri::command]

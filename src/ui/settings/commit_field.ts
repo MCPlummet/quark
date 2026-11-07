@@ -40,9 +40,40 @@ export interface CommitField<E extends HTMLElement> {
 /** How long "saved" stays up. */
 const SAVED_FLASH_MS = 2000;
 
-type StatusKind = "dirty" | "saving" | "saved" | "error" | null;
+export type StatusKind = "dirty" | "saving" | "saved" | "error" | null;
 
-function makeShell(label: string): { row: HTMLElement; line: HTMLElement; status: (kind: StatusKind, text?: string) => void } {
+export interface StatusLine {
+  /** The line itself; append it under the field. */
+  el: HTMLElement;
+  /** Show what is happening, or clear the line with `null`. */
+  set(kind: StatusKind, text?: string): void;
+}
+
+/**
+ * The line under a field that says what is happening to it — unsaved, saving,
+ * saved, or the error — announced to screen readers as it changes. "saved"
+ * clears itself after `savedMs`; pass `null` when the message is a result
+ * worth reading rather than a confirmation.
+ */
+export function statusLine(savedMs: number | null = SAVED_FLASH_MS): StatusLine {
+  const el = document.createElement("div");
+  el.className = "settings-dialog__field-status";
+  el.setAttribute("aria-live", "polite");
+
+  let flash: ReturnType<typeof setTimeout> | null = null;
+  const set = (kind: StatusKind, text = ""): void => {
+    if (flash) clearTimeout(flash);
+    flash = null;
+    el.className = "settings-dialog__field-status" + (kind ? ` settings-dialog__field-status--${kind}` : "");
+    el.textContent = text;
+    if (kind === "saved" && savedMs !== null) {
+      flash = setTimeout(() => set(null), savedMs);
+    }
+  };
+  return { el, set };
+}
+
+function makeShell(label: string): { row: HTMLElement; line: HTMLElement; status: StatusLine["set"] } {
   const row = document.createElement("div");
   row.className = "settings-dialog__field";
   const line = document.createElement("div");
@@ -53,25 +84,13 @@ function makeShell(label: string): { row: HTMLElement; line: HTMLElement; status
   line.appendChild(lbl);
   row.appendChild(line);
 
-  const statusEl = document.createElement("div");
-  statusEl.className = "settings-dialog__field-status";
-  statusEl.setAttribute("aria-live", "polite");
-  row.appendChild(statusEl);
-
-  let flash: ReturnType<typeof setTimeout> | null = null;
-  const status = (kind: StatusKind, text = ""): void => {
-    if (flash) clearTimeout(flash);
-    flash = null;
-    statusEl.className = "settings-dialog__field-status" + (kind ? ` settings-dialog__field-status--${kind}` : "");
-    statusEl.textContent = text;
-    if (kind === "saved") {
-      flash = setTimeout(() => status(null), SAVED_FLASH_MS);
-    }
-  };
-  return { row, line, status };
+  const status = statusLine();
+  row.appendChild(status.el);
+  return { row, line, status: status.set };
 }
 
-const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+/** An error as a status line shows it. */
+export const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** A text field that saves on Enter or when focus leaves it. */
 export function commitTextRow(spec: CommitTextSpec): CommitField<HTMLInputElement> {

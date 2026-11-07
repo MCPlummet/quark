@@ -1232,7 +1232,7 @@ handler is now a compile error, not a silent no-op.
 :verify <user-id>                              Start verification with a user
 :cross-sign / :setup-cross-signing [password]  Set up cross-signing
 :logout                                        Log out
-:theme <name>                                  Switch to a colour theme
+:theme <name>                                  Switch to a colour theme (built-in name, or a custom theme's file name)
 :version                                       Show the running version
 :update                                        Check for updates (desktop only)
 :upload <path>                                 Upload a file — not yet implemented
@@ -1350,7 +1350,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 | **GIF** | Provider (Klipy / Giphy), API key, content rating |
 | **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
 | **Notifications** | Enable / preview / sender toggles, push controls, test notification |
-| **Themes** | Theme picker and hot-reload path |
+| **Themes** | Theme picker, custom themes (with the folder's path on desktop), import from a theme link |
 | **About** | App version, Quark on GitHub link, Updates section (desktop only — see below) |
 
 The tab strip never scrolls horizontally; long option text is constrained within each tab's panel.
@@ -1921,6 +1921,20 @@ alongside `openExternalUrl` opened every link twice.
 
 Themes are TOML files in the `themes/` folder of Quark's config directory: `~/.config/quark/themes/` on Linux, `~/Library/Application Support/quark/themes/` on macOS, `%APPDATA%\quark\config\themes\` on Windows (the `directories` crate's config dir for `quark`). The active theme is set in `config.toml` beside it.
 
+On iOS and Android the folder exists too, inside the app sandbox (Tauri's app config dir), where the user can't reach it. Themes get there by [importing a link](#importing-a-theme), which works the same on every platform. Settings → Themes shows the folder's path on desktop, creating the folder if it isn't there yet, and doesn't mention a folder on mobile.
+
+A custom theme is named by its **file name** in that folder, e.g. `nord-tweaked.toml`. That is what Settings writes to `config.toml`'s `theme`, and what `:theme` and `colorscheme` accept (`:theme nord-tweaked` works too, since `.toml` is implied). It is not an absolute path because iOS moves the app container on update, so a stored path would stop resolving.
+
+How a theme name resolves (`loadTheme`, then the backend's `resolve_theme_path`):
+
+| Given | Means |
+|---|---|
+| a built-in's name (`nord`) | the built-in, even if the folder has a `nord.toml` |
+| any other bare name (`nord-tweaked`, `nord.toml`) | that file in the themes folder, `.toml` implied |
+| a path with a directory part (`/abs/x.toml`, `themes/x.toml`, `../x.toml`) | that path, as given: absolute, or relative to the working directory as theme paths always were |
+
+Only a bare name is looked up in the folder, so `..` can't climb out of it. Absolute paths still load (older configs stored them), and Settings still marks those as current. A hand-placed file that shares a built-in's name is reachable as `nord.toml`; an imported theme never takes a built-in's name (see [Importing a theme](#importing-a-theme)).
+
 ### Theme File Structure
 
 ```toml
@@ -2012,17 +2026,39 @@ Themes once had `prompt.symbol`, an input prompt glyph the UI no longer draws. T
 
 **[quark.tel/theme](https://quark.tel/theme/)** is a web editor for theme files: every field above as a form control, previewed live on the real client (`docs/demo`, embedded same-origin), with a download of the finished `.toml` for the [themes folder](#theming). It can start from any built-in theme, and imports TOML (pasted, picked or dropped) or a theme link.
 
-**Share format.** A theme travels as a *share string*: the unpadded base64url (RFC 4648 §5) of the theme's UTF-8 TOML. There is no other envelope, so reading one is decode → the ordinary TOML theme parser. A link is the editor URL with the share string as its fragment:
+**Share format.** A theme travels as a *share string*: unpadded base64url (RFC 4648 §5) of a payload whose first byte gives its version.
+
+| Version | First byte | Payload |
+|---|---|---|
+| 1 (written today) | `0x01` | that byte, then the theme's UTF-8 TOML compressed with raw DEFLATE (RFC 1951) against a preset dictionary |
+| 0 (read only) | the TOML's first byte | the theme's UTF-8 TOML as is: links made before compression |
+
+TOML can't begin with a byte below `0x09` (a document starts with whitespace, a newline, `#`, `[` or a key), so those bytes mark versioned payloads and version 0 needs no marker. Bytes `0x00` and `0x02`–`0x08` are reserved; a decoder that meets one says the link needs a newer Quark instead of calling it garbage — provided the string could be one: a single token (line breaks allowed, spaces not) of at least 12 bytes, as the shortest real payload, Phosphor, is 18. Shorter text with such a first byte is a word that happens to be base64 ("Blue" decodes to `0x06`…) and is reported as not a theme. Past the version, reading one is decompress → the ordinary TOML theme parser. A link is the editor URL with the share string as its fragment:
 
 ```
-https://quark.tel/theme/#W21ldGFdCm5hbWUgPSAiUGhvc3Bob3Ii…
+https://quark.tel/theme/#Ae3Uyw3DIAwG4JUINshdogv0hI2z_wilUixMQWmlKrdeQ3j4x3yP0…
 ```
 
-The fragment never reaches a server. The address bar is the editor's state — every edit rewrites it, so reloading or sending the link reproduces the theme. Decoders should accept a whole link (use what follows `#`), the standard alphabet, padding, and line breaks. A full theme encodes to roughly 1.5 KB.
+The **dictionary** is Phosphor in canonical TOML, frozen in `src/theme/share_dictionary.ts`. Every theme shares its keys, layout and most values with it, so a full theme comes to about 250 characters instead of about 1,470, short enough to paste into a message or fit in a small QR code (Phosphor itself is 24). The dictionary can never change: a decoder needs the identical bytes, so editing it would break every version-1 link already shared. `share.test.ts` pins it with a link made by an independent encoder (Node's zlib). If schema drift ever makes it compress badly, the fix is a version 2 with its own dictionary, read alongside version 1. Compression uses fflate on both sides, synchronously and in every webview, with no dependence on `CompressionStream`.
+
+Decoders accept a whole link (they use what follows `#`), the standard alphabet, padding and line breaks. They refuse strings over 16 KiB, and stop decompressing past 64 KiB of TOML (the backend's theme-file limit), so a crafted link can't expand into a bomb. The encoder uses fflate's default memory level: raising it only buys a larger hash table (32 MB at `mem: 12`), which a ~1.3 KB theme can't use.
+
+The fragment never reaches a server. The address bar is the editor's state: every edit rewrites it, so reloading or sending the link reproduces the theme.
 
 The editor writes **canonical TOML**: every field, in the table and key order of the [structure above](#theme-file-structure) and the files in `/themes/`. Unlike the app's lenient custom-theme loader, the output satisfies the strict Rust `Theme` struct and `validate_theme`. Importing a partial or partly invalid theme fills in or replaces those fields from Phosphor and lists each change — except the fields that say whose theme it is: a missing or blank `meta.name` becomes "Untitled theme" (not "Phosphor", which would pass it off as the built-in), and an invalid `author`/`version` is left out. Integer fields are `u32` in Rust, so values above 4294967295 are rejected.
 
-Implementation: `src/theme/share.ts` holds a schema mirroring the Rust struct, which drives the TOML output, the validation and the share codec (shared with the app for a future in-app import). `themeToCssVars` in `src/theme/loader.ts` is the single field→CSS mapping, used by both `applyTheme` and the preview. The page is `src/theme-editor/`, built into `docs/theme/` by `pnpm build:theme-editor`. That output is committed like `docs/demo`, so rebuild it after changing either directory.
+Implementation: `src/theme/share.ts` holds a schema mirroring the Rust struct, which drives the TOML output, the validation and the share codec. `src/theme/import.ts` turns pasted text (link, share string or TOML) into a complete theme plus its issues; the editor and the app's importer both use it. `themeToCssVars` in `src/theme/loader.ts` is the single field→CSS mapping, used by both `applyTheme` and the preview. The page is `src/theme-editor/`, built into `docs/theme/` by `pnpm build:theme-editor`. That output is committed like `docs/demo`, so rebuild it after changing either directory.
+
+### Importing a theme
+
+Settings → Themes → **Import a theme** takes anything the editor's import takes: a quark.tel/theme link, a bare share string, theme TOML, or a message with a link in it (`here's mine: https://quark.tel/theme/#…`, `<https://…>`, a link followed by a full stop). TOML is tried before a link is looked for, so a theme file that mentions a link in a comment is still read as the file. Enter or **[import]** runs it:
+
+1. The text is read with the editor's importer (`src/theme/import.ts`): decoded if it's a link, parsed, then completed from Phosphor the same way the editor completes an import. Text that isn't a theme is refused with the reason, before anything is written.
+2. It's saved as canonical TOML, under a short header, to `<themes folder>/<stem>.toml`. The stem is the first of `<slug>`, `<slug>-2`, `<slug>-3` … (up to 99) that is free or already holds a theme of exactly this `meta.name`, where the slug comes from `meta.name` (`themeSlug`, capped at 64 characters). The slug drops case, punctuation and every non-Latin script — "Ночь" and "夕焼け" both slug to `theme` — so a file that slugs alike but holds a differently named theme is passed over, never replaced. Built-in names (`nord`) and Windows device names (`con`, `nul`, `aux`, `prn`, `com0`–`9`, `lpt0`–`9`) are skipped too, so `:theme <stem>` always reaches an imported theme. The backend (`import_custom_theme`) accepts only slug-shaped names (lowercase ASCII letters, digits, single inner hyphens, not a device name), caps files at 64 KiB, checks that the text parses as TOML, and writes through a temporary file. The importer is loaded on first use (`app/actions/theme_import.ts`), so its TOML parser and DEFLATE codec aren't in the startup bundle.
+3. If a theme of the same name is already installed, nothing is written. The button becomes **[replace]** for that same text, and the status line names the installed theme. Editing the text turns it back into **[import]**.
+4. Once saved, the theme is applied and stored as `general.theme`, then listed. The status line says how many settings had to be filled in or fixed, and stays up. A listing that fails after the save leaves the theme applied and says so in the list.
+
+The import doesn't fetch anything: the theme is in the link's fragment. Tapping a quark.tel/theme link on a phone still opens the web editor, so the way into the app is copying the link and pasting it here. Making those links open Quark directly would need universal links / app links.
 
 ### Theme Hot-Reloading
 Themes reload on file save (watched via `notify` crate / filesystem events passed through Tauri). No restart required.

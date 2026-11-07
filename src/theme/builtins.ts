@@ -156,3 +156,12 @@ export const BUILTIN_THEME_MAP: Record<string, Theme> = {
     prompt: { normal_indicator: "NOR", insert_indicator: "INS", command_indicator: "CMD", visual_indicator: "VIS" },
   },
 };
+
+/**
+ * The built-in theme called `name`, if there is one. Looked up as an own key:
+ * the map is a plain object, so `constructor` or `toString` would otherwise
+ * find Object.prototype's and hand a function to `applyTheme`.
+ */
+export function builtinTheme(name: string): Theme | undefined {
+  return Object.prototype.hasOwnProperty.call(BUILTIN_THEME_MAP, name) ? BUILTIN_THEME_MAP[name] : undefined;
+}

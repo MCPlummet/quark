@@ -306,6 +306,8 @@ pub fn run() {
             // Config
             commands::load_theme,
             commands::list_custom_themes,
+            commands::import_custom_theme,
+            commands::custom_themes_dir,
             commands::parse_quarkrc,
             commands::load_quarkrc,
             // Notifications
