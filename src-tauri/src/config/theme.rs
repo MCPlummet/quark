@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Root theme structure parsed from a TOML theme file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -316,13 +316,16 @@ pub fn themes_dir(config_dir: &Path) -> PathBuf {
 
 /// The file `load_theme` reads for `name_or_path`.
 ///
-/// An absolute path is used as-is — what Settings stored before themes were
-/// named by file, and what `:theme /some/where.toml` passes. Anything else is
-/// a file in the themes folder: `nord-tweaked.toml`, or `nord-tweaked` with
-/// the extension implied.
+/// A bare file name is a theme in the themes folder: `nord-tweaked.toml`, or
+/// `nord-tweaked` with the extension implied. That is what Settings stores.
+/// Anything with a directory part is a path, used as given — an absolute one
+/// is what Settings stored before themes were named by file, and a relative
+/// one (`themes/foo.toml`, `../x.toml`) resolves against the working
+/// directory, as every theme path did before the themes folder was looked in.
+/// Only a bare name is rooted in the folder, so `..` can't climb out of it.
 pub fn resolve_theme_path(config_dir: &Path, name_or_path: &str) -> PathBuf {
     let given = Path::new(name_or_path);
-    if given.is_absolute() {
+    if !is_bare_file_name(given) {
         return given.to_path_buf();
     }
     let mut file = themes_dir(config_dir).join(given).into_os_string();
@@ -332,10 +335,28 @@ pub fn resolve_theme_path(config_dir: &Path, name_or_path: &str) -> PathBuf {
     PathBuf::from(file)
 }
 
+/// `path` is a single file name: no root, no directory, not `.` or `..`.
+fn is_bare_file_name(path: &Path) -> bool {
+    let mut parts = path.components();
+    matches!((parts.next(), parts.next()), (Some(Component::Normal(_)), None))
+}
+
+/// Device names Windows reserves in every folder, with any extension: a file
+/// called `nul.toml` there is the null device, so writing it saves nothing.
+fn is_windows_device_name(stem: &str) -> bool {
+    match stem.as_bytes() {
+        b"con" | b"prn" | b"aux" | b"nul" => true,
+        [b'c', b'o', b'm', d] | [b'l', b'p', b't', d] => d.is_ascii_digit(),
+        _ => false,
+    }
+}
+
 /// Whether `stem` is safe to name a file in the themes folder: what the
 /// frontend's `themeSlug` produces — lowercase ASCII letters and digits, with
-/// single hyphens between them, at most 64 characters. Rules out separators,
-/// `..`, dotfiles and anything a filesystem might treat specially.
+/// single hyphens between them, at most 64 characters, and not a Windows
+/// device name (`con`, `nul`, `com1` …). Rules out separators, `..`, dotfiles
+/// and anything a filesystem might treat specially. Checked on every platform,
+/// so a theme folder copied to Windows still works there.
 pub fn is_valid_theme_stem(stem: &str) -> bool {
     !stem.is_empty()
         && stem.len() <= 64
@@ -343,6 +364,7 @@ pub fn is_valid_theme_stem(stem: &str) -> bool {
         && !stem.ends_with('-')
         && !stem.contains("--")
         && stem.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !is_windows_device_name(stem)
 }
 
 /// A custom theme as listed in Settings → Themes.
@@ -856,14 +878,26 @@ name = "Test"
     }
 
     #[test]
+    fn resolve_theme_path_leaves_paths_with_a_directory_alone() {
+        let cfg = Path::new("cfg");
+        // Relative paths keep meaning what they did before the themes folder
+        // was looked in: relative to the working directory, used as given.
+        assert_eq!(resolve_theme_path(cfg, "themes/foo.toml"), Path::new("themes/foo.toml"));
+        assert_eq!(resolve_theme_path(cfg, "./nord"), Path::new("./nord"));
+        // `..` never climbs out of the themes folder into the config folder.
+        assert_eq!(resolve_theme_path(cfg, "../config"), Path::new("../config"));
+        assert_eq!(resolve_theme_path(cfg, ".."), Path::new(".."));
+    }
+
+    #[test]
     fn theme_stems_are_slugs() {
-        for ok in ["nord", "catppuccin-mocha", "theme2", "a"] {
+        for ok in ["nord", "catppuccin-mocha", "theme2", "a", "aux-2", "console", "com10", "nul-theme"] {
             assert!(is_valid_theme_stem(ok), "{ok}");
         }
         let long = "a".repeat(65);
         for bad in [
             "", "..", "../x", "a/b", "a\\b", ".hidden", "-a", "a-", "a--b", "Nord", "nörd",
-            "a b", "a.toml", long.as_str(),
+            "a b", "a.toml", long.as_str(), "con", "nul", "aux", "prn", "com1", "lpt9", "com0",
         ] {
             assert!(!is_valid_theme_stem(bad), "{bad:?}");
         }

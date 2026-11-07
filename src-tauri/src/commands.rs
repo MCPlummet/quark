@@ -2769,6 +2769,9 @@ pub async fn import_custom_theme(
 /// The themes folder as the user would find it, or `None` where they can't:
 /// on iOS and Android it sits inside the app sandbox, so the UI talks about
 /// importing instead of a folder.
+///
+/// The folder is created here if it doesn't exist yet: Settings tells the user
+/// to put theme files in it, and on a fresh install nothing else has made it.
 #[tauri::command]
 pub fn custom_themes_dir(paths: State<'_, crate::Paths>) -> Option<String> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -2778,7 +2781,12 @@ pub fn custom_themes_dir(paths: State<'_, crate::Paths>) -> Option<String> {
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        Some(crate::config::theme::themes_dir(&paths.config_dir).to_string_lossy().into_owned())
+        let dir = crate::config::theme::themes_dir(&paths.config_dir);
+        // Still worth naming if this fails: the user can make it themselves.
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!("Failed to create themes folder {}: {e}", dir.display());
+        }
+        Some(dir.to_string_lossy().into_owned())
     }
 }
 
