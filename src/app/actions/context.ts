@@ -236,6 +236,38 @@ export const _lastRoomBySpace = new Map<string, string>();
 /** Cache: mxc:// URL → data: URL for custom emoji rendered in reaction chips */
 export const _emojiImageCache = new Map<string, string>();
 
+/** Emoji thumbnail downloads in flight, so concurrent requests fetch each once. */
+const _emojiThumbnailsInFlight = new Map<string, Promise<string | null>>();
+
+/**
+ * A custom emoji's thumbnail as a data: URL: from the cache, or downloaded
+ * once however many surfaces ask while it is in flight — inline emoji in the
+ * timeline and thread, reaction chips, the emoji picker and the `:shortcode`
+ * preview all draw the same mxc at the same size. Null if the download fails.
+ */
+export function resolveEmojiThumbnail(mxc: string): Promise<string | null> {
+  const cached = _emojiImageCache.get(mxc);
+  if (cached) return Promise.resolve(cached);
+  let pending = _emojiThumbnailsInFlight.get(mxc);
+  if (!pending) {
+    pending = getThumbnail(mxc, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
+      .then((dl) => {
+        const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
+        _emojiImageCache.set(mxc, dataUrl);
+        return dataUrl;
+      })
+      .catch(() => null)
+      .finally(() => _emojiThumbnailsInFlight.delete(mxc));
+    _emojiThumbnailsInFlight.set(mxc, pending);
+  }
+  return pending;
+}
+
+/** Test seam: forget emoji thumbnail downloads still in flight. */
+export function _resetEmojiThumbnailsInFlight(): void {
+  _emojiThumbnailsInFlight.clear();
+}
+
 /** Seen reaction event IDs — prevents double-counting sync echoes of own reactions. */
 export const _seenReactionEventIds = new Set<string>();
 
@@ -716,27 +748,23 @@ export async function _downloadReactionEmoji(
   }
 
   for (const mxc of mxcKeys) {
-    getThumbnail(mxc, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
-      .then((dl) => {
-        const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
-        _emojiImageCache.set(mxc, dataUrl);
-
-        // Update every message that has a reaction with this mxc key
-        for (const e of events) {
-          const reactions = e.reactions ?? [];
-          if (!reactions.some((r) => r.key === mxc)) continue;
-          timeline.updateMessageReactions(
-            e.event_id,
-            reactions.map((r) => ({
-              key: r.key,
-              count: r.count,
-              own: r.own,
-              imageUrl: _emojiImageCache.get(r.key),
-            }))
-          );
-        }
-      })
-      .catch(() => { /* non-critical */ });
+    void resolveEmojiThumbnail(mxc).then((dataUrl) => {
+      if (!dataUrl) return; // non-critical
+      // Update every message that has a reaction with this mxc key
+      for (const e of events) {
+        const reactions = e.reactions ?? [];
+        if (!reactions.some((r) => r.key === mxc)) continue;
+        timeline.updateMessageReactions(
+          e.event_id,
+          reactions.map((r) => ({
+            key: r.key,
+            count: r.count,
+            own: r.own,
+            imageUrl: _emojiImageCache.get(r.key),
+          }))
+        );
+      }
+    });
   }
 }
 
@@ -822,13 +850,9 @@ export function _downloadInlineEmoji(timeline: InlineEmojiHost): void {
       timeline.resolveInlineEmoji(mxc, _emojiImageCache.get(mxc)!);
       continue;
     }
-    getThumbnail(mxc, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
-      .then((dl) => {
-        const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
-        _emojiImageCache.set(mxc, dataUrl);
-        timeline.resolveInlineEmoji(mxc, dataUrl);
-      })
-      .catch(() => { /* non-critical */ });
+    void resolveEmojiThumbnail(mxc).then((dataUrl) => {
+      if (dataUrl) timeline.resolveInlineEmoji(mxc, dataUrl);
+    });
   }
 }
 

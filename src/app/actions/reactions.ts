@@ -1,23 +1,16 @@
-// Reaction actions: sending reactions, applying incoming reactions, the quick
-// reaction picker, and the reaction-chip event handler.
+// Reaction actions: sending reactions, applying incoming reactions, and the
+// reaction-chip event handler. The picker a reaction is chosen in is the emoji
+// picker, opened by openReactionPicker in ./emoji_picker.ts.
 
 import { AppState } from "../state.js";
 
-import {
-  sendReaction as ipcSendReaction,
-  getEmojiPacks,
-  getThumbnail,
-} from "../../ipc/index.js";
-
-import type { CustomEmojiEntry } from "../../ui/QuickReactPicker.js";
+import { sendReaction as ipcSendReaction } from "../../ipc/index.js";
 
 import { showError } from "../../ui/NotificationToast.js";
 
 import {
   getComponents,
   _seenReactionEventIds,
-  _emojiImageCache,
-  _shortcodeToMxc,
   _resolveReactionImage,
 } from "./context.js";
 
@@ -107,67 +100,6 @@ export function applyIncomingReaction(
   const groups = updated.map((r) => ({ key: r.key, count: r.count, own: r.own, imageUrl: _resolveReactionImage(r.key) }));
   timeline.updateMessageReactions(targetEventId, groups);
   getComponents().threadView?.updateMessageReactions(targetEventId, groups);
-}
-
-/**
- * Show the quick reaction picker anchored to the currently selected message.
- */
-export function openQuickReactPicker(eventId: string): void {
-  const { timeline, threadView, quickReactPicker } = getComponents();
-  // A message of the open thread is anchored to its row in the panel, which
-  // covers the room. The root is in both: anchored to the room's row, hidden
-  // behind the panel's header, the picker opened away from either.
-  const anchor =
-    (threadView?.hasMessage(eventId) ? threadView.getMessageEl(eventId) : null) ??
-    timeline.getMessageElementById(eventId) ??
-    null;
-  quickReactPicker.show(eventId, anchor);
-
-  // Load custom emoji for current room and inject into the picker.
-  // For custom emoji reactions, the reaction key must be the mxc:// URL (MSC2545).
-  const roomId = AppState.get("currentRoomId");
-  getEmojiPacks(roomId ?? undefined)
-    .then((packs) => {
-      // Build entries with mutable refs so async thumbnail resolutions can
-      // update each entry in place. Calling setCustomEmoji always filters the
-      // shared `custom` array, so every previously-resolved entry stays visible.
-      const custom: CustomEmojiEntry[] = [];
-      const pushResolved = () => {
-        if (quickReactPicker.isVisible()) {
-          quickReactPicker.setCustomEmoji(custom.filter((c) => c.imageUrl));
-        }
-      };
-      for (const pack of packs) {
-        for (const entry of pack.emojis) {
-          if (!entry.usage.includes("emoticon")) continue;
-          const mxc = entry.url;
-          // Populate shortcode→mxc map so sendMessage() can build data-mx-emoticon.
-          if (mxc.startsWith("mxc://")) {
-            _shortcodeToMxc.set(entry.shortcode, mxc);
-          }
-          // Use the mxc:// URL as the reaction key (MSC2545 custom emoji reactions).
-          const cached = _emojiImageCache.get(mxc);
-          if (cached) {
-            custom.push({ key: mxc, shortcode: entry.shortcode, imageUrl: cached });
-          } else if (mxc.startsWith("mxc://")) {
-            // Placeholder ref — mutated in place when thumbnail resolves so that
-            // every concurrent resolution sees a consistent `custom` snapshot.
-            const ref: CustomEmojiEntry = { key: mxc, shortcode: entry.shortcode, imageUrl: "" };
-            custom.push(ref);
-            getThumbnail(mxc, 32, 32).then((dl) => {
-              const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
-              _emojiImageCache.set(mxc, dataUrl);
-              ref.imageUrl = dataUrl;
-              pushResolved();
-            }).catch(() => { /* non-critical */ });
-          } else {
-            custom.push({ key: mxc, shortcode: entry.shortcode, imageUrl: mxc });
-          }
-        }
-      }
-      pushResolved();
-    })
-    .catch(() => { /* non-critical */ });
 }
 
 /**

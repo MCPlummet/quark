@@ -1,13 +1,13 @@
 // Shared machinery for keyboard-navigable picker / selection-list overlays.
 //
-// Before this file existed, every picker (emoji, gif, device, quick-react,
+// Before this file existed, every picker (emoji, gif, device, reaction,
 // quick-nav) re-implemented the same scaffolding: an overlay element that
 // implements the `Modal` contract, outside-click dismissal, show/hide/isVisible,
 // a focus-index, grid/list rendering with active-item highlighting, and
 // arrow-key navigation. The navigation in particular was handled five different
-// ways — and two pickers (DevicePicker, QuickReactPicker) HARDCODED j/k/arrows
-// instead of routing through the keymap, so user `quarkrc` rebindings silently
-// didn't work there.
+// ways — and two pickers (DevicePicker and the old reaction picker) HARDCODED
+// j/k/arrows instead of routing through the keymap, so user `quarkrc`
+// rebindings silently didn't work there.
 //
 // `PickerBase` owns the overlay + Modal registration. `SelectionList` owns the
 // focus model and keymap-driven navigation, so EVERY picker honours rebindings:
@@ -118,6 +118,9 @@ export type NavAction =
   | "select"
   | "close";
 
+/** The directional subset of {@link NavAction}. */
+export type DirectionalAction = "nav-up" | "nav-down" | "nav-left" | "nav-right";
+
 /** How the active item is visually marked. */
 export type HighlightStrategy =
   | { kind: "tabindex" } // roving tabindex + .focus() (grids: emoji, gif, sticker)
@@ -129,7 +132,7 @@ export interface SelectionListOptions {
   /** How to mark the active item. */
   highlight: HighlightStrategy;
   /** Live cell/item elements at navigation time. */
-  getItems: () => HTMLElement[];
+  getItems: () => readonly HTMLElement[];
   /** Invoked when the active item should be activated (Enter / select). */
   onSelect: (index: number) => void;
   /**
@@ -138,6 +141,21 @@ export interface SelectionListOptions {
    * scrolls; this still fires so callers can do extra work.)
    */
   onFocusChange?: (index: number) => void;
+  /**
+   * Optional: where a directional move from `from` lands, for a layout the
+   * fixed `columns` arithmetic cannot describe (the emoji picker's sectioned
+   * grid). Return null when the move leaves the list; `onEdge` is then called.
+   */
+  move?: (from: number, action: DirectionalAction, total: number) => number | null;
+  /** Optional: a directional move ran off the list (see `move`). */
+  onEdge?: (action: DirectionalAction) => void;
+  /**
+   * Optional: any other resolved action — `close`, or a picker's own actions
+   * such as `picker-search`. Return true if it was handled. Lets a picker take
+   * every key through the one keymap resolution instead of matching literals
+   * ahead of it.
+   */
+  onAction?: (action: string) => boolean;
   /**
    * Optional override of how nav keys are resolved. Defaults to
    * `keymapManager.resolveKey(key, "picker")`. Exposed for testing.
@@ -156,6 +174,8 @@ export interface SelectionListOptions {
  */
 export class SelectionList {
   private _focusIndex = 0;
+  /** The item last marked active, and where it was, for incremental highlighting. */
+  private _highlighted: { el: HTMLElement; index: number } | null = null;
   private readonly _opts: SelectionListOptions;
   private readonly _resolve: (key: string) => ReturnType<typeof keymapManager.resolveKey>;
 
@@ -210,14 +230,25 @@ export class SelectionList {
     if (result.kind !== "action") {
       return { consumed: false, partial: false };
     }
-    return { consumed: this.dispatch(result.action as NavAction), partial: false };
+    return { consumed: this.dispatch(result.action), partial: false };
   }
 
-  /** Apply a resolved nav action by name. Returns true if it was a known action. */
-  dispatch(action: NavAction): boolean {
+  /**
+   * Apply a resolved action by name. Returns true if it was handled — a known
+   * nav action, or one the picker's `onAction` accepted.
+   */
+  dispatch(action: NavAction | (string & {})): boolean {
     const items = this._opts.getItems();
     const total = items.length;
     const cols = Math.max(1, this._opts.columns);
+
+    if (this._opts.move && isDirectional(action)) {
+      if (total === 0) return true;
+      const to = this._opts.move(this._focusIndex, action, total);
+      if (to === null) this._opts.onEdge?.(action);
+      else this.setFocus(to);
+      return true;
+    }
 
     switch (action) {
       case "nav-down":
@@ -241,27 +272,40 @@ export class SelectionList {
       case "select":
         this._opts.onSelect(this._focusIndex);
         return true;
-      case "close":
-        // Close is handled by the picker itself (it knows its teardown). The
-        // caller checks for this action explicitly; report unhandled here so it
-        // can route to hide().
-        return false;
       default:
-        return false;
+        // Close is the picker's to handle (it knows its teardown), as is any
+        // action of its own. Without an `onAction` it is reported unhandled so
+        // the caller can route it.
+        return this._opts.onAction?.(action) ?? false;
     }
   }
 
-  private _applyHighlight(items: HTMLElement[], index: number): void {
+  /**
+   * Mark `index` active. Moving within the same items rewrites only the cell
+   * left and the cell reached — the emoji grid holds ~1,900 cells, and
+   * sweeping all of them on every j/k was a style invalidation per cell per
+   * keypress. After a re-render (the item last marked is no longer where it
+   * was) every item is swept, so a fresh render needs no care.
+   */
+  private _applyHighlight(items: readonly HTMLElement[], index: number): void {
     const strat = this._opts.highlight;
-    if (strat.kind === "tabindex") {
-      for (let i = 0; i < items.length; i++) {
-        items[i].setAttribute("tabindex", i === index ? "0" : "-1");
-      }
-      items[index]?.focus();
+    const mark = (el: HTMLElement, on: boolean): void => {
+      if (strat.kind === "tabindex") el.setAttribute("tabindex", on ? "0" : "-1");
+      else el.classList.toggle(strat.activeClass, on);
+    };
+    const prev = this._highlighted;
+    if (prev !== null && items[prev.index] === prev.el) {
+      if (prev.index !== index) mark(prev.el, false);
     } else {
-      for (let i = 0; i < items.length; i++) {
-        items[i].classList.toggle(strat.activeClass, i === index);
-      }
+      for (let i = 0; i < items.length; i++) mark(items[i], i === index);
     }
+    const next = items[index];
+    if (next) mark(next, true);
+    this._highlighted = next ? { el: next, index } : null;
+    if (strat.kind === "tabindex") next?.focus();
   }
+}
+
+function isDirectional(action: string): action is DirectionalAction {
+  return action === "nav-up" || action === "nav-down" || action === "nav-left" || action === "nav-right";
 }

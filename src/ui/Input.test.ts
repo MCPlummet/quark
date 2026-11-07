@@ -66,6 +66,46 @@ describe("Input", () => {
     });
   });
 
+  // What an emoji picked from the picker does: it used to be appended to the
+  // end of the draft wherever the caret was.
+  describe("insertText", () => {
+    it("inserts at the caret and leaves the caret after it", () => {
+      input.setValue("hello world");
+      const field = input.getFieldElement();
+      field.setSelectionRange(5, 5);
+      input.insertText("🎉");
+      expect(input.getValue()).toBe("hello🎉 world");
+      expect(field.selectionStart).toBe(5 + "🎉".length);
+    });
+
+    it("replaces a selection", () => {
+      input.setValue("hello world");
+      input.getFieldElement().setSelectionRange(6, 11);
+      input.insertText(":blob: ");
+      expect(input.getValue()).toBe("hello :blob: ");
+    });
+
+    it("tells input listeners the draft changed", () => {
+      const seen: string[] = [];
+      input.onInput((v) => seen.push(v));
+      input.insertText("👍");
+      expect(seen).toEqual(["👍"]);
+    });
+
+    it("inserts through the editing command where there is one, so Ctrl-Z undoes it", () => {
+      const original = document.execCommand;
+      const exec = vi.fn(() => true);
+      document.execCommand = exec;
+      try {
+        input.insertText("🎉");
+        expect(exec).toHaveBeenCalledWith("insertText", false, "🎉");
+        expect(document.activeElement).toBe(input.getFieldElement());
+      } finally {
+        document.execCommand = original;
+      }
+    });
+  });
+
   describe("command mode", () => {
     it("shows command placeholder in Command mode", () => {
       input.setMode(Mode.Command);

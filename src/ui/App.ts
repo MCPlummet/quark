@@ -19,7 +19,6 @@ import { Verification } from "./Verification.js";
 import { VerificationPromptDialog } from "./VerificationPromptDialog.js";
 import { DevicePicker } from "./DevicePicker.js";
 import { ShortcodePreview } from "./ShortcodePreview.js";
-import { QuickReactPicker } from "./QuickReactPicker.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { ProfileEditDialog } from "./ProfileEditDialog.js";
 import { SettingsDialog } from "./SettingsDialog.js";
@@ -77,7 +76,6 @@ export interface AppComponents {
   shortcodePreview: ShortcodePreview;
   helpDialog: HelpDialog;
   commandBar: CommandBar;
-  quickReactPicker: QuickReactPicker;
   profileDialog: ProfileDialog;
   profileEditDialog: ProfileEditDialog;
   settingsDialog: SettingsDialog;
@@ -139,7 +137,6 @@ export function mountApp(container: HTMLElement): AppComponents {
   const devicePicker = new DevicePicker();
   const shortcodePreview = new ShortcodePreview();
   const helpDialog = new HelpDialog();
-  const quickReactPicker = new QuickReactPicker();
   const profileDialog = new ProfileDialog();
   const profileEditDialog = new ProfileEditDialog();
   const settingsDialog = new SettingsDialog();
@@ -345,7 +342,6 @@ export function mountApp(container: HTMLElement): AppComponents {
   mountOverlay(verificationPrompt.getElement());
   mountOverlay(devicePicker.getElement());
   mountOverlay(helpDialog.getElement());
-  mountOverlay(quickReactPicker.getElement());
   mountOverlay(profileDialog.getElement());
   mountOverlay(profileEditDialog.getElement());
   mountOverlay(settingsDialog.getElement());
@@ -382,7 +378,6 @@ export function mountApp(container: HTMLElement): AppComponents {
     devicePicker,
     shortcodePreview,
     helpDialog,
-    quickReactPicker,
     profileDialog,
     profileEditDialog,
     settingsDialog,

@@ -16,9 +16,9 @@
 // coordinate space, and a client rect does not — `getBoundingClientRect` reports
 // layout-viewport space, pan included. An overlay positioned off an anchor rect
 // has to subtract `viewportPan()` (app/mobile.ts) or it lands a pan too low.
-// DatePicker and the read-receipt tooltip are the two that do this; the context
-// menu and the quick-react picker dock as bottom sheets on mobile, which is the
-// only place a pan exists, so they never anchor to a rect there.
+// DatePicker, the read-receipt tooltip and the emoji picker (beside the message
+// it reacts to) do this; the context menu and the emoji picker dock as bottom
+// sheets on mobile, which is the only place a pan exists.
 
 const OVERLAY_CLASS = "quark-overlay";
 

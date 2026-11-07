@@ -85,7 +85,9 @@ const EXTRA_BINDINGS: BindingEntry[] = [
   { keys: "Enter", mode: "insert", description: "Send the message (see send-key behaviour)" },
   { keys: "Ctrl-Enter", mode: "insert", description: "Send regardless of send-key behaviour" },
   { keys: ":word:", mode: "insert", description: "Shortcode emoji autocomplete" },
-  { keys: "Tab", mode: "picker", description: "Switch emoji ↔ sticker ↔ GIF" },
+  { keys: "Tab", mode: "picker", description: "Search field → grid; from the grid, emoji ↔ sticker ↔ GIF" },
+  { keys: "Enter", mode: "picker", description: "In the search field: pick the first match" },
+  { keys: "Shift-Enter", mode: "picker", description: "Reaction picker: react with the typed text as-is" },
 ];
 
 type Section = "bindings" | "commands";

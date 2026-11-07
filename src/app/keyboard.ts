@@ -11,7 +11,6 @@ import { modalManager } from "../ui/ModalManager.js";
 import type { AppComponents } from "../ui/App.js";
 import {
   sendMessage,
-  sendReaction,
   cancelReply,
   openEmojiPicker,
   openGifPicker,
@@ -37,7 +36,7 @@ import {
   redactMessage,
   openThread,
   closeThread,
-  openQuickReactPicker,
+  openReactionPicker,
   setupReactionChipHandler,
   setupMessageActionHandlers,
   sendStagedAttachments,
@@ -90,7 +89,8 @@ import type { ParsedRc } from "../ipc/types.js";
 import { getAppConfig, setAppConfig } from "../ipc/app_config.js";
 import type { KeyContext } from "../vim/keybindings.js";
 import { BUILTIN_EMOJI } from "../data/unicode-emoji.js";
-import { _shortcodeToMxc } from "./actions/context.js";
+import { loadCustomEmoji, customEmojiImage } from "./actions/custom_emoji.js";
+import type { CustomEmojiPack } from "../ui/emoji_catalog.js";
 import { findLoadedEvent } from "./actions/threads.js";
 import { onMobileChange, isMobile } from "./mobile.js";
 import { effectiveSendOnEnter, shouldShowSendButton } from "./send_behavior.js";
@@ -98,8 +98,6 @@ import { showToast, showError } from "../ui/NotificationToast.js";
 import { runUpdateCheck } from "./update_check.js";
 import { filterShortcodes, type ShortcodeEntry } from "../ui/ShortcodePreview.js";
 import { filterMembers, type MentionEntry } from "../ui/MentionPreview.js";
-import { getEmojiPacks } from "../ipc/emoji.js";
-import { getThumbnail } from "../ipc/media.js";
 import { getRoomMembers } from "../ipc/rooms.js";
 import { extractShortcodeQuery, extractMentionQuery } from "./autocomplete_query.js";
 import { applySetOptions } from "./set_options.js";
@@ -270,7 +268,7 @@ export function dispatchAction(action: string, components: AppComponents): void 
 
     case "react": {
       const msgId = selectedMessageId();
-      if (msgId) openQuickReactPicker(msgId);
+      if (msgId) openReactionPicker(msgId);
       break;
     }
 
@@ -458,64 +456,39 @@ export function dispatchAction(action: string, components: AppComponents): void 
 
 // ── Shortcode autocomplete ──────────────────────────────────────────────────
 
-/** Cached custom emoji entries from server packs (refreshed per room). */
-let _customEmoji: ShortcodeEntry[] = [];
+/** The current room's custom emoji packs, from the shared loader. */
+let _customPacks: CustomEmojiPack[] = [];
 let _customEmojiRoomId: string | null = null;
 
 /**
- * Refresh the custom emoji cache when the room changes.
- * Falls back silently to an empty list on error.
+ * Refresh the custom emoji when the room changes. The shared loader also
+ * records each shortcode's mxc, so a typed `:shortcode:` is sent as
+ * <img data-mx-emoticon> even if no picker was ever opened in the room, and
+ * fetches the thumbnails the preview shows.
  */
 async function refreshCustomEmoji(): Promise<void> {
   const roomId = AppState.get("currentRoomId");
   if (roomId === _customEmojiRoomId) return;
   _customEmojiRoomId = roomId;
-
-  try {
-    const packs = await getEmojiPacks(roomId ?? undefined);
-    _customEmoji = [];
-    for (const pack of packs) {
-      for (const entry of pack.emojis) {
-        if (!entry.usage.includes("emoticon")) continue;
-        // Don't set imageUrl to a bare mxc:// URL — browsers can't load those
-        // and the shortcode preview would show a broken image. Leave it unset
-        // until the thumbnail is resolved, then replace in-place.
-        const customEntry: ShortcodeEntry = {
-          key: `:${entry.shortcode}:`,
-          shortcode: entry.shortcode,
-          imageUrl: entry.url.startsWith("mxc://") ? undefined : entry.url,
-        };
-        _customEmoji.push(customEntry);
-        if (entry.url.startsWith("mxc://")) {
-          // Record the shortcode → mxc mapping so sendMessage() can resolve custom
-          // emoji into <img data-mx-emoticon> even when the emoji picker was never
-          // opened for this room (previously the map was only populated lazily on
-          // picker/reaction-picker open, so a plain `:shortcode:` send was sent
-          // raw). This runs on every room change.
-          _shortcodeToMxc.set(entry.shortcode, entry.url);
-          // Capture by object reference to avoid stale-index bugs if the room
-          // switches (and _customEmoji is rebuilt) before the download finishes.
-          const captured = customEntry;
-          getThumbnail(entry.url, 32, 32).then((dl) => {
-            const i = _customEmoji.indexOf(captured);
-            if (i >= 0) {
-              _customEmoji[i] = {
-                ...captured,
-                imageUrl: `data:${dl.mime_type};base64,${dl.data_base64}`,
-              };
-            }
-          }).catch(() => { /* non-critical */ });
-        }
-      }
-    }
-  } catch {
-    _customEmoji = [];
-  }
+  _customPacks = [];
+  await loadCustomEmoji(roomId, {
+    onPacks: (packs) => {
+      if (_customEmojiRoomId === roomId) _customPacks = packs;
+    },
+  });
 }
 
 /** All available shortcode entries (built-in + custom). */
 function allShortcodes(): ShortcodeEntry[] {
-  return [..._customEmoji, ...BUILTIN_EMOJI];
+  const custom = _customPacks.flatMap((pack) =>
+    pack.emojis.map((e) => ({
+      key: `:${e.shortcode}:`,
+      shortcode: e.shortcode,
+      // Read live: a thumbnail that resolved since the packs loaded shows up.
+      imageUrl: customEmojiImage(e.url),
+    })),
+  );
+  return [...custom, ...BUILTIN_EMOJI];
 }
 
 // extractShortcodeQuery lives in ./autocomplete_query.ts (pure, unit-tested).
@@ -1033,7 +1006,7 @@ export function setupKeyboard(components: AppComponents): void {
   // self-register with modalManager. Only components wired with callbacks below
   // are destructured.
   const { input, commandBar, shortcodePreview, mentionPreview, timeline, threadView,
-          quickReactPicker, pinnedMessagesDialog, searchDialog, revisionHistoryDialog,
+          pinnedMessagesDialog, searchDialog, revisionHistoryDialog,
           roomHeader, imageLightbox, commandPalette, contextMenu,
           spaceStrip, roomList } = components;
 
@@ -1146,7 +1119,7 @@ export function setupKeyboard(components: AppComponents): void {
         startReply(eventId, evt.sender, evt.body.slice(0, 80));
         input.focus();
       },
-      "react": () => openQuickReactPicker(eventId),
+      "react": () => openReactionPicker(eventId),
       "copy-message": () => {
         void navigator.clipboard.writeText(evt?.body ?? "");
       },
@@ -1321,11 +1294,6 @@ export function setupKeyboard(components: AppComponents): void {
         commandBar.show(invocation.line);
         break;
     }
-  });
-
-  // Wire quick react picker → sendReaction
-  quickReactPicker.onReact((eventId, key) => {
-    void sendReaction(eventId, key);
   });
 
   // Track activePanel when focus lands on the space strip

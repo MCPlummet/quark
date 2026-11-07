@@ -130,6 +130,38 @@ export function eventChord(e: {
   return parts.join("-");
 }
 
+/**
+ * Whether a keydown is a command chord — Ctrl or Cmd held — rather than a
+ * typed character. A typed `[` can arrive with modifiers on many layouts:
+ * AltGr, which Windows reports as Ctrl+Alt (German `[` is AltGr+8), and macOS
+ * Option (German `[` is Option+5). Neither is a chord, and treating them as
+ * one left those users without the keys that need them. Alt alone is never a
+ * chord here for the same reason.
+ */
+export function isCommandChord(e: {
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  getModifierState?(key: string): boolean;
+}): boolean {
+  if (!e.ctrlKey && !e.metaKey) return false;
+  if (e.getModifierState?.("AltGraph")) return false;
+  // Ctrl+Alt without Meta is how AltGr reaches an engine that does not report
+  // the AltGraph state.
+  return !(e.ctrlKey && e.altKey && !e.metaKey);
+}
+
+/** Escape, or its vim spelling Ctrl-[ — but not a `[` typed with AltGr. */
+export function isEscapeKey(e: {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  getModifierState?(key: string): boolean;
+}): boolean {
+  return e.key === "Escape" || (e.key === "[" && e.ctrlKey && isCommandChord(e));
+}
+
 function normaliseKey(raw: string, leaderKey: string): string {
   // Replace <leader> placeholder with actual leader key
   return raw.replace(/<leader>/gi, leaderKey);

@@ -34,7 +34,7 @@ import type { MessageTarget, SentMessage } from "../../ipc/types.js";
 import { getComponents, prepareOutgoingBody } from "./context.js";
 import { withSniffedType } from "../file_type.js";
 import { showSentEvent } from "./live.js";
-import { openQuickReactPicker } from "./reactions.js";
+import { openReactionPicker } from "./emoji_picker.js";
 import { startReply, consumeReply } from "./messages.js";
 import { openThread, findLoadedEvent, isInOpenThread } from "./threads.js";
 import { openProfileForUser } from "./profile.js";
@@ -509,7 +509,7 @@ export async function readCopiedFiles(): Promise<{ files: File[]; listed: boolea
 export function setupMessageActionHandlers(): void {
   document.addEventListener("quark:msg-react" as keyof DocumentEventMap, (e: Event) => {
     const { eventId } = (e as CustomEvent<{ eventId: string }>).detail;
-    if (eventId) openQuickReactPicker(eventId);
+    if (eventId) openReactionPicker(eventId);
   });
 
   document.addEventListener("quark:msg-reply" as keyof DocumentEventMap, (e: Event) => {

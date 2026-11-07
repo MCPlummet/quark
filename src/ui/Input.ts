@@ -472,11 +472,17 @@ export class Input {
     // A list with nothing attachable in it (only folders, say) has already been
     // reported by the reader. Only a clipboard that held no list at all gets
     // its text pasted back.
-    if (!copied.listed) this._insertText(text);
+    if (!copied.listed) this.insertText(text);
   }
 
-  /** Insert text at the caret as a paste would, keeping the field's undo history. */
-  private _insertText(text: string): void {
+  /**
+   * Insert `text` at the caret, replacing any selection, and leave the caret
+   * after it, as a paste would: through `insertText` where the engine has it,
+   * so the field's undo history keeps it. Used for a paste with no attachable
+   * list, and for an emoji picked from the picker — the field keeps its
+   * selection while the picker has focus, so the emoji lands where the user was.
+   */
+  insertText(text: string): void {
     if (!text) return;
     const field = this._fieldEl;
     field.focus();

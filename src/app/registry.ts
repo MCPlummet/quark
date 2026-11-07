@@ -264,6 +264,33 @@ const ACTION_LITERALS = [
     parityExempt:
       "Navigation \u2014 the pointer equivalent is clicking the thing itself.",
   },
+  // \u2500\u2500 Picker navigation (pmap) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  // Keys a picker's grid resolves beyond movement. Registered here, rather
+  // than matched as literals in each picker, so `pmap` can rebind them.
+  {
+    id: "picker-search",
+    description: "Picker: focus the search field",
+    bindings: [{ sequence: "/", context: "picker" }],
+    palette: false,
+    parityExempt:
+      "Picker navigation \u2014 the pointer equivalent is clicking the search field.",
+  },
+  {
+    id: "picker-prev-section",
+    description: "Picker: jump to the previous emoji category",
+    bindings: [{ sequence: "[", context: "picker" }],
+    palette: false,
+    parityExempt:
+      "Picker navigation \u2014 the pointer equivalent is clicking a category button.",
+  },
+  {
+    id: "picker-next-section",
+    description: "Picker: jump to the next emoji category",
+    bindings: [{ sequence: "]", context: "picker" }],
+    palette: false,
+    parityExempt:
+      "Picker navigation \u2014 the pointer equivalent is clicking a category button.",
+  },
   {
     // The palette itself — excluded from its own listing, and from the `:`
     // vocabulary, because reaching it already means you are in it.

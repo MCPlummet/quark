@@ -94,6 +94,47 @@ describe("text_select", () => {
       expect(AppState.get("textSelectMode")).toBe(null);
     });
 
+    // The block cursor is a real one-character selection. Leaving it in place
+    // let the next insertion — an emoji picked after `:emoji` — replace the
+    // character under it.
+    describe("on the compose box", () => {
+      function composeField(value: string, caret: number): HTMLTextAreaElement {
+        const field = document.createElement("textarea");
+        field.value = value;
+        document.body.appendChild(field);
+        field.focus();
+        field.setSelectionRange(caret, caret);
+        return field;
+      }
+
+      it("collapses a block at the end of the text to the caret after it", () => {
+        const field = composeField("hello", 5);
+        enterComposeTextSelect(field);
+        expect([field.selectionStart, field.selectionEnd]).toEqual([4, 5]); // block on "o"
+        exitTextSelect();
+        expect([field.selectionStart, field.selectionEnd]).toEqual([5, 5]);
+        field.setRangeText("😂", field.selectionStart!, field.selectionEnd!, "end");
+        expect(field.value).toBe("hello😂");
+      });
+
+      it("collapses a block inside the text to the caret before it", () => {
+        const field = composeField("hello", 2);
+        enterComposeTextSelect(field);
+        expect([field.selectionStart, field.selectionEnd]).toEqual([2, 3]);
+        exitTextSelect();
+        expect([field.selectionStart, field.selectionEnd]).toEqual([2, 2]);
+      });
+
+      it("drops the block and Visual styling from the field", () => {
+        const field = composeField("hello", 1);
+        enterComposeTextSelect(field);
+        setVisualModeClass(true, field);
+        exitTextSelect();
+        expect(field.classList.contains("input-bar__field--text-select-block")).toBe(false);
+        expect(field.classList.contains("input-bar__field--text-select-visual")).toBe(false);
+      });
+    });
+
     it("restores prior contenteditable / tabindex attributes if they existed", () => {
       const body = document.createElement("div");
       body.setAttribute("contenteditable", "false");
