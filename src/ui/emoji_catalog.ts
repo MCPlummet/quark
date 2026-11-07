@@ -227,13 +227,44 @@ function isShortcodeStart(inner: string): boolean {
   return !(inner.length === 1 && /[\p{Lu}\p{N}]/u.test(inner));
 }
 
+/** What a search compares against for one entry, normalised once. */
+interface SearchKey {
+  /** The primary shortcode then the aliases, lowercased. */
+  names: readonly string[];
+  /** The glyph without variation selectors; null for a custom emoji. */
+  glyph: string | null;
+}
+
+/**
+ * Search keys by entry. Entries never change what they are named, so each is
+ * normalised the first time a search reaches it rather than on every keystroke;
+ * keyed weakly so a replaced custom pack's keys go with it.
+ */
+const _searchKeys = new WeakMap<PickerEmoji, SearchKey>();
+
+function searchKey(e: PickerEmoji): SearchKey {
+  let key = _searchKeys.get(e);
+  if (!key) {
+    key = {
+      names: [e.shortcode, ...e.aliases].map((n) => n.toLowerCase()),
+      glyph: e.glyph ? stripVariationSelectors(e.glyph) : null,
+    };
+    _searchKeys.set(e, key);
+  }
+  return key;
+}
+
+/** One query term, with the glyph form it is compared to glyphs as. */
+interface Term {
+  text: string;
+  /** `text` without variation selectors; empty when it was nothing else. */
+  bare: string;
+}
+
 /** How well one term matches an entry; lower is better, null is no match. */
-function tokenScore(e: PickerEmoji, t: string): number | null {
-  const shortcode = e.shortcode.toLowerCase();
-  if (shortcode === t) return 0;
-  const names = [shortcode, ...e.aliases.map((a) => a.toLowerCase())];
-  const glyph = e.glyph ? stripVariationSelectors(e.glyph) : null;
-  const bare = stripVariationSelectors(t);
+function tokenScore(e: PickerEmoji, { text: t, bare }: Term): number | null {
+  const { names, glyph } = searchKey(e);
+  if (names[0] === t) return 0;
   if (names.includes(t) || (glyph !== null && bare !== "" && glyph === bare)) return 1;
   // A keyword that is the whole term beats a longer name it begins: `sad`
   // finds 😢 (keyword) before :sad_but_relieved_face:, `lol` 😂 before 🍭.
@@ -257,7 +288,7 @@ function tokenScore(e: PickerEmoji, t: string): number | null {
  * though the browse view lists the common ones twice.
  */
 export function searchEmoji(sections: readonly EmojiSection[], query: string): PickerEmoji[] {
-  const tokens = queryTokens(query);
+  const tokens: Term[] = queryTokens(query).map((text) => ({ text, bare: stripVariationSelectors(text) }));
   if (tokens.length === 0) return [];
   const seen = new Set<string>();
   const hits: Array<{ entry: PickerEmoji; score: number; order: number }> = [];

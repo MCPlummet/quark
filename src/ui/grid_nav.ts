@@ -8,7 +8,7 @@
 // offsetTop/offsetLeft at every keypress; this computes the same answer from the
 // section sizes and the column count the grid is laid out with.
 
-export type GridMove = "nav-up" | "nav-down" | "nav-left" | "nav-right";
+import type { DirectionalAction } from "./PickerBase.js";
 
 /**
  * Where `move` from cell `from` lands, in a grid whose sections hold `sizes`
@@ -23,7 +23,7 @@ export function sectionedGridMove(
   sizes: readonly number[],
   columns: number,
   from: number,
-  move: GridMove,
+  move: DirectionalAction,
 ): number | null {
   const total = sizes.reduce((a, b) => a + b, 0);
   if (total === 0) return null;
