@@ -20,6 +20,8 @@ import type { AppComponents } from "../ui/App.js";
 
 /** The message body element currently in text-select mode (null when on compose). */
 let _messageBodyEl: HTMLElement | null = null;
+/** The compose field while it is the text-select target, so exit can restore it. */
+let _composeFieldEl: HTMLTextAreaElement | null = null;
 /** Saved attributes restored on exit. */
 let _savedContentEditable: string | null = null;
 let _savedTabIndex: string | null = null;
@@ -75,6 +77,7 @@ export function enterComposeTextSelect(composeField?: HTMLTextAreaElement): void
   // Apply the block-cursor styling and ensure a visible 1-char block at the
   // caret. Caller passes the field so we can target it without component refs.
   if (composeField) {
+    _composeFieldEl = composeField;
     setBlockCursor(true, composeField);
     primeBlockSelection(composeField);
   }
@@ -88,8 +91,19 @@ export function exitTextSelect(): void {
   if (AppState.get("textSelectMode") === null) return;
 
   // Drop both selection-styling classes from whichever target was active.
-  setBlockCursor(false);
-  setVisualModeClass(false);
+  const composeField = _composeFieldEl ?? undefined;
+  setBlockCursor(false, composeField);
+  setVisualModeClass(false, composeField);
+
+  // The block cursor is a real one-character selection in the textarea. Left
+  // in place, whatever runs next in Insert or Command would replace that
+  // character — an emoji picked from `:emoji` would overwrite the letter under
+  // the block. Collapse it to the caret it stands for.
+  if (composeField && AppState.get("textSelectMode") === "compose") {
+    const caret = blockCaret(composeField);
+    composeField.setSelectionRange(caret, caret);
+  }
+  _composeFieldEl = null;
 
   if (_messageBodyEl) {
     _messageBodyEl.classList.remove("message__body--text-select");
@@ -207,6 +221,18 @@ export function collapseMessageSelectionToStart(): void {
   collapsed.collapse(true);
   sel.removeAllRanges();
   sel.addRange(collapsed);
+}
+
+/**
+ * The caret a compose selection stands for: its anchor. A block primed at a
+ * caret extends away from it — forward over the next character, or backward
+ * over the previous one at the end of the text — so the anchor is where the
+ * caret was; in Visual it is where the selection started.
+ */
+function blockCaret(field: HTMLTextAreaElement): number {
+  const start = field.selectionStart ?? 0;
+  const end = field.selectionEnd ?? start;
+  return field.selectionDirection === "backward" ? end : start;
 }
 
 /**

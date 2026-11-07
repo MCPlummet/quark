@@ -91,6 +91,19 @@ describe("Input", () => {
       input.insertText("👍");
       expect(seen).toEqual(["👍"]);
     });
+
+    it("inserts through the editing command where there is one, so Ctrl-Z undoes it", () => {
+      const original = document.execCommand;
+      const exec = vi.fn(() => true);
+      document.execCommand = exec;
+      try {
+        input.insertText("🎉");
+        expect(exec).toHaveBeenCalledWith("insertText", false, "🎉");
+        expect(document.activeElement).toBe(input.getFieldElement());
+      } finally {
+        document.execCommand = original;
+      }
+    });
   });
 
   describe("command mode", () => {
