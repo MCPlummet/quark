@@ -17,6 +17,7 @@ import { importThemeText, loadTheme } from "../../../app/actions.js";
 import { getAppConfig, setAppConfig } from "../../../ipc/app_config.js";
 import { customThemesDir, listCustomThemes } from "../../../ipc/config.js";
 import type { CustomThemeEntry } from "../../../ipc/config.js";
+import { errorText, statusLine } from "../commit_field.js";
 import type { SettingsTab } from "../types.js";
 
 const BUILTIN_THEMES = [
@@ -38,17 +39,11 @@ export function setCurrentThemeName(name: string): void {
   _currentTheme = name;
 }
 
-type StatusKind = "saving" | "dirty" | "saved" | "error" | null;
-
 function hint(text: string): HTMLElement {
   const el = document.createElement("div");
   el.className = "settings-dialog__hint";
   el.textContent = text;
   return el;
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 export const themesTab: SettingsTab = {
@@ -153,9 +148,19 @@ export const themesTab: SettingsTab = {
       markCurrent();
     };
 
+    // Listings can finish out of order — the one started when the tab opened
+    // may still be waiting when an import's starts and finishes. Only the
+    // latest is drawn, so an older one never takes a just-imported theme back
+    // off the list. Never throws: a listing that fails says so in the list.
+    let listing = 0;
     const refreshCustom = async (): Promise<void> => {
-      const [entries, dir] = await Promise.all([listCustomThemes(), folder]);
-      renderCustom(entries, dir);
+      const mine = ++listing;
+      try {
+        const [entries, dir] = await Promise.all([listCustomThemes(), folder]);
+        if (mine === listing) renderCustom(entries, dir);
+      } catch {
+        if (mine === listing) customList.replaceChildren(hint("Failed to load custom themes."));
+      }
     };
 
     // ── Import ──────────────────────────────────────────────────────────
@@ -184,16 +189,11 @@ export const themesTab: SettingsTab = {
     importRow.append(field, button);
     importSection.appendChild(importRow);
 
-    const statusEl = document.createElement("div");
-    statusEl.className = "settings-dialog__field-status";
-    statusEl.setAttribute("aria-live", "polite");
+    // The result stays up: it names the file and what had to be filled in,
+    // which is worth reading, not just a "saved" to flash.
+    const { el: statusEl, set: status } = statusLine(null);
     importSection.appendChild(statusEl);
     content.appendChild(importSection);
-
-    const status = (kind: StatusKind, text = ""): void => {
-      statusEl.className = "settings-dialog__field-status" + (kind ? ` settings-dialog__field-status--${kind}` : "");
-      statusEl.textContent = text;
-    };
 
     // A theme with the same file name is already installed: the button becomes
     // [replace] for exactly the text that found it. Editing the text is a new
@@ -225,13 +225,15 @@ export const themesTab: SettingsTab = {
           status("dirty", `"${result.theme.name}" is already installed as ${result.theme.id} — [replace] to overwrite it`);
           return;
         }
+        // The file is written: apply it and make it the startup theme before
+        // anything else can fail, then list it.
         setReplacing(null);
         field.value = "";
-        await refreshCustom();
         chooseTheme(result.theme.id);
         const n = result.adjusted;
         status("saved", `imported as ${result.theme.id}` +
           (n ? ` — ${n} setting${n === 1 ? "" : "s"} filled in or fixed to load` : ""));
+        await refreshCustom();
       } catch (err) {
         status("error", errorText(err));
       } finally {
@@ -250,8 +252,6 @@ export const themesTab: SettingsTab = {
     });
 
     markCurrent();
-    void refreshCustom().catch(() => {
-      customList.replaceChildren(hint("Failed to load custom themes."));
-    });
+    void refreshCustom();
   },
 };

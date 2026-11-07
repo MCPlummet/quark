@@ -133,6 +133,40 @@ describe("themesTab — import", () => {
     expect(status(el)).toBe("imported as nord-tweaked.toml");
   });
 
+  it("keeps a just-imported theme listed when the first listing finishes last", async () => {
+    // The listing started when the tab opened is slow and predates the save.
+    let finishFirst!: (entries: never[]) => void;
+    vi.mocked(listCustomThemes).mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }));
+    vi.mocked(importThemeText).mockResolvedValue({ status: "saved", theme: imported, adjusted: 0 });
+    const el = await render();
+    vi.mocked(listCustomThemes).mockResolvedValue([imported]);
+
+    field(el).value = LINK;
+    importButton(el).click();
+    await settle();
+    expect(current(el)).toEqual([imported.id]);
+
+    finishFirst([]);
+    await settle();
+    expect(el.querySelector(`[data-theme-id="${imported.id}"]`)).toBeTruthy();
+    expect(current(el)).toEqual([imported.id]);
+  });
+
+  it("applies and keeps an imported theme even if listing it fails", async () => {
+    vi.mocked(importThemeText).mockResolvedValue({ status: "saved", theme: imported, adjusted: 0 });
+    const el = await render();
+    vi.mocked(listCustomThemes).mockRejectedValue(new Error("permission denied"));
+
+    field(el).value = LINK;
+    importButton(el).click();
+    await settle();
+
+    expect(loadTheme).toHaveBeenCalledWith(imported.id);
+    expect(vi.mocked(setAppConfig).mock.calls[0][0].general.theme).toBe(imported.id);
+    expect(status(el)).toBe("imported as nord-tweaked.toml");
+    expect(el.textContent).toContain("Failed to load custom themes.");
+  });
+
   it("shows why text could not be imported", async () => {
     vi.mocked(importThemeText).mockRejectedValue(new Error("That doesn't look like TOML or a theme link."));
     const el = await render();
