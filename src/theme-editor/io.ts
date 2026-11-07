@@ -2,25 +2,25 @@
 // themes, and the downloadable file.
 
 import { themeToToml, type CompleteTheme } from "../theme/share.js";
-import { tomlCommentText } from "../theme/import.js";
+import { themeFileText as fileText } from "../theme/import.js";
 
 export { importTheme, parseThemeToml, type ImportedTheme } from "../theme/import.js";
+
+/** What the downloaded file says about itself, under its title line. */
+const DOWNLOAD_NOTES = [
+  "Install: save to Quark's themes folder, then pick it in Settings → Themes.",
+  "  Linux    ~/.config/quark/themes/",
+  "  macOS    ~/Library/Application Support/quark/themes/",
+  "  Windows  %APPDATA%\\quark\\config\\themes\\",
+  "Edit: open https://quark.tel/theme/ and import this file.",
+];
 
 /**
  * The .toml file as downloaded: a short header, then the canonical TOML
  * (pass `toml` when it is already serialized).
  */
 export function themeFileText(theme: CompleteTheme, toml = themeToToml(theme)): string {
-  return [
-    `# ${tomlCommentText(theme.meta.name)} — a Quark theme`,
-    "# Install: save to Quark's themes folder, then pick it in Settings → Themes.",
-    "#   Linux    ~/.config/quark/themes/",
-    "#   macOS    ~/Library/Application Support/quark/themes/",
-    "#   Windows  %APPDATA%\\quark\\config\\themes\\",
-    "# Edit: open https://quark.tel/theme/ and import this file.",
-    "",
-    toml,
-  ].join("\n");
+  return fileText(theme, DOWNLOAD_NOTES, toml);
 }
 
 export function downloadText(text: string, filename: string): void {

@@ -1,8 +1,6 @@
 // Mock IPC layer for browser-only dev mode (no Tauri backend)
 // Provides fake data so the UI renders and can be interacted with
 
-import { parse as parseToml } from "smol-toml";
-
 import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember, SentMessage, InviteInfo, SpaceChild } from "./types.js";
 import type { CustomThemeEntry } from "./config.js";
 
@@ -221,22 +219,31 @@ const MOCK_MEMBERS: RoomMember[] = [
   { user_id: "@frank:matrix.org", display_name: "Frank", avatar_url: null, power_level: "member", presence: "offline" },
 ];
 
-// Check if we're running inside Tauri
 /**
  * Themes imported this session, by id (`<stem>.toml`): an in-memory stand-in
  * for the themes folder so Settings → Themes → Import works end to end.
  */
 const _mockThemes = new Map<string, { entry: CustomThemeEntry; toml: string }>();
 
-function mockThemeName(toml: string, fallback: string): string {
+/**
+ * smol-toml, loaded on first use: only the theme cases below need it, and a
+ * static import would put the parser in the app's startup bundle.
+ */
+async function parseToml(toml: string): Promise<Record<string, unknown>> {
+  const { parse } = await import("smol-toml");
+  return parse(toml);
+}
+
+async function mockThemeName(toml: string, fallback: string): Promise<string> {
   try {
-    const name = (parseToml(toml) as { meta?: { name?: unknown } }).meta?.name;
+    const name = ((await parseToml(toml)) as { meta?: { name?: unknown } }).meta?.name;
     return typeof name === "string" ? name : fallback;
   } catch {
     return fallback;
   }
 }
 
+// Check if we're running inside Tauri
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -492,7 +499,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       const given = String(args?.themePath ?? "");
       const id = given.endsWith(".toml") ? given : `${given}.toml`;
       const imported = _mockThemes.get(id);
-      if (imported) return parseToml(imported.toml);
+      if (imported) return await parseToml(imported.toml);
       // Return a minimal theme object so :theme commands don't crash in debug mode
       return {
         name: (args?.name as string) ?? "mock",
@@ -509,7 +516,7 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       const id = `${stem}.toml`;
       const existing = _mockThemes.get(id);
       if (existing && !args?.overwrite) return { status: "exists", theme: existing.entry };
-      const entry = { name: mockThemeName(toml, stem), id, path: `/mock/themes/${id}` };
+      const entry = { name: await mockThemeName(toml, stem), id, path: `/mock/themes/${id}` };
       _mockThemes.set(id, { entry, toml });
       return { status: "saved", theme: entry };
     }

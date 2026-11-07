@@ -1,17 +1,17 @@
-// Theme actions: loading a theme by name/path and applying the configured
-// startup theme.
+// Theme actions: loading a theme by name/path, applying the configured
+// startup theme, and importing one (see ./theme_import.ts).
 
-import { importCustomTheme, loadTheme as ipcLoadTheme } from "../../ipc/index.js";
-import type { CustomThemeEntry } from "../../ipc/index.js";
+import { loadTheme as ipcLoadTheme } from "../../ipc/index.js";
 
 import { applyTheme } from "../../theme/loader.js";
-import { BUILTIN_THEME_MAP } from "../../theme/builtins.js";
-import { importTheme, tomlCommentText } from "../../theme/import.js";
-import { themeSlug, themeToToml, type CompleteTheme } from "../../theme/share.js";
+import { builtinTheme } from "../../theme/builtins.js";
 import { getAppConfig } from "../../ipc/app_config.js";
 import { setCurrentThemeName } from "../../ui/settings/tabs/themes.js";
-
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
+
+import type { ThemeImportResult } from "./theme_import.js";
+
+export type { ThemeImportResult };
 
 /**
  * The theme applied when nothing names one. `general.theme` carries this value
@@ -64,27 +64,40 @@ export interface LoadThemeOptions {
 }
 
 /**
- * Load and apply a theme by built-in name, or a custom theme by file name in
- * the themes folder (`nord-tweaked.toml`) or absolute path.
- * Built-in themes are resolved from the embedded map without any IPC call;
- * anything else is loaded via the Rust backend.
+ * The id a theme is listed under in Settings, for `nameOrPath` as given to
+ * {@link loadTheme}: a built-in's name, a custom theme's file name
+ * (`nord-tweaked` and `nord-tweaked.toml` are both `nord-tweaked.toml`), or a
+ * path as given. Mirrors the backend's `resolve_theme_path`: only a bare file
+ * name is a theme in the themes folder.
+ */
+export function themeIdFor(nameOrPath: string): string {
+  if (builtinTheme(nameOrPath)) return nameOrPath;
+  const bare = !/[\\/]/.test(nameOrPath) && nameOrPath !== "." && nameOrPath !== "..";
+  return bare && !nameOrPath.endsWith(".toml") ? `${nameOrPath}.toml` : nameOrPath;
+}
+
+/**
+ * Load and apply a theme: a built-in by name, a custom theme by file name in
+ * the themes folder (`nord-tweaked.toml`, or `nord-tweaked`), or a theme file
+ * by path. A bare name means the built-in when there is one; `nord.toml`
+ * always means the file. Built-in themes are resolved from the embedded map
+ * without any IPC call; anything else is loaded via the Rust backend.
  */
 export async function loadTheme(
   nameOrPath: string,
   { announce = true }: LoadThemeOptions = {},
 ): Promise<void> {
   try {
-    const builtin = BUILTIN_THEME_MAP[nameOrPath];
+    const builtin = builtinTheme(nameOrPath);
     if (builtin) {
       applyTheme(builtin);
       setCurrentThemeName(nameOrPath);
       if (announce) showSuccess(`Theme "${nameOrPath}" applied`);
       return;
     }
-    // Fall back to IPC for custom file paths
     const theme = await ipcLoadTheme(nameOrPath);
     applyTheme(theme);
-    setCurrentThemeName(nameOrPath);
+    setCurrentThemeName(themeIdFor(nameOrPath));
     const displayName = theme.meta?.name ?? nameOrPath;
     if (announce) showSuccess(`Theme "${displayName}" applied`);
   } catch (err) {
@@ -117,55 +130,15 @@ export async function loadThemeFromConfig(): Promise<void> {
 
 // ── Import ───────────────────────────────────────────────────────────────────
 
-/** What an import fills missing or invalid settings in from. */
-const IMPORT_BASE = BUILTIN_THEME_MAP[DEFAULT_THEME] as CompleteTheme;
-
-/** The backend's limit on a theme file name (`is_valid_theme_stem`). */
-const MAX_STEM_LENGTH = 64;
-
-/** The file name, less `.toml`, an imported theme is saved under. */
-export function themeFileStem(name: string): string {
-  return themeSlug(name).slice(0, MAX_STEM_LENGTH).replace(/-+$/, "") || "theme";
-}
-
-/** The file an imported theme is saved as: a short header, then canonical TOML. */
-export function importedThemeFileText(theme: CompleteTheme): string {
-  return [
-    `# ${tomlCommentText(theme.meta.name)} — a Quark theme`,
-    "# Imported in Quark. To edit it, open https://quark.tel/theme/ and import this file.",
-    "",
-    themeToToml(theme),
-  ].join("\n");
-}
-
-export type ThemeImportResult =
-  /** Saved; `adjusted` settings were missing or invalid and were filled in. */
-  | { status: "saved"; theme: CustomThemeEntry; adjusted: number }
-  /** A theme with the same file name is installed; nothing was written. */
-  | { status: "exists"; theme: CustomThemeEntry };
-
 /**
- * Install a theme someone handed over — a quark.tel/theme link, a bare share
- * string, or theme TOML — into the themes folder, named after the theme.
- *
- * This works the same on every platform: mobile has no folder the user can
- * reach, but the app's own config folder has a `themes/` like any other.
- * The theme is completed the way the editor completes an import (gaps filled
- * from Phosphor) and saved as canonical TOML, so the file stands on its own.
- * It is not applied; the caller decides that.
- *
- * Throws an Error fit to show the user when the text isn't a theme.
+ * Install a theme someone handed over into the themes folder — see
+ * `importThemeText` in ./theme_import.ts, loaded here on first use so its
+ * TOML parser and DEFLATE codec stay out of the startup bundle.
  */
 export async function importThemeText(
   text: string,
-  { overwrite = false }: { overwrite?: boolean } = {},
+  options?: { overwrite?: boolean },
 ): Promise<ThemeImportResult> {
-  const { theme, issues } = importTheme(text, IMPORT_BASE);
-  const outcome = await importCustomTheme(
-    themeFileStem(theme.meta.name),
-    importedThemeFileText(theme),
-    overwrite,
-  );
-  if (outcome.status === "exists") return outcome;
-  return { ...outcome, adjusted: issues.length };
+  const { importThemeText: install } = await import("./theme_import.js");
+  return install(text, options);
 }
