@@ -216,6 +216,39 @@ describe("SelectionList", () => {
       expect(document.activeElement).toBe(items[1]);
       for (const el of items) el.remove();
     });
+
+    // The emoji grid has ~1,900 cells; a move rewrote every one of them.
+    it("a move rewrites only the cell left and the cell reached", () => {
+      const items = makeItems(50);
+      const list = new SelectionList({
+        columns: 5,
+        highlight: { kind: "tabindex" },
+        getItems: () => items,
+        onSelect: vi.fn(),
+      });
+      list.setFocus(0);
+      const writes = items.map((el) => vi.spyOn(el, "setAttribute"));
+      list.dispatch("nav-down");
+      expect(writes.filter((w) => w.mock.calls.length > 0)).toHaveLength(2);
+      expect(items.map((el) => el.getAttribute("tabindex")).filter((t) => t === "0")).toHaveLength(1);
+      expect(items[5].getAttribute("tabindex")).toBe("0");
+    });
+
+    it("sweeps every item again after a re-render", () => {
+      let items = makeItems(4);
+      const list = new SelectionList({
+        columns: 2,
+        highlight: CLASS_HL,
+        getItems: () => items,
+        onSelect: vi.fn(),
+      });
+      list.setFocus(1);
+      // A re-render that (wrongly or not) starts an item marked: the sweep fixes it.
+      items = makeItems(4);
+      items[3].classList.add("active");
+      list.setFocus(0);
+      expect(items.map((el) => el.classList.contains("active"))).toEqual([true, false, false, false]);
+    });
   });
 
   describe("handleKey (keymap-driven)", () => {

@@ -132,7 +132,7 @@ export interface SelectionListOptions {
   /** How to mark the active item. */
   highlight: HighlightStrategy;
   /** Live cell/item elements at navigation time. */
-  getItems: () => HTMLElement[];
+  getItems: () => readonly HTMLElement[];
   /** Invoked when the active item should be activated (Enter / select). */
   onSelect: (index: number) => void;
   /**
@@ -174,6 +174,8 @@ export interface SelectionListOptions {
  */
 export class SelectionList {
   private _focusIndex = 0;
+  /** The item last marked active, and where it was, for incremental highlighting. */
+  private _highlighted: { el: HTMLElement; index: number } | null = null;
   private readonly _opts: SelectionListOptions;
   private readonly _resolve: (key: string) => ReturnType<typeof keymapManager.resolveKey>;
 
@@ -278,18 +280,29 @@ export class SelectionList {
     }
   }
 
-  private _applyHighlight(items: HTMLElement[], index: number): void {
+  /**
+   * Mark `index` active. Moving within the same items rewrites only the cell
+   * left and the cell reached — the emoji grid holds ~1,900 cells, and
+   * sweeping all of them on every j/k was a style invalidation per cell per
+   * keypress. After a re-render (the item last marked is no longer where it
+   * was) every item is swept, so a fresh render needs no care.
+   */
+  private _applyHighlight(items: readonly HTMLElement[], index: number): void {
     const strat = this._opts.highlight;
-    if (strat.kind === "tabindex") {
-      for (let i = 0; i < items.length; i++) {
-        items[i].setAttribute("tabindex", i === index ? "0" : "-1");
-      }
-      items[index]?.focus();
+    const mark = (el: HTMLElement, on: boolean): void => {
+      if (strat.kind === "tabindex") el.setAttribute("tabindex", on ? "0" : "-1");
+      else el.classList.toggle(strat.activeClass, on);
+    };
+    const prev = this._highlighted;
+    if (prev !== null && items[prev.index] === prev.el) {
+      if (prev.index !== index) mark(prev.el, false);
     } else {
-      for (let i = 0; i < items.length; i++) {
-        items[i].classList.toggle(strat.activeClass, i === index);
-      }
+      for (let i = 0; i < items.length; i++) mark(items[i], i === index);
     }
+    const next = items[index];
+    if (next) mark(next, true);
+    this._highlighted = next ? { el: next, index } : null;
+    if (strat.kind === "tabindex") next?.focus();
   }
 }
 
