@@ -3,25 +3,24 @@
 // what a pick does, whether the sticker and GIF tabs are offered, whether free
 // text is accepted, and where the panel sits. Everything about browsing emoji
 // lives in the one EmojiBrowser it embeds.
+//
+// The picker is a host for tabs. Each tab is a PickerPanel (picker_panel.ts)
+// that routes its own keys through the one shared router; the host only shows
+// a panel, focuses it, and owns the plain Tab that moves between them.
 
-import { PickerBase, SelectionList } from "./PickerBase.js";
+import { PickerBase } from "./PickerBase.js";
 import { EmojiBrowser } from "./EmojiBrowser.js";
+import { StickerBrowser, type StickerEntry } from "./StickerBrowser.js";
+import type { PickerPanel } from "./picker_panel.js";
 import type { CustomEmojiPack, PickerEmoji } from "./emoji_catalog.js";
 import { isMobile, viewportPan } from "../app/mobile.js";
 
+export type { StickerEntry } from "./StickerBrowser.js";
+
 export type PickerTab = "emoji" | "sticker" | "gif";
 
-export interface StickerEntry {
-  id: string;
-  /** Display name / shortcode */
-  name: string;
-  /** mxc:// URL of the sticker image */
-  url: string;
-  /** Optional thumbnail URL (lower res for the grid) */
-  thumbnailUrl?: string;
-  /** Pack this sticker belongs to */
-  packName?: string;
-}
+/** The tabs that are panels; GIF hands over to its own overlay. */
+type PanelTab = Exclude<PickerTab, "gif">;
 
 /** The sticker and GIF tabs — the compose box's, not a reaction's. */
 export interface EmojiPickerMedia {
@@ -61,7 +60,6 @@ export interface EmojiPickerContext {
   anchor?: HTMLElement | null;
 }
 
-const STICKER_COLS = 4;
 /** Gap between an anchor and the panel, and the panel and the window edge. */
 const ANCHOR_GAP = 6;
 const EDGE_GAP = 8;
@@ -69,18 +67,12 @@ const EDGE_GAP = 8;
 /** Keyboard-, pointer- and touch-driven emoji / sticker / GIF picker overlay. */
 export class EmojiPicker extends PickerBase {
   private _context: EmojiPickerContext | null = null;
-  private _currentTab: PickerTab = "emoji";
+  private _currentTab: PanelTab = "emoji";
 
   private _tabBarEl: HTMLElement;
   private _browser: EmojiBrowser;
-
-  // ── Sticker tab (compose only) ─────────────────────────────────────────────
-  private _stickerSectionEl: HTMLElement;
-  private _stickerSearchEl: HTMLInputElement;
-  private _stickerGridEl: HTMLElement;
-  private _stickerList: SelectionList;
-  private _stickerAllEntries: StickerEntry[] = [];
-  private _stickerFilteredEntries: StickerEntry[] = [];
+  private _stickers: StickerBrowser;
+  private _panels: Record<PanelTab, PickerPanel>;
 
   constructor() {
     super({
@@ -118,43 +110,17 @@ export class EmojiPicker extends PickerBase {
       onText: (text) => this._finish((ctx) => ctx.text?.onText(text)),
       onClose: () => this.hide(),
     });
-    this._el.appendChild(this._browser.getElement());
 
-    // ── Sticker tab ──────────────────────────────────────────────────────
-    this._stickerSectionEl = document.createElement("div");
-    this._stickerSectionEl.className = "emoji-picker__section";
-    this._stickerSectionEl.style.display = "none";
-    this._el.appendChild(this._stickerSectionEl);
-
-    this._stickerSearchEl = document.createElement("input");
-    this._stickerSearchEl.type = "text";
-    this._stickerSearchEl.className = "sticker-picker__search";
-    this._stickerSearchEl.placeholder = "Search stickers…";
-    this._stickerSearchEl.setAttribute("aria-label", "Search stickers");
-    this._stickerSearchEl.setAttribute("autocomplete", "off");
-    this._stickerSearchEl.setAttribute("spellcheck", "false");
-    this._stickerSearchEl.addEventListener("input", () => this._applyStickerFilter());
-    this._stickerSectionEl.appendChild(this._stickerSearchEl);
-
-    this._stickerGridEl = document.createElement("div");
-    this._stickerGridEl.className = "sticker-picker__grid";
-    this._stickerGridEl.setAttribute("role", "grid");
-    this._stickerGridEl.setAttribute("aria-label", "Sticker grid");
-    this._stickerSectionEl.appendChild(this._stickerGridEl);
-
-    this._stickerList = new SelectionList({
-      columns: STICKER_COLS,
-      highlight: { kind: "tabindex" },
-      getItems: () =>
-        Array.from(this._stickerGridEl.querySelectorAll<HTMLElement>(".sticker-picker__cell")),
-      onSelect: (i) => this._selectSticker(i),
-      onAction: (action) => {
-        if (action === "close") this.hide();
-        else if (action === "picker-search") this._stickerSearchEl.focus();
-        else return false;
-        return true;
-      },
+    // ── Sticker tab (compose only) ───────────────────────────────────────
+    this._stickers = new StickerBrowser({
+      onPick: (sticker) => this._finish((ctx) => ctx.media?.onSticker(sticker)),
+      onClose: () => this.hide(),
+      focusFallback: () => this._el.focus(),
     });
+
+    this._panels = { emoji: this._browser, sticker: this._stickers };
+    for (const panel of Object.values(this._panels)) this._el.appendChild(panel.getElement());
+    this._stickers.getElement().style.display = "none";
 
     this._el.addEventListener("keydown", (e) => this._handleKeydown(e));
     this.registerOutsideClose();
@@ -168,10 +134,10 @@ export class EmojiPicker extends PickerBase {
     this._el.setAttribute("aria-label", context.label);
     this._tabBarEl.style.display = context.media ? "" : "none";
     this._browser.setTextAction(context.text?.label ?? null);
-    this._resetStickerSearch();
 
     this.reveal();
-    this._browser.reset(); // once shown, so its scroll position takes
+    // Once shown, so the emoji grid's scroll position takes.
+    for (const panel of Object.values(this._panels)) panel.reset();
     this._place(context.anchor ?? null);
     this._showTab(context.media?.initialTab ?? "emoji");
   }
@@ -179,7 +145,6 @@ export class EmojiPicker extends PickerBase {
   hide(): void {
     this.conceal(); // hides + deregisters modal + keymapManager.resetSequence()
     this._context = null;
-    this._resetStickerSearch();
   }
 
   // ── Data ───────────────────────────────────────────────────────────────────
@@ -200,21 +165,11 @@ export class EmojiPicker extends PickerBase {
   }
 
   setStickers(stickers: StickerEntry[]): void {
-    this._stickerAllEntries = stickers;
-    this._applyStickerFilter();
+    this._stickers.setStickers(stickers);
   }
 
   updateStickerThumbnail(id: string, thumbnailUrl: string): void {
-    const canonical = this._stickerAllEntries.find((s) => s.id === id);
-    if (canonical) canonical.thumbnailUrl = thumbnailUrl;
-    const cells = this._stickerGridEl.querySelectorAll<HTMLElement>(".sticker-picker__cell");
-    for (const cell of cells) {
-      if (this._stickerFilteredEntries[Number(cell.dataset.index)]?.id === id) {
-        const img = cell.querySelector<HTMLImageElement>("img");
-        if (img) img.src = thumbnailUrl;
-        break;
-      }
-    }
+    this._stickers.updateThumbnail(id, thumbnailUrl);
   }
 
   // ── Private ────────────────────────────────────────────────────────────────
@@ -274,19 +229,17 @@ export class EmojiPicker extends PickerBase {
       btn.setAttribute("aria-selected", String(isActive));
       btn.classList.toggle("emoji-picker__tab--active", isActive);
     }
-    this._browser.getElement().style.display = tab === "emoji" ? "" : "none";
-    this._stickerSectionEl.style.display = tab === "sticker" ? "" : "none";
-
-    if (tab === "sticker") {
-      media?.onStickerTab();
-      if (!this._focusStickerCell(0)) this._el.focus();
-      return;
+    for (const [id, panel] of Object.entries(this._panels)) {
+      panel.getElement().style.display = id === tab ? "" : "none";
     }
-    // Opening focus is the same in every context: the search field, so typing
-    // finds an emoji at once. Not on mobile, where focusing a text field raises
-    // the soft keyboard over half the sheet; the field is a tap away.
-    if (isMobile()) this._el.focus();
-    else this._browser.focusSearch();
+    if (tab === "sticker") media?.onStickerTab();
+
+    // The emoji tab opens on its search field in every context, so typing
+    // finds an emoji at once — but not on mobile, where focusing a text field
+    // raises the soft keyboard over half the sheet; the field is a tap away.
+    // A tab with nothing to focus leaves focus on the picker, so its keys work.
+    const textField = tab === "emoji";
+    if ((textField && isMobile()) || !this._panels[tab].focusInitial()) this._el.focus();
   }
 
   private _nextTab(): void {
@@ -299,113 +252,13 @@ export class EmojiPicker extends PickerBase {
     // j/k and move the timeline underneath it.
     e.stopPropagation();
 
-    if (this._currentTab === "sticker") {
-      this._handleStickerKeydown(e);
-      return;
-    }
-    if (this._browser.handleKeydown(e)) return;
-    // The browser leaves a plain Tab from its grid to us.
+    const panel = this._panels[this._currentTab];
+    if (panel.handleKeydown(e)) return;
+    // A panel leaves a plain Tab from its grid to us.
     if (e.key === "Tab") {
       e.preventDefault();
       if (this._context?.media) this._nextTab();
-      else this._browser.focusSearch();
+      else panel.focusSearch();
     }
-  }
-
-  // ── Sticker tab ────────────────────────────────────────────────────────────
-
-  private _resetStickerSearch(): void {
-    this._stickerSearchEl.value = "";
-    this._applyStickerFilter();
-  }
-
-  private _applyStickerFilter(): void {
-    const q = this._stickerSearchEl.value.toLowerCase().trim();
-    this._stickerFilteredEntries = q
-      ? this._stickerAllEntries.filter(
-          (s) => s.name.toLowerCase().includes(q) || (s.packName?.toLowerCase().includes(q) ?? false),
-        )
-      : this._stickerAllEntries;
-    this._renderStickerGrid();
-    this._stickerList.resetIndex();
-  }
-
-  private _renderStickerGrid(): void {
-    const frag = document.createDocumentFragment();
-    let lastPackName: string | undefined = undefined;
-
-    this._stickerFilteredEntries.forEach((sticker, i) => {
-      // A pack header row whenever the pack changes
-      const packName = sticker.packName ?? "";
-      if (packName !== lastPackName) {
-        lastPackName = packName;
-        if (packName) {
-          const header = document.createElement("div");
-          header.className = "sticker-picker__pack-header";
-          header.textContent = packName;
-          frag.appendChild(header);
-        }
-      }
-
-      const cell = document.createElement("button");
-      cell.className = "sticker-picker__cell";
-      cell.type = "button";
-      cell.setAttribute("role", "gridcell");
-      cell.setAttribute("tabindex", "-1");
-      cell.setAttribute("aria-label", sticker.name);
-      cell.title = sticker.name;
-      cell.dataset.index = String(i);
-
-      const img = document.createElement("img");
-      img.src = sticker.thumbnailUrl ?? sticker.url;
-      img.alt = sticker.name;
-      img.className = "sticker-picker__img";
-      img.loading = "lazy";
-      cell.appendChild(img);
-
-      cell.addEventListener("click", () => this._selectSticker(i));
-      frag.appendChild(cell);
-    });
-    this._stickerGridEl.replaceChildren(frag);
-  }
-
-  private _focusStickerCell(index: number): boolean {
-    if (!this._stickerGridEl.querySelector(".sticker-picker__cell")) return false;
-    this._stickerList.setFocus(index);
-    return true;
-  }
-
-  private _selectSticker(index: number): void {
-    const sticker = this._stickerFilteredEntries[index];
-    if (sticker) this._finish((ctx) => ctx.media?.onSticker(sticker));
-  }
-
-  private _handleStickerKeydown(e: KeyboardEvent): void {
-    if (e.key === "Escape" || (e.ctrlKey && e.key === "[")) {
-      e.preventDefault();
-      this.hide();
-      return;
-    }
-    // The search field owns its typing, as the emoji tab's does.
-    if (e.target === this._stickerSearchEl) {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        this._selectSticker(0);
-      } else if (e.key === "Tab" || e.key === "ArrowDown") {
-        e.preventDefault();
-        if (!e.shiftKey) this._focusStickerCell(0);
-      }
-      return;
-    }
-    if (e.key === "Tab") {
-      e.preventDefault();
-      if (e.shiftKey) this._stickerSearchEl.focus();
-      else this._nextTab();
-      return;
-    }
-    if (e.ctrlKey || e.metaKey || e.altKey) return; // chords are not picker keys
-    // Movement, select and `/` route through the keymap so user rebindings apply.
-    const { consumed, partial } = this._stickerList.handleKey(e.key);
-    if (consumed || partial) e.preventDefault();
   }
 }

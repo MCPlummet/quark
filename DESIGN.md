@@ -1078,6 +1078,7 @@ failed creation keeps the dialog open with the error inline.
 | Picker        | `j/k/h/l`     | Navigate grid                 |
 | Picker        | `gg` / `G`    | First / last cell             |
 | Picker        | `Enter` / `o` | Select emoji/sticker/GIF      |
+| Picker        | `Space`       | Select the focused emoji/sticker (a literal, not a keymap action) |
 | Picker        | `/`           | Focus the search field        |
 | Picker        | `[` / `]`     | Previous / next emoji category|
 | Picker        | `Tab`         | Search field → grid; from the grid, next tab (emoji ↔ sticker ↔ GIF) |
@@ -1576,9 +1577,19 @@ interface is the complete list of what the two may differ in:
 | Desktop placement | docked above the compose bar | beside the message, flipped above it when there is no room below |
 
 Everything else is shared and lives in one place each: the emoji model in
-`emoji_catalog.ts`, the panel (search field, category bar, grid, keys) in
-`EmojiBrowser.ts`, and the room's custom emoji in `actions/custom_emoji.ts`,
-which `:shortcode` autocomplete reads too.
+`emoji_catalog.ts`, the panel (search field, category bar, grid) in
+`EmojiBrowser.ts`, the keys of every tab in `picker_panel.ts`, and the room's
+custom emoji in `actions/custom_emoji.ts`, which `:shortcode` autocomplete
+reads too. Custom emoji thumbnails, there and everywhere else they are drawn
+(inline in messages, reaction chips), download through one
+`resolveEmojiThumbnail`, so a thumbnail two surfaces want at once is fetched
+once.
+
+The picker itself is a host for tabs: the Emoji and Stickers tabs are each a
+`PickerPanel` (`EmojiBrowser`, `StickerBrowser`), and both route their keys
+through `routePanelKey`. The host shows a panel, focuses what it opens on, and
+owns the plain `Tab` that moves between them. The two tabs once kept their own
+copies of the key handler, and fixes to one did not reach the other.
 
 **Why it is built this way.** The compose and reaction pickers were two
 components that had been "unified" more than once by copying logic across, and
@@ -1597,8 +1608,10 @@ context has to be added to `EmojiPickerContext` on purpose.
 custom pack of the room and the account (one section per pack, its first emoji
 as the category icon), then the built-in categories in Unicode order. Each glyph
 is listed once, compared with variation selectors stripped; the common ones also
-appear in their home category. The category bar jumps to a section and follows
-the scroll.
+appear in their home category. The category bar follows the scroll; a category
+button does what `[`/`]` do, jumping to its section and focusing that section's
+first emoji, so the next key acts from there. A rebuild (the room's packs
+changed) keeps focus on the same emoji in the same section.
 
 **Search.** The query is split on whitespace and every term must match; a
 term's leading `:` or `/` and trailing `:` are ignored, so `:joy:` and `joy` are
@@ -1619,9 +1632,19 @@ grid) and `Esc` (close) act there. In the grid every key resolves through
 by rows that respect the section headers (up off the first row returns to the
 search field), `jump-top`/`jump-bottom`, `select` (`Enter`, `o`),
 `picker-search` (`/`), `picker-prev-section`/`picker-next-section` (`[`/`]`) and
-`close`. `Tab` from the grid moves to the next tab in the compose box and back
-to the search field for a reaction; `Shift-Tab` returns to the search field.
-`Esc` closes the picker from anywhere in it.
+`close`. `Space` on a cell picks it, as a literal rather than a keymap action:
+the leader is Space by default, and with any `<leader>` mapping the keymap
+would read it as the start of a sequence. `Tab` from the grid moves to the next
+tab in the compose box and back to the search field for a reaction; `Shift-Tab`
+returns to the search field. `Esc` (or `Ctrl-[`) closes the picker from
+anywhere in it. Only Ctrl/Cmd chords are ignored as picker keys: a key typed
+with AltGr (which Windows reports as Ctrl+Alt) or macOS Option is the character
+it produces, so `[`/`]`/`/` work on layouts that need those modifiers to type
+them. Keys that belong to an input method's composition (`isComposing`, or
+WebKit's keyCode 229) are left to it, so the Enter that commits a conversion
+neither picks a result nor sends the half-typed text. The Stickers tab routes
+its keys the same way; when the room's stickers arrive while one has focus,
+focus stays on that sticker if it is still listed, else moves to the first.
 
 **Opening and mobile.** Both contexts open on the search field, so typing finds
 an emoji at once. In mobile mode both open as a bottom sheet with nothing
@@ -2204,10 +2227,12 @@ quark/
 │   │   ├── Reactions.ts      # Reaction bar
 │   │   ├── Input.ts          # Compose bar with mode indicator
 │   │   ├── EmojiPicker.ts    # The emoji picker overlay (compose + reactions; sticker/GIF tabs)
-│   │   ├── EmojiBrowser.ts   # Its emoji panel: search, category bar, grid, keys
+│   │   ├── EmojiBrowser.ts   # Its emoji tab: search, category bar, grid
+│   │   ├── StickerBrowser.ts # Its sticker tab: search, grid of the room's packs
+│   │   ├── picker_panel.ts   # The tab interface and the one key router both tabs use
 │   │   ├── emoji_catalog.ts  # Emoji model: sections, dedupe, search, pick output
 │   │   ├── grid_nav.ts       # Up/down in a grid of sections
-│   │   ├── StickerPicker.ts  # Re-exports StickerEntry (the tab lives in EmojiPicker)
+│   │   ├── StickerPicker.ts  # Re-exports StickerEntry (the tab is StickerBrowser)
 │   │   ├── GifPicker.ts      # GIF search overlay
 │   │   ├── ShortcodePreview.ts # Inline emoji preview popup
 │   │   ├── MemberList.ts     # Room member sidebar

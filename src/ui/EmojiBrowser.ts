@@ -2,10 +2,12 @@
 // navigation. The emoji picker embeds exactly one, whichever context opened it
 // — the compose box or a reaction — so there is no second implementation for
 // the two to drift apart in. What it lists and finds comes from emoji_catalog;
-// this file only draws it and moves through it.
+// this file only draws it and moves through it. Its keys route through
+// picker_panel, as the sticker tab's do.
 
 import { SelectionList, type DirectionalAction } from "./PickerBase.js";
 import { sectionedGridMove } from "./grid_nav.js";
+import { routePanelKey, type PanelKeys, type PickerPanel } from "./picker_panel.js";
 import {
   buildSections,
   browseEntries,
@@ -21,7 +23,7 @@ import {
 const FALLBACK_COLUMNS = 7;
 
 export interface EmojiBrowserCallbacks {
-  /** An emoji was chosen (click, tap, Enter). */
+  /** An emoji was chosen (click, tap, Enter, Space). */
   onPick(entry: PickerEmoji): void;
   /** Free text was submitted — only offered while a text action is set. */
   onText(text: string): void;
@@ -29,7 +31,29 @@ export interface EmojiBrowserCallbacks {
   onClose(): void;
 }
 
-export class EmojiBrowser {
+/** Where the focused cell is, in terms that survive a re-render. */
+interface FocusedEntry {
+  id: string;
+  /** The browse section it sits in; null in search results, where ids are unique. */
+  sectionId: string | null;
+}
+
+/** One rendered grid: its cells in DOM order and its custom images by source. */
+interface RenderedGrid {
+  cells: HTMLElement[];
+  images: Map<string, HTMLImageElement[]>;
+}
+
+const emptyGrid = (): RenderedGrid => ({ cells: [], images: new Map() });
+
+/** Append `value` to the list `map` holds under `key`. */
+function addTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
+export class EmojiBrowser implements PickerPanel {
   private readonly _el: HTMLElement;
   private readonly _searchEl: HTMLInputElement;
   private readonly _catsEl: HTMLElement;
@@ -38,13 +62,20 @@ export class EmojiBrowser {
   private readonly _emptyEl: HTMLElement;
   private readonly _hintEl: HTMLElement;
   private readonly _list: SelectionList;
+  private readonly _keys: PanelKeys;
   private readonly _cb: EmojiBrowserCallbacks;
 
-  private _sections: EmojiSection[] = buildSections([]);
+  private _sections: EmojiSection[] = [];
   private _packsSignature = customPacksSignature([]);
-  /** The browse grid's cells, in DOM order (common emoji appear twice). */
+  /** Custom entries by image source, so a resolved thumbnail touches only its own. */
+  private _entriesByUrl = new Map<string, PickerEmoji[]>();
+  /** The browse grid's entries, in DOM order (common emoji appear twice). */
   private _browse: PickerEmoji[] = [];
+  private _browseGrid: RenderedGrid = emptyGrid();
   private _results: PickerEmoji[] = [];
+  private _resultsGrid: RenderedGrid = emptyGrid();
+  /** Custom pack category buttons by their icon's image source. */
+  private _categoryIcons = new Map<string, HTMLElement[]>();
   private _searching = false;
   private _rendered = false;
   /** Verb phrase for submitting free text ("react with"), or null when not accepted. */
@@ -53,6 +84,7 @@ export class EmojiBrowser {
 
   constructor(callbacks: EmojiBrowserCallbacks) {
     this._cb = callbacks;
+    this._setSections(buildSections([]));
 
     this._el = document.createElement("div");
     this._el.className = "emoji-picker__section emoji-picker__emoji";
@@ -78,9 +110,12 @@ export class EmojiBrowser {
     this._catsEl = document.createElement("div");
     this._catsEl.className = "emoji-picker__categories";
     this._catsEl.setAttribute("aria-label", "Emoji categories");
+    // A category button does what `[`/`]` do: the section's first emoji takes
+    // focus, so the next key — Enter, Tab, an arrow — acts from there and not
+    // from wherever the grid's focus index was left.
     this._catsEl.addEventListener("click", (e) => {
       const btn = (e.target as Element).closest<HTMLElement>(".emoji-picker__category-btn");
-      if (btn?.dataset.sectionId) this.jumpToSection(btn.dataset.sectionId, false);
+      if (btn?.dataset.sectionId) this.jumpToSection(btn.dataset.sectionId);
     });
     this._el.appendChild(this._catsEl);
 
@@ -110,16 +145,24 @@ export class EmojiBrowser {
       columns: FALLBACK_COLUMNS,
       highlight: { kind: "tabindex" },
       getItems: () => this._cells(),
-      onSelect: (i) => {
-        const entry = this.visibleEntries()[i];
-        if (entry) this._cb.onPick(entry);
-      },
+      onSelect: (i) => this._pick(i),
       move: (from, action) => sectionedGridMove(this._sectionSizes(), this._columns(), from, action),
       onEdge: (action: DirectionalAction) => {
         if (action === "nav-up") this.focusSearch();
       },
       onAction: (action) => this._onAction(action),
     });
+
+    this._keys = {
+      searchEl: this._searchEl,
+      list: this._list,
+      cells: () => this._cells(),
+      pick: (i) => this._pick(i),
+      close: () => this._cb.onClose(),
+      focusSearch: () => this.focusSearch(),
+      focusGrid: (i) => this.focusGrid(i),
+      searchEnter: (e) => this._searchEnter(e),
+    };
   }
 
   getElement(): HTMLElement {
@@ -143,15 +186,13 @@ export class EmojiBrowser {
       return;
     }
     this._packsSignature = signature;
-    this._sections = buildSections(packs);
+    this._setSections(buildSections(packs));
     if (!this._rendered) return;
-    const focusedId = this._focusedEntryId();
+    // Read before the re-render takes the focused cell out of the document.
+    const focused = this._focusedEntry();
     this._renderBrowse();
     this._applyQuery();
-    if (focusedId !== null) {
-      const i = this.visibleEntries().findIndex((e) => e.id === focusedId);
-      this.focusGrid(Math.max(0, i));
-    }
+    if (focused) this.focusGrid(this._indexOf(focused));
   }
 
   /** A custom emoji's thumbnail resolved: show it wherever that emoji is drawn. */
@@ -159,25 +200,31 @@ export class EmojiBrowser {
     this._applyImages(new Map([[url, imageUrl]]));
   }
 
-  /** Fill in resolved images (source url → displayable url) in one pass. */
+  /**
+   * Fill in resolved images (source url → displayable url). Each lookup is by
+   * source, so a pack's hundreds of thumbnails arriving one by one cost one
+   * entry and one cell each, not a walk of every emoji and image per arrival.
+   */
   private _applyImages(images: ReadonlyMap<string, string>): void {
-    if (images.size === 0) return;
-    for (const section of this._sections) {
-      for (const e of section.entries) {
-        const image = e.url !== undefined ? images.get(e.url) : undefined;
-        if (image) e.imageUrl = image;
+    for (const [url, image] of images) {
+      for (const e of this._entriesByUrl.get(url) ?? []) e.imageUrl = image;
+      for (const grid of [this._browseGrid, this._resultsGrid]) {
+        for (const img of grid.images.get(url) ?? []) {
+          if (img.getAttribute("src") === image) continue;
+          img.src = image;
+          img.hidden = false;
+          img.closest(".emoji-picker__cell")?.classList.remove("emoji-picker__cell--pending");
+        }
       }
+      for (const btn of this._categoryIcons.get(url) ?? []) this._setCategoryIcon(btn, btn.title, image);
     }
-    for (const img of this._el.querySelectorAll<HTMLImageElement>("img[data-url]")) {
-      const image = images.get(img.dataset.url ?? "");
-      if (!image || img.getAttribute("src") === image) continue;
-      img.src = image;
-      img.hidden = false;
-      img.closest(".emoji-picker__cell")?.classList.remove("emoji-picker__cell--pending");
-    }
-    for (const btn of this._catsEl.querySelectorAll<HTMLElement>("[data-icon-url]")) {
-      const image = images.get(btn.dataset.iconUrl ?? "");
-      if (image) this._setCategoryIcon(btn, btn.title, image);
+  }
+
+  private _setSections(sections: EmojiSection[]): void {
+    this._sections = sections;
+    this._entriesByUrl = new Map();
+    for (const section of sections) {
+      for (const e of section.entries) if (e.url !== undefined) addTo(this._entriesByUrl, e.url, e);
     }
   }
 
@@ -188,7 +235,7 @@ export class EmojiBrowser {
   setTextAction(label: string | null): void {
     this._textAction = label;
     this._renderHint();
-    this._applyQuery();
+    this._renderEmpty();
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -200,6 +247,12 @@ export class EmojiBrowser {
     this._applyQuery();
     this._browseEl.scrollTop = 0;
     this._setActiveSection(this._sections.find((s) => s.entries.length > 0)?.id ?? null);
+  }
+
+  /** The emoji tab opens on its search field, so typing finds an emoji at once. */
+  focusInitial(): boolean {
+    this.focusSearch();
+    return true;
   }
 
   focusSearch(): void {
@@ -216,57 +269,26 @@ export class EmojiBrowser {
 
   // ── Keyboard ──────────────────────────────────────────────────────────────
 
-  /**
-   * Handle a keydown that reached the picker while this panel shows. Returns
-   * false only for a plain Tab from the grid, which the host owns (it moves
-   * to the next tab, or back to the search field when there is none).
-   */
   handleKeydown(e: KeyboardEvent): boolean {
-    if (e.key === "Escape" || (e.ctrlKey && e.key === "[")) {
-      e.preventDefault();
-      this._cb.onClose();
-      return true;
-    }
-    if (e.target === this._searchEl) return this._handleSearchKey(e);
-
-    if (e.key === "Tab") {
-      if (!e.shiftKey) return false;
-      e.preventDefault();
-      this.focusSearch();
-      return true;
-    }
-    // Chords never resolve as picker keys (the keymap keeps them out of its
-    // sequence grammar); without this Ctrl-k would arrive as a bare `k`.
-    if (e.ctrlKey || e.metaKey || e.altKey) return true;
-    const { consumed, partial } = this._list.handleKey(e.key);
-    if (consumed || partial) e.preventDefault();
-    return true;
+    return routePanelKey(e, this._keys);
   }
 
-  /**
-   * The search field owns its typing: only its structural keys act, so a
-   * query can contain j, k, l, o, g or a bracket — letters the grid binds.
-   */
-  private _handleSearchKey(e: KeyboardEvent): boolean {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const text = this._searchEl.value.trim();
-      if (e.shiftKey) {
-        if (this._textAction !== null && text) this._cb.onText(text);
-      } else if (this._searching) {
-        const best = this._results[0];
-        if (best) this._cb.onPick(best);
-        else if (this._textAction !== null && text) this._cb.onText(text);
-      }
-      return true;
+  /** Enter picks the first result; Shift-Enter, or Enter with none, sends text where allowed. */
+  private _searchEnter(e: KeyboardEvent): void {
+    const text = this._searchEl.value.trim();
+    if (e.shiftKey) {
+      if (this._textAction !== null && text) this._cb.onText(text);
+      return;
     }
-    if (e.key === "Tab" || e.key === "ArrowDown") {
-      // Shift-Tab has nowhere to go inside the panel; keep focus from leaving.
-      e.preventDefault();
-      if (!e.shiftKey) this.focusGrid(0);
-      return true;
-    }
-    return true;
+    if (!this._searching) return;
+    const best = this._results[0];
+    if (best) this._cb.onPick(best);
+    else if (this._textAction !== null && text) this._cb.onText(text);
+  }
+
+  private _pick(index: number): void {
+    const entry = this.visibleEntries()[index];
+    if (entry) this._cb.onPick(entry);
   }
 
   private _onAction(action: string): boolean {
@@ -291,17 +313,17 @@ export class EmojiBrowser {
   // ── Sections ──────────────────────────────────────────────────────────────
 
   /**
-   * Show a section: clears any search, scrolls its header to the top and marks
-   * its category. With `focus`, its first emoji takes focus.
+   * Show a section: clears any search, scrolls its header to the top, marks
+   * its category, and focuses its first emoji.
    */
-  jumpToSection(id: string, focus: boolean): void {
+  jumpToSection(id: string): void {
     if (this._searching) {
       this._searchEl.value = "";
       this._applyQuery();
     }
     const header = this._headerFor(id);
     if (!header) return;
-    if (focus) this._list.setFocus(this._sectionStart(id));
+    this._list.setFocus(this._sectionStart(id));
     this._browseEl.scrollTop = header.offsetTop;
     this._setActiveSection(id);
   }
@@ -311,7 +333,7 @@ export class EmojiBrowser {
     if (ids.length === 0) return;
     const current = this._searching ? this._activeSectionId : this._sectionOf(this._list.focusIndex);
     const at = Math.max(0, ids.indexOf(current ?? ids[0]));
-    this.jumpToSection(ids[(at + dir + ids.length) % ids.length], true);
+    this.jumpToSection(ids[(at + dir + ids.length) % ids.length]);
   }
 
   private _sectionSizes(): number[] {
@@ -370,29 +392,36 @@ export class EmojiBrowser {
     this._searching = queryTokens(query).length > 0;
     if (this._searching) {
       this._results = searchEmoji(this._sections, query);
-      this._fillGrid(this._resultsEl, this._results);
+      this._resultsGrid = this._fillGrid(this._resultsEl, this._results);
     } else {
       this._results = [];
+      this._resultsGrid = emptyGrid();
       this._resultsEl.replaceChildren();
     }
-    const empty = this._searching && this._results.length === 0;
     this._browseEl.style.display = this._searching ? "none" : "";
-    this._resultsEl.style.display = this._searching && !empty ? "" : "none";
+    this._resultsEl.style.display = this._searching && this._results.length > 0 ? "" : "none";
+    this._renderEmpty();
+    this._list.resetIndex();
+    this._markDefault();
+  }
+
+  /** The no-match line, which names the text action when there is one. */
+  private _renderEmpty(): void {
+    const empty = this._searching && this._results.length === 0;
     this._emptyEl.style.display = empty ? "" : "none";
     this._emptyEl.textContent = !empty
       ? ""
       : this._textAction !== null
-        ? `No emoji match · Enter to ${this._textAction} “${query.trim()}”`
+        ? `No emoji match · Enter to ${this._textAction} “${this._searchEl.value.trim()}”`
         : "No emoji match";
-    this._list.resetIndex();
-    this._markDefault();
   }
 
   /** While searching from the field, mark the first result (what Enter picks). */
   private _markDefault(): void {
     const marking = this._searching && document.activeElement === this._searchEl;
-    const cells = this._resultsEl.querySelectorAll<HTMLElement>(".emoji-picker__cell");
-    cells.forEach((cell, i) => cell.classList.toggle("emoji-picker__cell--default", marking && i === 0));
+    this._resultsGrid.cells.forEach((cell, i) =>
+      cell.classList.toggle("emoji-picker__cell--default", marking && i === 0),
+    );
   }
 
   // ── Rendering ─────────────────────────────────────────────────────────────
@@ -423,9 +452,9 @@ export class EmojiBrowser {
     return grid;
   }
 
+  /** The visible grid's cells, kept from its render rather than queried per key. */
   private _cells(): HTMLElement[] {
-    const grid = this._searching ? this._resultsEl : this._browseEl;
-    return Array.from(grid.querySelectorAll<HTMLElement>(".emoji-picker__cell"));
+    return this._searching ? this._resultsGrid.cells : this._browseGrid.cells;
   }
 
   /** The grid's real column count, read from its resolved track list. */
@@ -436,15 +465,37 @@ export class EmojiBrowser {
     return n > 0 ? n : FALLBACK_COLUMNS;
   }
 
-  private _focusedEntryId(): string | null {
-    const cells = this._cells();
-    const i = cells.indexOf(document.activeElement as HTMLElement);
-    return i >= 0 ? (this.visibleEntries()[i]?.id ?? null) : null;
+  private _focusedEntry(): FocusedEntry | null {
+    const i = this._cells().indexOf(document.activeElement as HTMLElement);
+    const entry = i >= 0 ? this.visibleEntries()[i] : undefined;
+    if (!entry) return null;
+    return { id: entry.id, sectionId: this._searching ? null : this._sectionOf(i) };
+  }
+
+  /**
+   * Where a focused entry is now. In the browse view it is looked for in the
+   * section it was in: the common emoji are listed twice under one id, and a
+   * first match would move focus from 😂 in Smileys up to its copy in Common.
+   */
+  private _indexOf(focused: FocusedEntry): number {
+    if (focused.sectionId !== null && !this._searching) {
+      let start = 0;
+      for (const s of this._sections) {
+        if (s.id === focused.sectionId) {
+          const j = s.entries.findIndex((e) => e.id === focused.id);
+          if (j >= 0) return start + j;
+          break;
+        }
+        start += s.entries.length;
+      }
+    }
+    return Math.max(0, this.visibleEntries().findIndex((e) => e.id === focused.id));
   }
 
   private _renderBrowse(): void {
     this._rendered = true;
     this._browse = browseEntries(this._sections);
+    const grid = emptyGrid();
     const frag = document.createDocumentFragment();
     let index = 0;
     for (const section of this._sections) {
@@ -454,20 +505,24 @@ export class EmojiBrowser {
       header.dataset.sectionId = section.id;
       header.textContent = section.name;
       frag.appendChild(header);
-      for (const entry of section.entries) frag.appendChild(this._cell(entry, index++));
+      for (const entry of section.entries) frag.appendChild(this._cell(entry, index++, grid));
     }
     this._browseEl.replaceChildren(frag);
+    this._browseGrid = grid;
     this._list.resetIndex();
     this._renderCategories();
   }
 
-  private _fillGrid(grid: HTMLElement, entries: readonly PickerEmoji[]): void {
+  private _fillGrid(el: HTMLElement, entries: readonly PickerEmoji[]): RenderedGrid {
+    const grid = emptyGrid();
     const frag = document.createDocumentFragment();
-    entries.forEach((entry, i) => frag.appendChild(this._cell(entry, i)));
-    grid.replaceChildren(frag);
+    entries.forEach((entry, i) => frag.appendChild(this._cell(entry, i, grid)));
+    el.replaceChildren(frag);
+    return grid;
   }
 
-  private _cell(entry: PickerEmoji, index: number): HTMLButtonElement {
+  /** One cell, recorded in `grid` (and its image by source, for a custom emoji). */
+  private _cell(entry: PickerEmoji, index: number, grid: RenderedGrid): HTMLButtonElement {
     const cell = document.createElement("button");
     cell.type = "button";
     cell.className = "emoji-picker__cell";
@@ -492,11 +547,14 @@ export class EmojiBrowser {
         cell.classList.add("emoji-picker__cell--pending");
       }
       cell.appendChild(img);
+      if (entry.url !== undefined) addTo(grid.images, entry.url, img);
     }
+    grid.cells.push(cell);
     return cell;
   }
 
   private _renderCategories(): void {
+    this._categoryIcons = new Map();
     const frag = document.createDocumentFragment();
     for (const section of this._sections) {
       if (section.entries.length === 0) continue;
@@ -506,7 +564,10 @@ export class EmojiBrowser {
       btn.dataset.sectionId = section.id;
       btn.title = section.name;
       btn.setAttribute("tabindex", "-1");
-      if (section.iconUrl) btn.dataset.iconUrl = section.iconUrl;
+      if (section.iconUrl) {
+        btn.dataset.iconUrl = section.iconUrl;
+        addTo(this._categoryIcons, section.iconUrl, btn);
+      }
       const iconImage = section.iconUrl ? section.entries[0]?.imageUrl : undefined;
       this._setCategoryIcon(btn, section.name, iconImage, section.icon);
       frag.appendChild(btn);
@@ -531,6 +592,6 @@ export class EmojiBrowser {
     const items = ["Enter pick", "Tab grid", "[ ] category", "Esc close"];
     if (this._textAction !== null) items.splice(1, 0, `Shift-Enter ${this._textAction} text`);
     // Non-breaking within an item, so a narrow panel wraps between items only.
-    this._hintEl.textContent = items.map((i) => i.replace(/ /g, "\u00a0")).join(" · ");
+    this._hintEl.textContent = items.map((i) => i.replace(/ /g, " ")).join(" · ");
   }
 }

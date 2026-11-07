@@ -267,6 +267,22 @@ describe("search field", () => {
     expect(document.activeElement).toBe(search());
   });
 
+  // The Enter that commits a conversion (kusa → 草) reached the field as an
+  // Enter and picked a result, or sent the half-typed text as a reaction.
+  it("leaves the keys of an input method's composition alone", () => {
+    const ctx = context("reaction");
+    picker.open(ctx);
+    type("kusa");
+    press("Enter", { isComposing: true });
+    press("Enter", { keyCode: 229 }); // WebKit's committing Enter
+    press("Escape", { isComposing: true }); // cancels the conversion, not the picker
+    expect(ctx.onEmoji).not.toHaveBeenCalled();
+    expect(ctx.text!.onText).not.toHaveBeenCalled();
+    expect(picker.isVisible()).toBe(true);
+    press("Enter");
+    expect(ctx.text!.onText).toHaveBeenCalledExactlyOnceWith("kusa");
+  });
+
   it("Escape closes from the field and from the grid", () => {
     picker.open(context("reaction"));
     press("Escape");
@@ -330,6 +346,43 @@ describe("grid keys", () => {
     expect(ctx.onEmoji).toHaveBeenCalledWith(expect.objectContaining({ id: stripVariationSelectors(COMMON_EMOJI[1]) }));
   });
 
+  // A `<leader>` mapping makes Space the start of a sequence; the keymap then
+  // cancelled the button activation Space relied on.
+  it("Space picks the focused emoji, even with a <leader> mapping", () => {
+    keymapManager.nmap("<leader>f", "open-search");
+    try {
+      const ctx = context("reaction");
+      picker.open(ctx);
+      press("Tab");
+      press("l");
+      const ev = press(" ");
+      expect(ev.defaultPrevented).toBe(true);
+      expect(ctx.onEmoji).toHaveBeenCalledWith(expect.objectContaining({ id: stripVariationSelectors(COMMON_EMOJI[1]) }));
+    } finally {
+      keymapManager.unmap("global", "<leader>f");
+    }
+  });
+
+  // `[` is AltGr+8 on a German Windows layout (reported as Ctrl+Alt) and
+  // Option+5 on a German Mac; dropping every modified key lost them.
+  it("[ and ] typed with AltGr or Option still change category; chords do nothing", () => {
+    picker.open(context("compose"));
+    press("Tab");
+    press("]", { ctrlKey: true, altKey: true });
+    expect(focusedId()).toBe("custom:blobs:partyblob");
+    press("[", { ctrlKey: true, altKey: true });
+    expect(focusedId()).toBe(stripVariationSelectors(COMMON_EMOJI[0]));
+    expect(picker.isVisible()).toBe(true); // AltGr+[ is not Ctrl-[
+    press("]", { altKey: true });
+    expect(focusedId()).toBe("custom:blobs:partyblob");
+    press("[", { ctrlKey: true, altKey: true });
+    // A real chord is not its bare key: Ctrl-k is not `k` (up, to the search field).
+    press("k", { ctrlKey: true });
+    expect(focusedId()).toBe(stripVariationSelectors(COMMON_EMOJI[0]));
+    press("[", { ctrlKey: true });
+    expect(picker.isVisible()).toBe(false);
+  });
+
   it("Tab from the grid moves to the next tab in compose, back to search for reactions", () => {
     const compose = context("compose");
     picker.open(compose);
@@ -362,6 +415,63 @@ describe("pointer and touch", () => {
     const active = root().querySelector(".emoji-picker__category-btn--active") as HTMLElement;
     expect(active.dataset.sectionId).toBe("nature");
   });
+
+  // It used to scroll without moving the grid's focus index, so the next key
+  // acted on whatever was focused before: Enter reacted with 👍.
+  it("a category button focuses its first emoji, so the next key acts from there", () => {
+    const ctx = context("reaction");
+    picker.open(ctx);
+    const btn = root().querySelector<HTMLElement>('[data-section-id="nature"].emoji-picker__category-btn')!;
+    btn.focus(); // Chromium focuses a clicked button
+    btn.click();
+    const first = picker.browser.sections().find((s) => s.id === "nature")!.entries[0];
+    expect(focusedId()).toBe(first.id);
+    press("Enter");
+    expect(ctx.onEmoji).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: first.id }));
+  });
+});
+
+describe("sticker tab", () => {
+  const sticker = (id: string, name: string) => ({ id, name, url: `https://x/${id}.png`, packName: "Pack" });
+  const focusedSticker = () => (document.activeElement as HTMLElement | null)?.getAttribute("aria-label") ?? null;
+
+  function openStickers(): EmojiPickerContext {
+    const ctx = context("compose");
+    ctx.media!.initialTab = "sticker";
+    picker.open(ctx);
+    return ctx;
+  }
+
+  // It opens on the previous room's stickers while the room's load; the load
+  // replaced the cell that had focus, and focus fell out of the picker.
+  it("keeps keyboard focus in the picker when the room's stickers arrive", () => {
+    picker.setStickers([sticker("a", "Alpha"), sticker("b", "Beta")]);
+    openStickers();
+    expect(focusedSticker()).toBe("Alpha");
+    press("l");
+    expect(focusedSticker()).toBe("Beta");
+    picker.setStickers([sticker("c", "Gamma"), sticker("b", "Beta")]);
+    expect(focusedSticker()).toBe("Beta"); // still listed: still focused
+    picker.setStickers([sticker("z", "Zeta")]);
+    expect(focusedSticker()).toBe("Zeta");
+    picker.setStickers([]);
+    expect(document.activeElement).toBe(root());
+    press("Escape");
+    expect(picker.isVisible()).toBe(false);
+  });
+
+  it("routes its keys like the emoji tab: Space picks, an IME's Enter does not", () => {
+    picker.setStickers([sticker("a", "Alpha"), sticker("b", "Beta")]);
+    const ctx = openStickers();
+    press("/");
+    root().querySelector<HTMLInputElement>(".sticker-picker__search")!.value = "be";
+    press("Enter", { isComposing: true });
+    expect(ctx.media!.onSticker).not.toHaveBeenCalled();
+    press("Tab");
+    expect(focusedSticker()).toBe("Alpha");
+    press(" ");
+    expect(ctx.media!.onSticker).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "a" }));
+  });
 });
 
 describe("custom emoji", () => {
@@ -390,6 +500,26 @@ describe("custom emoji", () => {
     picker.open(context("compose"));
     picker.setCustomPacks([]);
     expect(categoryIds()).not.toContain("pack:blobs");
+  });
+
+  // The common emoji are listed twice under one id; restoring focus by id
+  // alone jumped from 😂 in Smileys to its copy at the top.
+  it("keeps focus on the same emoji in the same section across a rebuild", () => {
+    picker.open(context("compose"));
+    const joy = stripVariationSelectors("😂");
+    const copies = () => [...visibleGrid().querySelectorAll<HTMLElement>(`[data-emoji-id="${joy}"]`)];
+    expect(copies()).toHaveLength(2);
+    copies()[1].focus();
+    picker.setCustomPacks([]);
+    expect(document.activeElement).toBe(copies()[1]);
+  });
+
+  it("shows a resolved image in search results too", () => {
+    picker.open(context("compose"));
+    type("partyblob");
+    picker.setCustomImage("mxc://x/party", "data:image/png;base64,UEFSVFk=");
+    const img = visibleGrid().querySelector<HTMLImageElement>('[data-emoji-id="custom:blobs:partyblob"] img')!;
+    expect(img.getAttribute("src")).toBe("data:image/png;base64,UEFSVFk=");
   });
 });
 

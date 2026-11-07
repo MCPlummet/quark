@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { KeymapManager, eventChord, isChordSequence } from "./keybindings";
+import { KeymapManager, eventChord, isChordSequence, isCommandChord, isEscapeKey } from "./keybindings";
 
 describe("KeymapManager", () => {
   let km: KeymapManager;
@@ -335,5 +335,39 @@ describe("isChordSequence", () => {
     expect(isChordSequence("Ctrl-Shift-x")).toBe(true);
     expect(isChordSequence("gg")).toBe(false);
     expect(isChordSequence("ArrowDown")).toBe(false);
+  });
+});
+
+// A `[` typed on many layouts carries modifiers that are not a chord: AltGr
+// (reported by Windows as Ctrl+Alt) and macOS Option.
+describe("isCommandChord / isEscapeKey", () => {
+  const key = (k: string, mods: Partial<Record<"ctrlKey" | "metaKey" | "altKey", boolean>> = {}, altGraph = false) => ({
+    key: k,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    ...mods,
+    getModifierState: (m: string) => m === "AltGraph" && altGraph,
+  });
+
+  it("is a chord with Ctrl or Cmd held", () => {
+    expect(isCommandChord(key("k", { ctrlKey: true }))).toBe(true);
+    expect(isCommandChord(key("k", { metaKey: true }))).toBe(true);
+    expect(isCommandChord(key("k", { metaKey: true, altKey: true }))).toBe(true);
+  });
+
+  it("is not one for AltGr, Option, or no modifier", () => {
+    expect(isCommandChord(key("[", { ctrlKey: true, altKey: true }, true))).toBe(false);
+    expect(isCommandChord(key("[", { ctrlKey: true, altKey: true }))).toBe(false); // no AltGraph state
+    expect(isCommandChord(key("[", { altKey: true }))).toBe(false);
+    expect(isCommandChord(key("["))).toBe(false);
+  });
+
+  it("reads Escape and Ctrl-[ as escape, but not a `[` typed with AltGr", () => {
+    expect(isEscapeKey(key("Escape"))).toBe(true);
+    expect(isEscapeKey(key("[", { ctrlKey: true }))).toBe(true);
+    expect(isEscapeKey(key("[", { ctrlKey: true, altKey: true }, true))).toBe(false);
+    expect(isEscapeKey(key("[", { altKey: true }))).toBe(false);
+    expect(isEscapeKey(key("[", { metaKey: true }))).toBe(false);
   });
 });
