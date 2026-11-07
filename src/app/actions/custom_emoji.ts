@@ -7,10 +7,15 @@
 // compose picker keyed custom emoji by `:shortcode:`, the reaction picker by
 // mxc URL). They now all read the packs from here, in the same form.
 
-import { getEmojiPacks, getThumbnail } from "../../ipc/index.js";
+import { getEmojiPacks } from "../../ipc/index.js";
 import type { EmojiPack } from "../../ipc/types.js";
 import type { CustomEmojiPack } from "../../ui/emoji_catalog.js";
-import { THUMBNAIL_SIZE, _emojiImageCache, _shortcodeToMxc } from "./context.js";
+import {
+  _emojiImageCache,
+  _resetEmojiThumbnailsInFlight,
+  _shortcodeToMxc,
+  resolveEmojiThumbnail,
+} from "./context.js";
 
 export interface CustomEmojiListener {
   /**
@@ -24,8 +29,6 @@ export interface CustomEmojiListener {
 
 /** Packs by room ID ("" for no room: the account's own packs). */
 const _packCache = new Map<string, CustomEmojiPack[]>();
-/** Thumbnail downloads in flight, so concurrent loads fetch each once. */
-const _thumbnails = new Map<string, Promise<string | null>>();
 
 /** A displayable URL for a custom emoji's source, if one is known yet. */
 export function customEmojiImage(url: string): string | undefined {
@@ -60,24 +63,6 @@ function toCustomPacks(raw: readonly EmojiPack[]): CustomEmojiPack[] {
   return packs;
 }
 
-function resolveThumbnail(mxc: string): Promise<string | null> {
-  const cached = _emojiImageCache.get(mxc);
-  if (cached) return Promise.resolve(cached);
-  let pending = _thumbnails.get(mxc);
-  if (!pending) {
-    pending = getThumbnail(mxc, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
-      .then((dl) => {
-        const dataUrl = `data:${dl.mime_type};base64,${dl.data_base64}`;
-        _emojiImageCache.set(mxc, dataUrl);
-        return dataUrl;
-      })
-      .catch(() => null)
-      .finally(() => _thumbnails.delete(mxc));
-    _thumbnails.set(mxc, pending);
-  }
-  return pending;
-}
-
 /** The packs last loaded for a room, with resolved images, or none. */
 export function cachedCustomEmoji(roomId: string | null): CustomEmojiPack[] {
   return withImages(_packCache.get(roomId ?? "") ?? []);
@@ -106,7 +91,7 @@ export async function loadCustomEmoji(
   for (const pack of packs) {
     for (const e of pack.emojis) {
       if (!e.url.startsWith("mxc://") || _emojiImageCache.has(e.url)) continue;
-      void resolveThumbnail(e.url).then((imageUrl) => {
+      void resolveEmojiThumbnail(e.url).then((imageUrl) => {
         if (imageUrl) listener.onImage?.(e.url, imageUrl);
       });
     }
@@ -117,5 +102,5 @@ export async function loadCustomEmoji(
 /** Test seam: forget cached packs. */
 export function _resetCustomEmojiCache(): void {
   _packCache.clear();
-  _thumbnails.clear();
+  _resetEmojiThumbnailsInFlight();
 }

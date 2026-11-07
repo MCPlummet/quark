@@ -43,6 +43,7 @@ import {
   setComponents,
   _shortcodeToMxc,
   _emojiImageCache,
+  _resetEmojiThumbnailsInFlight,
   _applyEdits,
   timelineEventToMessage,
   resolveInlineEmojiForTimeline,
@@ -65,11 +66,9 @@ function bodyEl(): HTMLElement {
   return el.querySelector<HTMLElement>(".message__body")!;
 }
 
-/** Let the emoji-download promise chain settle. */
+/** Let the emoji-download promise chain settle, however many steps it has. */
 async function flush(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
 }
 
 function makeEditEvent(body: string, formattedBody: string | null): TimelineEvent {
@@ -109,6 +108,8 @@ beforeEach(() => {
   getThumbnail.mockResolvedValue({ mime_type: "image/png", data_base64: "AAAA" });
   _shortcodeToMxc.clear();
   _emojiImageCache.clear();
+  // A download a previous test held open would otherwise be shared with this one.
+  _resetEmojiThumbnailsInFlight();
   _shortcodeToMxc.set("party", "mxc://emoji/party");
 
   timeline = new Timeline();

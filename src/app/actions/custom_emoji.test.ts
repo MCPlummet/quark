@@ -12,7 +12,7 @@ vi.mock("../../ipc/index.js", () => ({
 }));
 
 import { loadCustomEmoji, customEmojiImage, cachedCustomEmoji, _resetCustomEmojiCache } from "./custom_emoji.js";
-import { _emojiImageCache, _shortcodeToMxc } from "./context.js";
+import { _emojiImageCache, _shortcodeToMxc, _downloadInlineEmoji } from "./context.js";
 
 const PACK: EmojiPack = {
   pack_id: "blobs",
@@ -64,6 +64,24 @@ describe("loadCustomEmoji", () => {
     expect(getThumbnail).toHaveBeenCalledTimes(2); // blob, both — never the https one
     expect(images.map(([u]) => u).sort()).toEqual(["mxc://x/blob", "mxc://x/both"]);
     expect(customEmojiImage("mxc://x/blob")).toBe("data:image/png;base64,SU1H");
+  });
+
+  // The timeline's inline emoji and reaction chips used to download through
+  // their own copies of this, so an emoji the picker was already fetching was
+  // fetched again for the message that showed it.
+  it("shares each download with the timeline's inline emoji", async () => {
+    const resolved: string[] = [];
+    const host = {
+      getPendingInlineEmojiUrls: () => ["mxc://x/blob"],
+      resolveInlineEmoji: (mxc: string) => resolved.push(mxc),
+    };
+    const load = loadCustomEmoji("!r:x", { onPacks: () => {} });
+    await flush(); // the packs have arrived; the picker's downloads are in flight
+    _downloadInlineEmoji(host);
+    await load;
+    await flush();
+    expect(getThumbnail.mock.calls.filter((c) => (c as unknown[])[0] === "mxc://x/blob")).toHaveLength(1);
+    expect(resolved).toEqual(["mxc://x/blob"]);
   });
 
   it("hands over resolved images with the packs on the next load", async () => {
