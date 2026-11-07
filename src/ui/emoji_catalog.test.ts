@@ -129,6 +129,22 @@ describe("search", () => {
     expect(search(":joy:")[0].glyph).toBe("😂");
     expect(search("/joy")[0].glyph).toBe("😂");
     expect(queryTokens(" :Red Heart: ")).toEqual(["red", "heart"]);
+    expect(queryTokens(":+1:")).toEqual(["+1"]);
+    expect(queryTokens(":-1")).toEqual(["-1"]);
+    // A shortcode being typed still searches from its first letter.
+    expect(queryTokens(":d")).toEqual(["d"]);
+    // A lone colon or slash is the start of a query, not a term.
+    expect(queryTokens(":")).toEqual([]);
+    expect(queryTokens("/")).toEqual([]);
+  });
+
+  // People react with emoticons as text. Stripped of their colons they were a
+  // one-letter search (`:D` → a face starting with "d") or no search at all.
+  it("keeps an emoticon's colons, so it matches nothing and is sent as typed", () => {
+    for (const emoticon of [":D", ":P", ":O", ":3", ":/", ":)", ":(", ":-)", ":-D", ":-P", ":'(", "D:"]) {
+      expect(queryTokens(emoticon)).toEqual([emoticon.toLowerCase()]);
+      expect(search(emoticon)).toEqual([]);
+    }
   });
 
   it("requires every term to match", () => {

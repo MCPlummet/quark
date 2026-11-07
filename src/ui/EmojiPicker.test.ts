@@ -202,6 +202,17 @@ describe("free text", () => {
     expect(picker.isVisible()).toBe(true);
   });
 
+  it("Enter reacts with an emoticon as typed", () => {
+    for (const emoticon of [":/", ":D", ":-P"]) {
+      const reaction = context("reaction");
+      picker.open(reaction);
+      type(emoticon);
+      press("Enter");
+      expect(reaction.text!.onText, emoticon).toHaveBeenCalledExactlyOnceWith(emoticon);
+      expect(reaction.onEmoji, emoticon).not.toHaveBeenCalled();
+    }
+  });
+
   it("Shift-Enter submits the query as typed even when it matches", () => {
     const reaction = context("reaction");
     picker.open(reaction);

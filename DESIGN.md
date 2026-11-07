@@ -1601,8 +1601,11 @@ appear in their home category. The category bar jumps to a section and follows
 the scroll.
 
 **Search.** The query is split on whitespace and every term must match; a
-leading `:` or `/` and a trailing `:` are ignored, so `:joy:` and `joy` are one
-search. A term matches, best first: the primary shortcode exactly; an alias or
+term's leading `:` or `/` and trailing `:` are ignored, so `:joy:` and `joy` are
+one search. Emoticons keep theirs: when what the colon wraps cannot begin a
+shortcode (`:/`, `:)`, `:-D`) or is a lone capital or digit (`:D`, `:P`, `:3`,
+`D:`), the term is kept as typed, matches nothing, and `Enter` reacts with it as
+text rather than with whatever emoji starts with `d`. A term matches, best first: the primary shortcode exactly; an alias or
 the glyph exactly (variation selectors ignored either side); a CLDR keyword
 exactly; the start of a shortcode or alias; anywhere in one; the start of a
 keyword. An entry ranks by its worst-matching term, ties in listing order.

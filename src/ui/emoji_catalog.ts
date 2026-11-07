@@ -197,13 +197,34 @@ export function customPacksSignature(packs: readonly CustomEmojiPack[]): string 
 // ── Search ────────────────────────────────────────────────────────────────────
 
 /**
- * The search terms in a query: lowercased, whitespace-separated, with any
- * leading `:` or `/` and trailing `:` dropped — `:joy:`, `joy` and a
- * habitual `/joy` are the same search.
+ * The search terms in a query: lowercased, whitespace-separated, each with a
+ * leading `:` or `/` and a trailing `:` dropped — `:joy:`, `joy` and a
+ * habitual `/joy` are the same search. A lone `:` or `/` is no term yet.
+ *
+ * Emoticons keep their colons. `:D`, `:P`, `:3`, `:/`, `:-)` and `D:` are text
+ * a reaction may be sent as, not shortcodes: stripped, they became a
+ * one-letter search whose first result Enter would react with (`:D` → 🥸), or
+ * nothing at all (`:/`). Kept, they match nothing and Enter sends them as typed.
  */
 export function queryTokens(query: string): string[] {
-  const q = query.trim().replace(/^[:/]+/, "").replace(/:+$/, "").toLowerCase();
-  return q.split(/\s+/).filter(Boolean);
+  const tokens: string[] = [];
+  for (const raw of query.trim().split(/\s+/)) {
+    if (raw === "" || raw === ":" || raw === "/") continue;
+    const inner = raw.replace(/^[:/]+/, "").replace(/:+$/, "");
+    tokens.push((inner === raw || isShortcodeStart(inner) ? inner : raw).toLowerCase());
+  }
+  return tokens;
+}
+
+/**
+ * Whether what follows a `:` can begin a shortcode: a letter, digit or `_`
+ * (or `+1`/`-1`) — but not a lone capital or digit, which after a colon is an
+ * emoticon (`:D`, `:3`); shortcodes are lowercase.
+ */
+function isShortcodeStart(inner: string): boolean {
+  if (/^[+-]\d/.test(inner)) return true;
+  if (!/^[\p{L}\p{N}_]/u.test(inner)) return false;
+  return !(inner.length === 1 && /[\p{Lu}\p{N}]/u.test(inner));
 }
 
 /** How well one term matches an entry; lower is better, null is no match. */
