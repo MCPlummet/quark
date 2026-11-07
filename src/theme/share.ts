@@ -446,6 +446,15 @@ export const MAX_SHARE_LENGTH = 16 * 1024;
  */
 export const MAX_SHARED_TOML_BYTES = 64 * 1024;
 
+/**
+ * Shortest payload worth reading as a versioned share string. The shortest
+ * real one — Phosphor itself, every byte found in the dictionary — is 18
+ * bytes. Shorter text whose first byte happens to fall in 0x00–0x08 is a word
+ * that is also base64 ("Blue" decodes to 0x06 …), not a link from a newer
+ * Quark, and saying "update Quark" about it would send the user the wrong way.
+ */
+const MIN_VERSIONED_PAYLOAD = 12;
+
 /** The share string is a format this build doesn't know — made by a newer one. */
 export class ThemeShareVersionError extends Error {
   constructor() {
@@ -485,7 +494,20 @@ function fromBase64(input: string): Uint8Array {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
+/**
+ * Whether a payload with an unknown version byte is credibly a share string
+ * from a newer Quark, rather than text that merely decodes as base64: long
+ * enough to hold a theme, and one token. A link wrapped across lines breaks at
+ * line ends; words separated by spaces on one line are prose.
+ */
+function couldBeNewerShare(input: string, payload: Uint8Array): boolean {
+  return payload.length >= MIN_VERSIONED_PAYLOAD && !/\S[ \t]+\S/.test(input.trim());
+}
+
 function inflateV1(compressed: Uint8Array): Uint8Array {
+  // Checked here because fflate hands back the caller's whole `out` buffer,
+  // unwritten, for empty input — which would read as "too large" below.
+  if (compressed.length === 0) throw new Error("theme string is damaged");
   // fflate writes into a buffer it is given and never grows it, so one byte
   // past the limit is enough to tell "too large" without inflating a bomb.
   const out = new Uint8Array(MAX_SHARED_TOML_BYTES + 1);
@@ -501,9 +523,11 @@ function inflateV1(compressed: Uint8Array): Uint8Array {
 
 /** The share string (version 1) for theme TOML. */
 export function encodeThemeShare(toml: string): string {
+  // No `mem`: fflate's default is already more than a ~1.3 KB theme can use.
+  // Raising it allocates a 2^(mem+12)-entry hash table per call (32 MB at 12)
+  // for byte-identical output, and the editor encodes on every edit.
   const compressed = deflateSync(new TextEncoder().encode(toml), {
     level: 9,
-    mem: 12,
     dictionary: dictionaryV1(),
   });
   const payload = new Uint8Array(compressed.length + 1);
@@ -525,8 +549,10 @@ export function decodeThemeShare(input: string): string {
     bytes = payload;
   } else if (payload[0] === SHARE_V1) {
     bytes = inflateV1(payload.subarray(1));
-  } else {
+  } else if (couldBeNewerShare(input, payload)) {
     throw new ThemeShareVersionError();
+  } else {
+    throw new Error("not a theme string");
   }
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);

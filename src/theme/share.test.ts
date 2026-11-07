@@ -155,15 +155,29 @@ describe("share string", () => {
 
   it("says when a string needs a newer Quark", () => {
     for (const version of [0x00, 0x02, 0x08]) {
-      const future = base64url(new Uint8Array([version, 1, 2, 3]));
+      // As long as the shortest real share string (Phosphor, 18 bytes).
+      const future = base64url(Uint8Array.of(version, ...Array.from({ length: 17 }, (_, i) => i * 13)));
       expect(() => decodeThemeShare(future)).toThrow(ThemeShareVersionError);
+      expect(() => decodeThemeShare(`https://quark.tel/theme/#${future}`)).toThrow(ThemeShareVersionError);
     }
+  });
+
+  it("doesn't blame the version for words that happen to be base64", () => {
+    // "Blue" is 0x06 0xe5 0x1e and "Aurora" starts 0x02: an unknown version
+    // byte, but far too short to be a theme.
+    for (const word of ["Blue", "Aurora"]) {
+      expect(() => decodeThemeShare(word), word).toThrow(/not a theme string/);
+    }
+    // Long enough, but words on a line are prose, not a wrapped link.
+    expect(() => decodeThemeShare("Aurora borealis is my favourite theme")).toThrow(/not a theme string/);
   });
 
   it("refuses a damaged version-1 string", () => {
     const encoded = encodeThemeShare(themeToToml(phosphor));
     const bytes = fromBase64url(encoded);
     expect(() => decodeThemeShare(base64url(bytes.subarray(0, 4)))).toThrow(/damaged/);
+    // Just the version byte: a link cut off after two characters.
+    expect(() => decodeThemeShare("AQ")).toThrow(/damaged/);
   });
 
   it("stops inflating at the size limit instead of following a bomb", () => {
