@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Root theme structure parsed from a TOML theme file.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -292,6 +292,179 @@ pub fn default_theme() -> Theme {
             visual_indicator: "VIS".to_string(),
         },
     }
+}
+
+// ── Custom theme files ──────────────────────────────────────────────────────
+//
+// Custom themes are the `*.toml` files in `<config_dir>/themes/`. On desktop
+// users put them there by hand; on every platform Settings → Themes → Import
+// writes them there. Mobile has no user-visible config folder, so import is
+// the only way in there — but the folder itself works the same.
+//
+// A custom theme is named by its file name relative to that folder
+// (`nord-tweaked.toml`), which is what `config.toml` stores. Not the absolute
+// path: iOS moves the app container on update, so a stored absolute path
+// would stop resolving.
+
+/// Largest theme file Import will write. A full canonical theme is ~1.2 KB.
+pub const MAX_THEME_FILE_BYTES: usize = 64 * 1024;
+
+/// The folder custom themes live in.
+pub fn themes_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("themes")
+}
+
+/// The file `load_theme` reads for `name_or_path`.
+///
+/// An absolute path is used as-is — what Settings stored before themes were
+/// named by file, and what `:theme /some/where.toml` passes. Anything else is
+/// a file in the themes folder: `nord-tweaked.toml`, or `nord-tweaked` with
+/// the extension implied.
+pub fn resolve_theme_path(config_dir: &Path, name_or_path: &str) -> PathBuf {
+    let given = Path::new(name_or_path);
+    if given.is_absolute() {
+        return given.to_path_buf();
+    }
+    let mut file = themes_dir(config_dir).join(given).into_os_string();
+    if given.extension().and_then(|e| e.to_str()) != Some("toml") {
+        file.push(".toml");
+    }
+    PathBuf::from(file)
+}
+
+/// Whether `stem` is safe to name a file in the themes folder: what the
+/// frontend's `themeSlug` produces — lowercase ASCII letters and digits, with
+/// single hyphens between them, at most 64 characters. Rules out separators,
+/// `..`, dotfiles and anything a filesystem might treat specially.
+pub fn is_valid_theme_stem(stem: &str) -> bool {
+    !stem.is_empty()
+        && stem.len() <= 64
+        && !stem.starts_with('-')
+        && !stem.ends_with('-')
+        && !stem.contains("--")
+        && stem.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// A custom theme as listed in Settings → Themes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CustomThemeEntry {
+    /// Display name from `[meta]`, or the file stem when it has none.
+    pub name: String,
+    /// File name in the themes folder — the theme's id, stored in
+    /// `config.toml` and accepted by `load_theme` and `:theme`.
+    pub id: String,
+    /// Absolute path to the file. Matches what older configs stored as the
+    /// theme, so Settings can still mark those as current.
+    pub path: String,
+}
+
+/// Lenient TOML shape used only for extracting a display name from a theme
+/// file without requiring every field to be present.
+#[derive(Deserialize)]
+struct PartialThemeMeta {
+    name: Option<String>,
+}
+#[derive(Deserialize)]
+struct PartialTheme {
+    meta: Option<PartialThemeMeta>,
+}
+
+/// The display name of a theme file: its `meta.name`, or the file stem when
+/// the file doesn't parse or has none, so even incomplete themes list.
+fn theme_display_name(path: &Path) -> String {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| toml::from_str::<PartialTheme>(&content).ok())
+        .and_then(|t| t.meta)
+        .and_then(|m| m.name)
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        })
+}
+
+fn entry_for(path: &Path) -> Option<CustomThemeEntry> {
+    let id = path.file_name()?.to_str()?.to_string();
+    Some(CustomThemeEntry {
+        name: theme_display_name(path),
+        id,
+        path: path.to_string_lossy().into_owned(),
+    })
+}
+
+/// Every `*.toml` file in the themes folder, sorted by display name. Each is
+/// listed whether or not it is a complete, valid theme; that is checked when
+/// it is applied.
+pub fn list_custom_themes_in(config_dir: &Path) -> Result<Vec<CustomThemeEntry>, String> {
+    let dir = themes_dir(config_dir);
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let read = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Failed to read themes directory: {e}"))?;
+    let mut entries: Vec<CustomThemeEntry> = read
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("toml"))
+        .filter_map(|path| entry_for(&path))
+        .collect();
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(entries)
+}
+
+/// What [`save_custom_theme`] did.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SaveThemeOutcome {
+    /// Written; this is the new (or replaced) theme.
+    Saved { theme: CustomThemeEntry },
+    /// A theme already has that file name and `overwrite` was not set. Nothing
+    /// was written; `theme` is the one that would be replaced.
+    Exists { theme: CustomThemeEntry },
+}
+
+/// Write `content` to `<themes folder>/<stem>.toml`.
+///
+/// The frontend has already decoded, completed and serialized the theme; this
+/// checks only what the filesystem depends on: a safe stem, a sane size, and
+/// TOML that will parse when the theme is applied. The write goes through a
+/// temporary file so a crash never leaves a half-written theme behind.
+pub fn save_custom_theme(
+    config_dir: &Path,
+    stem: &str,
+    content: &str,
+    overwrite: bool,
+) -> Result<SaveThemeOutcome, String> {
+    if !is_valid_theme_stem(stem) {
+        return Err(format!("Invalid theme file name '{stem}'"));
+    }
+    if content.len() > MAX_THEME_FILE_BYTES {
+        return Err(format!(
+            "Theme is too large ({} bytes, limit {MAX_THEME_FILE_BYTES})",
+            content.len()
+        ));
+    }
+    toml::from_str::<toml::Table>(content)
+        .map_err(|e| format!("Failed to parse theme TOML: {e}"))?;
+
+    let dir = themes_dir(config_dir);
+    let file = dir.join(format!("{stem}.toml"));
+    if file.exists() && !overwrite {
+        let theme = entry_for(&file).ok_or("Unreadable theme file name")?;
+        return Ok(SaveThemeOutcome::Exists { theme });
+    }
+
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create themes directory: {e}"))?;
+    let tmp = dir.join(format!("{stem}.toml.tmp"));
+    std::fs::write(&tmp, content).map_err(|e| format!("Failed to write theme: {e}"))?;
+    std::fs::rename(&tmp, &file).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Failed to save theme: {e}")
+    })?;
+    let theme = entry_for(&file).ok_or("Unreadable theme file name")?;
+    Ok(SaveThemeOutcome::Saved { theme })
 }
 
 #[cfg(test)]
@@ -658,5 +831,97 @@ name = "Test"
         let errors = validate_theme(&theme);
         let bg_error = errors.iter().find(|e| e.field == "colors.background").unwrap();
         assert!(bg_error.message.contains("notacolor"));
+    }
+
+    // ── Custom theme files ──────────────────────────────────────────────
+
+    #[test]
+    fn resolve_theme_path_keeps_absolute_paths() {
+        let cfg = Path::new("/cfg");
+        let abs = std::env::temp_dir().join("elsewhere.toml");
+        assert_eq!(resolve_theme_path(cfg, abs.to_str().unwrap()), abs);
+    }
+
+    #[test]
+    fn resolve_theme_path_reads_names_from_the_themes_folder() {
+        let cfg = Path::new("cfg");
+        let expected = cfg.join("themes").join("nord-tweaked.toml");
+        assert_eq!(resolve_theme_path(cfg, "nord-tweaked.toml"), expected);
+        assert_eq!(resolve_theme_path(cfg, "nord-tweaked"), expected);
+        // A dot in the stem is not an extension to keep.
+        assert_eq!(
+            resolve_theme_path(cfg, "v1.2"),
+            cfg.join("themes").join("v1.2.toml")
+        );
+    }
+
+    #[test]
+    fn theme_stems_are_slugs() {
+        for ok in ["nord", "catppuccin-mocha", "theme2", "a"] {
+            assert!(is_valid_theme_stem(ok), "{ok}");
+        }
+        let long = "a".repeat(65);
+        for bad in [
+            "", "..", "../x", "a/b", "a\\b", ".hidden", "-a", "a-", "a--b", "Nord", "nörd",
+            "a b", "a.toml", long.as_str(),
+        ] {
+            assert!(!is_valid_theme_stem(bad), "{bad:?}");
+        }
+    }
+
+    const IMPORTED: &str = "[meta]\nname = \"Imported\"\n\n[colors]\nbackground = \"#000000\"\n";
+
+    #[test]
+    fn save_custom_theme_writes_into_the_themes_folder() {
+        let cfg = tempfile::tempdir().unwrap();
+        let outcome = save_custom_theme(cfg.path(), "imported", IMPORTED, false).unwrap();
+        let file = cfg.path().join("themes").join("imported.toml");
+        let SaveThemeOutcome::Saved { theme } = outcome else { panic!("{outcome:?}") };
+        assert_eq!(theme.name, "Imported");
+        assert_eq!(theme.id, "imported.toml");
+        assert_eq!(Path::new(&theme.path), file);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), IMPORTED);
+        assert!(!cfg.path().join("themes").join("imported.toml.tmp").exists());
+        assert_eq!(list_custom_themes_in(cfg.path()).unwrap(), vec![theme]);
+    }
+
+    #[test]
+    fn save_custom_theme_asks_before_replacing() {
+        let cfg = tempfile::tempdir().unwrap();
+        save_custom_theme(cfg.path(), "imported", IMPORTED, false).unwrap();
+        let newer = IMPORTED.replace("#000000", "#111111");
+
+        let outcome = save_custom_theme(cfg.path(), "imported", &newer, false).unwrap();
+        let SaveThemeOutcome::Exists { theme } = outcome else { panic!("{outcome:?}") };
+        assert_eq!(theme.name, "Imported");
+        let file = cfg.path().join("themes").join("imported.toml");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), IMPORTED);
+
+        let outcome = save_custom_theme(cfg.path(), "imported", &newer, true).unwrap();
+        assert!(matches!(outcome, SaveThemeOutcome::Saved { .. }));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), newer);
+    }
+
+    #[test]
+    fn save_custom_theme_refuses_unsafe_names_and_bad_content() {
+        let cfg = tempfile::tempdir().unwrap();
+        assert!(save_custom_theme(cfg.path(), "../escape", IMPORTED, false).is_err());
+        assert!(save_custom_theme(cfg.path(), "broken", "[meta\nname =", false).is_err());
+        let huge = format!("{IMPORTED}# {}\n", "x".repeat(MAX_THEME_FILE_BYTES));
+        assert!(save_custom_theme(cfg.path(), "huge", &huge, false).is_err());
+        assert!(!cfg.path().join("themes").exists());
+    }
+
+    #[test]
+    fn listed_themes_fall_back_to_the_file_stem_for_a_name() {
+        let cfg = tempfile::tempdir().unwrap();
+        let dir = cfg.path().join("themes");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bare.toml"), "[colors]\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a theme").unwrap();
+        std::fs::write(dir.join("half.toml.tmp"), IMPORTED).unwrap();
+        let listed = list_custom_themes_in(cfg.path()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!((listed[0].name.as_str(), listed[0].id.as_str()), ("bare", "bare.toml"));
     }
 }
