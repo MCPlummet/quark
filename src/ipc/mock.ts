@@ -2,6 +2,7 @@
 // Provides fake data so the UI renders and can be interacted with
 
 import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember, SentMessage, InviteInfo, SpaceChild } from "./types.js";
+import type { CustomThemeEntry } from "./config.js";
 
 export interface CacheStats {
   total_size_bytes: number;
@@ -217,6 +218,30 @@ const MOCK_MEMBERS: RoomMember[] = [
   { user_id: "@eve:matrix.org",   display_name: "Eve",   avatar_url: null, power_level: "member", presence: "offline" },
   { user_id: "@frank:matrix.org", display_name: "Frank", avatar_url: null, power_level: "member", presence: "offline" },
 ];
+
+/**
+ * Themes imported this session, by id (`<stem>.toml`): an in-memory stand-in
+ * for the themes folder so Settings → Themes → Import works end to end.
+ */
+const _mockThemes = new Map<string, { entry: CustomThemeEntry; toml: string }>();
+
+/**
+ * smol-toml, loaded on first use: only the theme cases below need it, and a
+ * static import would put the parser in the app's startup bundle.
+ */
+async function parseToml(toml: string): Promise<Record<string, unknown>> {
+  const { parse } = await import("smol-toml");
+  return parse(toml);
+}
+
+async function mockThemeName(toml: string, fallback: string): Promise<string> {
+  try {
+    const name = ((await parseToml(toml)) as { meta?: { name?: unknown } }).meta?.name;
+    return typeof name === "string" ? name : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 // Check if we're running inside Tauri
 export function isTauri(): boolean {
@@ -470,15 +495,33 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
     case "load_quarkrc":
       // No rc file in mock mode — return empty parsed result
       return { directives: [], errors: [] };
-    case "load_theme":
+    case "load_theme": {
+      const given = String(args?.themePath ?? "");
+      const id = given.endsWith(".toml") ? given : `${given}.toml`;
+      const imported = _mockThemes.get(id);
+      if (imported) return await parseToml(imported.toml);
       // Return a minimal theme object so :theme commands don't crash in debug mode
       return {
         name: (args?.name as string) ?? "mock",
         colors: {},
       };
+    }
     case "list_custom_themes":
-      // No custom themes in mock/dev mode
-      return [];
+      return [..._mockThemes.values()]
+        .map((t) => t.entry)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    case "import_custom_theme": {
+      const stem = String(args?.fileStem);
+      const toml = String(args?.content);
+      const id = `${stem}.toml`;
+      const existing = _mockThemes.get(id);
+      if (existing && !args?.overwrite) return { status: "exists", theme: existing.entry };
+      const entry = { name: await mockThemeName(toml, stem), id, path: `/mock/themes/${id}` };
+      _mockThemes.set(id, { entry, toml });
+      return { status: "saved", theme: entry };
+    }
+    case "custom_themes_dir":
+      return "/mock/themes";
     case "get_cache_stats":
       return { total_size_bytes: 15728640, entry_count: 42, max_size_bytes: 209715200, usage_percent: 7.5 } as CacheStats;
     case "get_emoji_packs":

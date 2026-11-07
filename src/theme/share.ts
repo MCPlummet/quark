@@ -1,16 +1,19 @@
 // Theme sharing: the canonical TOML form of a theme, the base64url string that
 // carries it in a quark.tel/theme link, and the rules a theme must satisfy.
 //
-// A share string is nothing but base64url(UTF-8 TOML). Importing one needs no
-// format of its own — decode, then hand the text to the same TOML parser that
-// reads ~/.config/quark/themes/*.toml (the Rust `parse_theme`, or smol-toml in
-// the theme editor). See DESIGN.md → Theming → Sharing themes.
+// A share string carries the theme's TOML, compressed (see "Share string"
+// below). Importing one needs no format of its own past that — decode, then
+// hand the text to the same TOML parser that reads the themes folder's
+// *.toml files. See DESIGN.md → Theming → Theme Editor & Sharing.
 //
 // Everything here is driven by THEME_SCHEMA, which mirrors the Rust `Theme`
 // struct (src-tauri/src/config/theme.rs): every field is required there, so a
 // theme this module emits always carries all of them.
 
+import { deflateSync, inflateSync } from "fflate";
+
 import { BORDER_STYLES, type Theme } from "./loader.js";
+import { SHARE_DICTIONARY_V1 } from "./share_dictionary.js";
 
 export { BORDER_STYLES };
 
@@ -408,10 +411,64 @@ export function themeToToml(theme: CompleteTheme): string {
 }
 
 // ── Share string ─────────────────────────────────────────────────────────────
+//
+// A share string is base64url (RFC 4648 §5, unpadded) of a payload in one of
+// two forms, told apart by its first byte:
+//
+//   version 0  the theme's UTF-8 TOML, as is. What links carried before
+//              compression; still read, never written.
+//   version 1  the byte 0x01, then the TOML compressed with raw DEFLATE
+//              (RFC 1951) using SHARE_DICTIONARY_V1 as the preset dictionary.
+//
+// TOML can't begin with a byte below 0x09: a document opens with whitespace,
+// a newline, `#`, `[` or a key. So bytes 0x00–0x08 are free to mark versioned
+// payloads, and a version-0 string needs no marker. Every theme shares its
+// keys and layout with the dictionary (Phosphor), so a full theme comes to
+// ~250 characters instead of ~1,470 — short enough to paste into a chat or
+// fit in a small QR code.
 
-/** base64url (RFC 4648 §5, unpadded) of the UTF-8 bytes of `toml`. */
-export function encodeThemeShare(toml: string): string {
-  const bytes = new TextEncoder().encode(toml);
+/** First payload byte of a version-1 share string. */
+const SHARE_V1 = 0x01;
+
+/** Payload bytes from here up are text: a version-0 share string. */
+const FIRST_TEXT_BYTE = 0x09;
+
+/**
+ * Longest share string (base64 characters) worth decoding. A full theme is
+ * ~250; even version 0 stays under 2,000. The cap bounds the work a crafted
+ * string can cause, since DEFLATE expands up to ~1,000×.
+ */
+export const MAX_SHARE_LENGTH = 16 * 1024;
+
+/**
+ * Largest theme TOML a share string may carry — the backend's limit on a
+ * theme file (`MAX_THEME_FILE_BYTES`). Decompression stops past it.
+ */
+export const MAX_SHARED_TOML_BYTES = 64 * 1024;
+
+/**
+ * Shortest payload worth reading as a versioned share string. The shortest
+ * real one — Phosphor itself, every byte found in the dictionary — is 18
+ * bytes. Shorter text whose first byte happens to fall in 0x00–0x08 is a word
+ * that is also base64 ("Blue" decodes to 0x06 …), not a link from a newer
+ * Quark, and saying "update Quark" about it would send the user the wrong way.
+ */
+const MIN_VERSIONED_PAYLOAD = 12;
+
+/** The share string is a format this build doesn't know — made by a newer one. */
+export class ThemeShareVersionError extends Error {
+  constructor() {
+    super("This theme link needs a newer version of Quark.");
+    this.name = "ThemeShareVersionError";
+  }
+}
+
+let _dictionaryV1: Uint8Array | undefined;
+function dictionaryV1(): Uint8Array {
+  return (_dictionaryV1 ??= new TextEncoder().encode(SHARE_DICTIONARY_V1));
+}
+
+function toBase64Url(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) {
     bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
@@ -420,12 +477,11 @@ export function encodeThemeShare(toml: string): string {
 }
 
 /**
- * Decode a share string back to TOML text. Lenient about what it is handed:
- * a full quark.tel/theme link (the part after `#` is used), standard or
- * URL-safe alphabet, with or without padding, wrapped across lines.
- * Throws if the input is not base64 or does not decode to UTF-8.
+ * The bytes of a share string, lenient about what it is handed: a full
+ * quark.tel/theme link (the part after `#` is used), standard or URL-safe
+ * alphabet, with or without padding, wrapped across lines.
  */
-export function decodeThemeShare(input: string): string {
+function fromBase64(input: string): Uint8Array {
   let s = input.trim();
   const hash = s.indexOf("#");
   if (hash !== -1) s = s.slice(hash + 1);
@@ -433,8 +489,71 @@ export function decodeThemeShare(input: string): string {
   if (!s || !/^[A-Za-z0-9+/]+$/.test(s) || s.length % 4 === 1) {
     throw new Error("not a base64 theme string");
   }
+  if (s.length > MAX_SHARE_LENGTH) throw new Error("theme string is too long");
   const bin = atob(s + "=".repeat((4 - (s.length % 4)) % 4));
-  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+/**
+ * Whether a payload with an unknown version byte is credibly a share string
+ * from a newer Quark, rather than text that merely decodes as base64: long
+ * enough to hold a theme, and one token. A link wrapped across lines breaks at
+ * line ends; words separated by spaces on one line are prose.
+ */
+function couldBeNewerShare(input: string, payload: Uint8Array): boolean {
+  return payload.length >= MIN_VERSIONED_PAYLOAD && !/\S[ \t]+\S/.test(input.trim());
+}
+
+function inflateV1(compressed: Uint8Array): Uint8Array {
+  // Checked here because fflate hands back the caller's whole `out` buffer,
+  // unwritten, for empty input — which would read as "too large" below.
+  if (compressed.length === 0) throw new Error("theme string is damaged");
+  // fflate writes into a buffer it is given and never grows it, so one byte
+  // past the limit is enough to tell "too large" without inflating a bomb.
+  const out = new Uint8Array(MAX_SHARED_TOML_BYTES + 1);
+  let toml: Uint8Array;
+  try {
+    toml = inflateSync(compressed, { out, dictionary: dictionaryV1() });
+  } catch {
+    throw new Error("theme string is damaged");
+  }
+  if (toml.length > MAX_SHARED_TOML_BYTES) throw new Error("theme in this string is too large");
+  return toml;
+}
+
+/** The share string (version 1) for theme TOML. */
+export function encodeThemeShare(toml: string): string {
+  // No `mem`: fflate's default is already more than a ~1.3 KB theme can use.
+  // Raising it allocates a 2^(mem+12)-entry hash table per call (32 MB at 12)
+  // for byte-identical output, and the editor encodes on every edit.
+  const compressed = deflateSync(new TextEncoder().encode(toml), {
+    level: 9,
+    dictionary: dictionaryV1(),
+  });
+  const payload = new Uint8Array(compressed.length + 1);
+  payload[0] = SHARE_V1;
+  payload.set(compressed, 1);
+  return toBase64Url(payload);
+}
+
+/**
+ * Decode a share string, of either version, back to TOML text. Accepts a
+ * whole link and is lenient about alphabet, padding and line breaks (see
+ * fromBase64). Throws {@link ThemeShareVersionError} for a version this build
+ * doesn't know, and an Error for anything that isn't a theme string.
+ */
+export function decodeThemeShare(input: string): string {
+  const payload = fromBase64(input);
+  let bytes: Uint8Array;
+  if (payload[0] >= FIRST_TEXT_BYTE) {
+    bytes = payload;
+  } else if (payload[0] === SHARE_V1) {
+    bytes = inflateV1(payload.subarray(1));
+  } else if (couldBeNewerShare(input, payload)) {
+    throw new ThemeShareVersionError();
+  } else {
+    throw new Error("not a theme string");
+  }
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {

@@ -4804,6 +4804,33 @@ body.quark-mobile .settings-dialog__field-status {
   margin-bottom: 10px;
 }
 
+/* A filesystem path: long and without spaces, so let it break anywhere. */
+.settings-dialog__hint--path {
+  overflow-wrap: anywhere;
+}
+
+/* Settings → Themes → Import: a link or pasted TOML beside [import], and a
+ * status line that has no label column to line up with and may need to wrap
+ * (the "already installed" prompt names the file). */
+.settings-dialog__import .settings-dialog__row {
+  align-items: flex-start;
+}
+
+.settings-dialog__import-field {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.settings-dialog__import .settings-dialog__field-status {
+  height: auto;
+  min-height: 1.3em;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-left: 0;
+}
+
 .settings-dialog__hint {
   color: var(--roomlist-muted);
   font-size: calc(var(--font-size) - 2px);
