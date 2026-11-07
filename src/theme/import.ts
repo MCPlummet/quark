@@ -11,6 +11,7 @@ import { parse, TomlError } from "smol-toml";
 
 import {
   THEME_FIELDS,
+  ThemeShareVersionError,
   completeTheme,
   decodeThemeShare,
   getField,
@@ -61,7 +62,8 @@ export function importTheme(text: string, base: CompleteTheme): ImportedTheme {
     let toml: string;
     try {
       toml = decodeThemeShare(trimmed);
-    } catch {
+    } catch (err) {
+      if (err instanceof ThemeShareVersionError) throw err;
       throw new Error("That doesn't look like TOML or a theme link.");
     }
     return parseThemeToml(toml, base);

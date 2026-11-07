@@ -1,4 +1,5 @@
 import { parse } from "smol-toml";
+import { deflateSync } from "fflate";
 
 import { BUILTIN_THEME_MAP } from "./builtins.js";
 import {
@@ -14,9 +15,23 @@ import {
   BORDER_STYLES,
   UNTITLED_THEME_NAME,
   U32_MAX,
+  MAX_SHARE_LENGTH,
+  MAX_SHARED_TOML_BYTES,
+  ThemeShareVersionError,
   type CompleteTheme,
 } from "./share.js";
+import { SHARE_DICTIONARY_V1 } from "./share_dictionary.js";
 import { FRAME_STYLES } from "./loader.js";
+
+/** Unpadded base64url, written independently of the code under test. */
+function base64url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64url(s: string): Uint8Array {
+  const std = s.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(std + "=".repeat((4 - (std.length % 4)) % 4)), (c) => c.charCodeAt(0));
+}
 
 /** themes/*.toml by file name, e.g. `nord.toml`. */
 const THEME_FILES: Record<string, string> = Object.fromEntries(
@@ -103,11 +118,65 @@ describe("share string", () => {
     expect(decodeThemeShare(`  ${url.slice(0, 40)}\n${url.slice(40)}  `)).toBe(toml);
   });
 
-  it("is plain base64 of the TOML, so any decoder can read it", () => {
-    const toml = themeToToml(phosphor);
-    const std = encodeThemeShare(toml).replace(/-/g, "+").replace(/_/g, "/");
-    expect(atob(std + "=".repeat((4 - (std.length % 4)) % 4))).toBe(toml); // ASCII theme
+  it("still reads version-0 strings — plain base64 of the TOML, from before compression", () => {
+    const toml = themeToToml(BUILTIN_THEME_MAP.nord as CompleteTheme);
+    const plain = base64url(new TextEncoder().encode(toml));
+    expect(plain.startsWith("W21ldGFd")).toBe(true); // "[meta]"
+    expect(decodeThemeShare(`https://quark.tel/theme/#${plain}`)).toBe(toml);
+  });
 
+  it("reads version 1 exactly as an independent encoder writes it", () => {
+    // Made with Node's zlib — deflateRawSync(nord, { level: 9, dictionary:
+    // SHARE_DICTIONARY_V1 }) after a 0x01 byte — not with the encoder under
+    // test. If this fails, the dictionary or the format changed, and every
+    // version-1 link already shared is broken: put it back, and add a version
+    // instead.
+    const NORD_V1 =
+      "Ae3Uyw3DIAwG4JUINshdogv0hI2z_wilUixMQWmlKrdeQ3j4x3yP0ZJ7q_YXR6ICYpgcqVRVb4MjRBJqWDgCjDHFhSMq2tp17KHj31NH-k7eEWoPQjbvCO95y2V0RFmYeHSkACuJcyRpW0xOHbE53RGLxDmCkvLrAG-OQPuukyPAsKNOjtiBJ0es3qUjNvjREQt8dMQSdo7YZc2OWMzOkaPuLxyx_nKFWT7OESjYJPGO9C3-jlziyBM";
+    expect(decodeThemeShare(NORD_V1)).toBe(themeToToml(BUILTIN_THEME_MAP.nord as CompleteTheme));
+    expect(decodeThemeShare("AYseLUtGy5LRsmS0LKFCWQIA")).toBe(SHARE_DICTIONARY_V1);
+  });
+
+  it("writes version 1: a 0x01 byte, then compressed TOML", () => {
+    const encoded = encodeThemeShare(themeToToml(phosphor));
+    expect(fromBase64url(encoded)[0]).toBe(0x01);
+  });
+
+  it("keeps every built-in theme's link short", () => {
+    for (const [id, theme] of Object.entries(BUILTIN_THEME_MAP)) {
+      const toml = themeToToml(theme as CompleteTheme);
+      const encoded = encodeThemeShare(toml);
+      // ~250 today; uncompressed is ~1,470. A jump means the dictionary
+      // stopped applying.
+      expect(encoded.length, id).toBeLessThan(350);
+      expect(decodeThemeShare(encoded), id).toBe(toml);
+    }
+  });
+
+  it("says when a string needs a newer Quark", () => {
+    for (const version of [0x00, 0x02, 0x08]) {
+      const future = base64url(new Uint8Array([version, 1, 2, 3]));
+      expect(() => decodeThemeShare(future)).toThrow(ThemeShareVersionError);
+    }
+  });
+
+  it("refuses a damaged version-1 string", () => {
+    const encoded = encodeThemeShare(themeToToml(phosphor));
+    const bytes = fromBase64url(encoded);
+    expect(() => decodeThemeShare(base64url(bytes.subarray(0, 4)))).toThrow(/damaged/);
+  });
+
+  it("stops inflating at the size limit instead of following a bomb", () => {
+    // 1 MiB of spaces compresses to about a kilobyte.
+    const bomb = deflateSync(new Uint8Array(1024 * 1024).fill(0x20), { level: 9 });
+    const encoded = base64url(Uint8Array.of(0x01, ...bomb));
+    expect(encoded.length).toBeLessThan(MAX_SHARE_LENGTH);
+    expect(() => decodeThemeShare(encoded)).toThrow(/too large/);
+    expect(MAX_SHARED_TOML_BYTES).toBe(64 * 1024);
+  });
+
+  it("refuses a string too long to be a theme", () => {
+    expect(() => decodeThemeShare("A".repeat(MAX_SHARE_LENGTH + 4))).toThrow(/too long/);
   });
 
   it("rejects strings that are not base64 or not text", () => {

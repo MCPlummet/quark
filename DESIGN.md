@@ -1908,13 +1908,24 @@ Themes once had `prompt.symbol`, an input prompt glyph the UI no longer draws. T
 
 **[quark.tel/theme](https://quark.tel/theme/)** is a web editor for theme files: every field above as a form control, previewed live on the real client (`docs/demo`, embedded same-origin), with a download of the finished `.toml` for the [themes folder](#theming). It can start from any built-in theme, and imports TOML (pasted, picked or dropped) or a theme link.
 
-**Share format.** A theme travels as a *share string*: the unpadded base64url (RFC 4648 §5) of the theme's UTF-8 TOML. There is no other envelope, so reading one is decode → the ordinary TOML theme parser. A link is the editor URL with the share string as its fragment:
+**Share format.** A theme travels as a *share string*: unpadded base64url (RFC 4648 §5) of a payload whose first byte gives its version.
+
+| Version | First byte | Payload |
+|---|---|---|
+| 1 (written today) | `0x01` | that byte, then the theme's UTF-8 TOML compressed with raw DEFLATE (RFC 1951) against a preset dictionary |
+| 0 (read only) | the TOML's first byte | the theme's UTF-8 TOML as is: links made before compression |
+
+TOML can't begin with a byte below `0x09` (a document starts with whitespace, a newline, `#`, `[` or a key), so those bytes mark versioned payloads and version 0 needs no marker. Bytes `0x00` and `0x02`–`0x08` are reserved; a decoder that meets one says the link needs a newer Quark instead of calling it garbage. Past the version, reading one is decompress → the ordinary TOML theme parser. A link is the editor URL with the share string as its fragment:
 
 ```
-https://quark.tel/theme/#W21ldGFdCm5hbWUgPSAiUGhvc3Bob3Ii…
+https://quark.tel/theme/#Ae3Uyw3DIAwG4JUINshdogv0hI2z_wilUixMQWmlKrdeQ3j4x3yP0…
 ```
 
-The fragment never reaches a server. The address bar is the editor's state — every edit rewrites it, so reloading or sending the link reproduces the theme. Decoders should accept a whole link (use what follows `#`), the standard alphabet, padding, and line breaks. A full theme encodes to roughly 1.5 KB.
+The **dictionary** is Phosphor in canonical TOML, frozen in `src/theme/share_dictionary.ts`. Every theme shares its keys, layout and most values with it, so a full theme comes to about 250 characters instead of about 1,470, short enough to paste into a message or fit in a small QR code (Phosphor itself is 24). The dictionary can never change: a decoder needs the identical bytes, so editing it would break every version-1 link already shared. `share.test.ts` pins it with a link made by an independent encoder (Node's zlib). If schema drift ever makes it compress badly, the fix is a version 2 with its own dictionary, read alongside version 1. Compression uses fflate on both sides, synchronously and in every webview, with no dependence on `CompressionStream`.
+
+Decoders accept a whole link (they use what follows `#`), the standard alphabet, padding and line breaks. They refuse strings over 16 KiB, and stop decompressing past 64 KiB of TOML (the backend's theme-file limit), so a crafted link can't expand into a bomb.
+
+The fragment never reaches a server. The address bar is the editor's state: every edit rewrites it, so reloading or sending the link reproduces the theme.
 
 The editor writes **canonical TOML**: every field, in the table and key order of the [structure above](#theme-file-structure) and the files in `/themes/`. Unlike the app's lenient custom-theme loader, the output satisfies the strict Rust `Theme` struct and `validate_theme`. Importing a partial or partly invalid theme fills in or replaces those fields from Phosphor and lists each change — except the fields that say whose theme it is: a missing or blank `meta.name` becomes "Untitled theme" (not "Phosphor", which would pass it off as the built-in), and an invalid `author`/`version` is left out. Integer fields are `u32` in Rust, so values above 4294967295 are rejected.
 
