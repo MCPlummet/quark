@@ -394,6 +394,14 @@ export async function selectRoom(
 
     const page = await timelinePromise;
     const { events, reached_start } = page;
+    // The user may have switched rooms while this fetch was in flight (B then
+    // quickly back to A). Applying this result would clobber the newer room's
+    // timeline/pagination state. Keep it warm in the cache, but touch nothing
+    // else. (#140)
+    if (AppState.get("currentRoomId") !== roomId) {
+      _putRoomTimeline(roomId, events, reached_start);
+      return;
+    }
     paginationState.reachedStart = reached_start;
 
     AppState.set("currentTimeline", events);
@@ -487,7 +495,9 @@ export async function selectRoom(
       }
     }
   } catch (err) {
-    showError(`Failed to load timeline: ${err instanceof Error ? err.message : String(err)}`);
+    if (AppState.get("currentRoomId") === roomId) {
+      showError(`Failed to load timeline: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // Cancel any active reply if we changed rooms
