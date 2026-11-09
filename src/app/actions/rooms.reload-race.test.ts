@@ -79,7 +79,7 @@ describe("reloadCurrentRoomTimeline keeps events that arrive mid-fetch (#143)", 
     await pending;
 
     expect(AppState.get("currentTimeline").map((e) => e.event_id)).toEqual(["$1", "$utd", "$mine"]);
-    const rendered = setMessages.mock.calls.at(-1)![0] as { id?: string; eventId?: string }[];
+    const rendered = setMessages.mock.calls[setMessages.mock.calls.length - 1]![0] as { id?: string; eventId?: string }[];
     expect(rendered.length).toBe(3);
   });
 });
