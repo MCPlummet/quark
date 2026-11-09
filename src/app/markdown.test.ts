@@ -46,7 +46,7 @@ describe("markdownToHtml", () => {
   it("resolves custom emoji to mx-emoticon images and keeps formatting", () => {
     const resolveEmoji = (sc: string) => (sc === "party" ? "mxc://e/party" : undefined);
     expect(markdownToHtml("**yay** :party:", { resolveEmoji })).toBe(
-      '<strong>yay</strong> <img data-mx-emoticon src="mxc://e/party" alt=":party:" title=":party:">',
+      '<strong>yay</strong> <img data-mx-emoticon height="32" src="mxc://e/party" alt=":party:" title=":party:">',
     );
   });
 
