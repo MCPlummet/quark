@@ -920,6 +920,16 @@ export async function jumpToLatest(): Promise<void> {
   }
 }
 
+/** Fetched page + any held events newer than the page's start that it lacks. */
+function _mergeLiveTail(fetched: TimelineEvent[], held: TimelineEvent[]): TimelineEvent[] {
+  if (fetched.length === 0) return fetched;
+  const ids = new Set(fetched.map((e) => e.event_id));
+  const floor = Math.min(...fetched.map((e) => e.timestamp));
+  const extra = held.filter((e) => !ids.has(e.event_id) && e.timestamp >= floor);
+  if (extra.length === 0) return fetched;
+  return [...fetched, ...extra].sort((a, b) => a.timestamp - b.timestamp);
+}
+
 /**
  * Re-load the current room's timeline and re-render in place (preserving
  * scroll). Called when new room keys arrive (post-verification / key-backup
@@ -970,7 +980,13 @@ export async function reloadCurrentRoomTimeline(): Promise<void> {
   // A room switch may have happened during the await.
   if (roomId !== AppState.get("currentRoomId")) return;
 
-  const { events, reached_start } = page;
+  const { reached_start } = page;
+  // Events that landed (live sync echo / own just-sent message) while the fetch
+  // was in flight may be missing from the fetched page, which was read
+  // server-side before them. Rebuilding from the page alone would erase them
+  // from view until the next reload (#143), so carry over any currently-held
+  // event that is absent from the page and not older than its window.
+  const events = _mergeLiveTail(page.events, AppState.get("currentTimeline"));
   paginationState.reachedStart = reached_start;
   AppState.set("currentTimeline", events);
   _putRoomTimeline(roomId, events, reached_start);
