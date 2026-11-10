@@ -93,6 +93,13 @@ interface CachedRoomTimeline {
 // Insertion order doubles as LRU recency: every open re-`set`s the room, moving
 // it to newest; eviction drops the oldest (least-recently-opened) entries.
 const _roomTimelineCache = new Map<string, CachedRoomTimeline>();
+/**
+ * Bumped by every selectRoom call. A call whose timeline fetch returns after a
+ * newer one started is stale and must not apply its page (#140). Comparing
+ * room IDs alone can't tell A → B → A's two opens of A apart, so a slow first
+ * fetch could land on top of the second's.
+ */
+let _selectRoomSeq = 0;
 /** Max events retained per room (cap memory; the live tail is what matters). */
 const ROOM_TIMELINE_CACHE_CAP = 200;
 /** Events fetched for the first paint. Smaller = faster first-ever open. */
@@ -232,6 +239,10 @@ export async function selectRoom(
   roomId: string,
   opts: { keepPanelFocus?: boolean } = {},
 ): Promise<void> {
+  const seq = ++_selectRoomSeq;
+  // Whether this is still the open the user is looking at: no newer selectRoom
+  // has started, and the room has not been closed since.
+  const isLatest = () => seq === _selectRoomSeq && AppState.get("currentRoomId") === roomId;
   const { roomList, roomHeader, timeline, memberList, statusBar } = getComponents();
   const prevRoom = AppState.get("currentRoomId");
 
@@ -394,12 +405,14 @@ export async function selectRoom(
 
     const page = await timelinePromise;
     const { events, reached_start } = page;
-    // The user may have switched rooms while this fetch was in flight (B then
-    // quickly back to A). Applying this result would clobber the newer room's
-    // timeline/pagination state. Keep it warm in the cache, but touch nothing
-    // else. (#140)
-    if (AppState.get("currentRoomId") !== roomId) {
-      _putRoomTimeline(roomId, events, reached_start);
+    // A newer open started while this fetch was in flight (B then quickly
+    // back to A, or A → B → A), or the room was closed. Applying this page
+    // would clobber the newer open's timeline and pagination state. (#140)
+    if (!isLatest()) {
+      // Keep a first-visit room warm for its next open. Never overwrite an
+      // existing entry: it is a newer open's page, or the live tail has been
+      // appending to it since this page was read.
+      if (!_roomTimelineCache.has(roomId)) _putRoomTimeline(roomId, events, reached_start);
       return;
     }
     paginationState.reachedStart = reached_start;
@@ -495,7 +508,7 @@ export async function selectRoom(
       }
     }
   } catch (err) {
-    if (AppState.get("currentRoomId") === roomId) {
+    if (isLatest()) {
       showError(`Failed to load timeline: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
