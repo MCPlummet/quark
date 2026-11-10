@@ -89,6 +89,51 @@ describe("reloadCurrentRoomTimeline keeps events that arrive mid-fetch (#143)", 
     const rendered = setMessages.mock.calls[setMessages.mock.calls.length - 1]![0] as { id?: string; eventId?: string }[];
     expect(rendered.length).toBe(3);
   });
+
+  /** Hold `held`, reload, run `duringFetch` while the fetch is out, return `page`. */
+  async function reload(held: TimelineEvent[], page: TimelineEvent[], duringFetch: () => void): Promise<string[]> {
+    AppState.patch({ currentRoomId: "!r:x", currentTimeline: held });
+    let release: (v: unknown) => void = () => {};
+    (ipc.openRoomTimeline as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      new Promise((r) => { release = r; }),
+    );
+    const pending = reloadCurrentRoomTimeline();
+    duringFetch();
+    release({ events: page, reached_start: true });
+    await pending;
+    return AppState.get("currentTimeline").map((e) => e.event_id);
+  }
+  const live = (e: TimelineEvent) =>
+    AppState.set("currentTimeline", [...AppState.get("currentTimeline"), e]);
+
+  it("keeps a live event whose clock runs behind the page", async () => {
+    const page = [ev("$1", 100), ev("$utd", 200)];
+    const ids = await reload([ev("$1", 100), ev("$utd", 200, "m.room.encrypted")], page, () => live(ev("$skewed", 50)));
+    expect(ids).toEqual(["$1", "$utd", "$skewed"]);
+  });
+
+  it("keeps the page's own order instead of re-sorting it by timestamp", async () => {
+    // $late's server clock runs behind; the page has it after $1 all the same.
+    const page = [ev("$1", 100), ev("$late", 90), ev("$utd", 200)];
+    const ids = await reload([ev("$1", 100), ev("$utd", 200, "m.room.encrypted")], page, () => live(ev("$mine", 300)));
+    expect(ids).toEqual(["$1", "$late", "$utd", "$mine"]);
+  });
+
+  it("does not bring back an event the page no longer has", async () => {
+    // $gone was held before the fetch; the server has since dropped it.
+    const held = [ev("$1", 100), ev("$gone", 150), ev("$utd", 200, "m.room.encrypted")];
+    const ids = await reload(held, [ev("$1", 100), ev("$utd", 200)], () => {});
+    expect(ids).toEqual(["$1", "$utd"]);
+  });
+
+  it("does not move older history paginated in during the fetch after the page", async () => {
+    const held = [ev("$1", 100), ev("$utd", 200, "m.room.encrypted")];
+    const ids = await reload(held, [ev("$1", 100), ev("$utd", 200)], () => {
+      AppState.set("currentTimeline", [ev("$old", 10), ...AppState.get("currentTimeline")]);
+      live(ev("$mine", 300));
+    });
+    expect(ids).toEqual(["$1", "$utd", "$mine"]);
+  });
 });
 
 // The send's own room-key event (a new megolm session) sets off the reload

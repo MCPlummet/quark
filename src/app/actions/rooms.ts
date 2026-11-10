@@ -933,14 +933,30 @@ export async function jumpToLatest(): Promise<void> {
   }
 }
 
-/** Fetched page + any held events newer than the page's start that it lacks. */
-function _mergeLiveTail(fetched: TimelineEvent[], held: TimelineEvent[]): TimelineEvent[] {
-  if (fetched.length === 0) return fetched;
-  const ids = new Set(fetched.map((e) => e.event_id));
-  const floor = Math.min(...fetched.map((e) => e.timestamp));
-  const extra = held.filter((e) => !ids.has(e.event_id) && e.timestamp >= floor);
-  if (extra.length === 0) return fetched;
-  return [...fetched, ...extra].sort((a, b) => a.timestamp - b.timestamp);
+/**
+ * `fetched` plus the live tail that arrived while it was being fetched: the
+ * held events after the last one already held when the fetch started
+ * (`heldBefore`), less any the page has.
+ *
+ * Live events append to `currentTimeline` and older history prepends, so the
+ * position tells them apart, not timestamps. A federated event's clock can run
+ * behind the page and still be new, and the page keeps its own order. An event
+ * that was held before and is missing from the page (redacted server-side, say)
+ * is not brought back.
+ */
+function _mergeLiveTail(
+  fetched: TimelineEvent[],
+  held: readonly TimelineEvent[],
+  heldBefore: ReadonlySet<string>,
+): TimelineEvent[] {
+  let start = held.length;
+  while (start > 0 && !heldBefore.has(held[start - 1].event_id)) start--;
+  // Nothing held before is still held: the list was replaced meanwhile, so
+  // there is no tail to tell apart from it.
+  if (start === 0) return fetched;
+  const inPage = new Set(fetched.map((e) => e.event_id));
+  const tail = held.slice(start).filter((e) => !inPage.has(e.event_id));
+  return tail.length === 0 ? fetched : [...fetched, ...tail];
 }
 
 /**
@@ -984,6 +1000,8 @@ export async function reloadCurrentRoomTimeline(): Promise<void> {
   }
 
   const { timeline } = getComponents();
+  // Whatever is held after these when the fetch returns arrived live meanwhile.
+  const heldBefore = new Set(currentEvents.map((e) => e.event_id));
   let page;
   try {
     page = await openRoomTimeline(roomId, ROOM_OPEN_LIMIT);
@@ -995,11 +1013,10 @@ export async function reloadCurrentRoomTimeline(): Promise<void> {
 
   const { reached_start } = page;
   // Events that landed (live sync echo / own just-sent message) while the fetch
-  // was in flight may be missing from the fetched page, which was read
-  // server-side before them. Rebuilding from the page alone would erase them
-  // from view until the next reload (#143), so carry over any currently-held
-  // event that is absent from the page and not older than its window.
-  const events = _mergeLiveTail(page.events, AppState.get("currentTimeline"));
+  // was in flight may be missing from the fetched page, which was read before
+  // them. Rebuilding from the page alone would erase them from view until the
+  // next reload (#143), so carry them over after it.
+  const events = _mergeLiveTail(page.events, AppState.get("currentTimeline"), heldBefore);
   paginationState.reachedStart = reached_start;
   AppState.set("currentTimeline", events);
   _putRoomTimeline(roomId, events, reached_start);
