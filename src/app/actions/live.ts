@@ -47,6 +47,25 @@ export function recordLiveEvent(roomId: string, event: TimelineEvent): void {
 }
 
 /**
+ * Whether `event` is the sync echo of something this device sent and still has
+ * on screen, so the echo has nothing left to draw. Consumes the ID either way.
+ *
+ * A thread reply's row lives in the thread panel and an edit was already
+ * applied to its message's body, so their echoes stay suppressed. A
+ * main-timeline message counts only while its row is still in the timeline.
+ * A full rebuild between the send and its echo replaces the rows from a page
+ * read before the send landed, and the bubble goes with them. That rebuild is
+ * `reloadCurrentRoomTimeline` on a room-key burst, which the send itself sets
+ * off when it starts a new megolm session. The echo is then the only copy
+ * left, so it is drawn like any other live event (#143).
+ */
+function isDrawnOwnEcho(event: TimelineEvent, timeline: Timeline): boolean {
+  if (!consumeOwnSentEvent(event.event_id)) return false;
+  if (event.thread_root || event.is_edit) return true;
+  return timeline.hasMessage(event.event_id);
+}
+
+/**
  * Paint a live event into the open room's timeline (or its open thread panel).
  * The caller has already established that `event` belongs to the open room and
  * that the room is showing its live tail (not context view).
@@ -69,11 +88,11 @@ export function renderLiveEvent(event: TimelineEvent, timeline: Timeline, thread
     AppState.set("currentTimeline", [...current, event]);
   }
 
-  // Skip rendering if: (a) already in state (replay), (b) it's our own
-  // echo (deduplication via _ownSentEventIds), or (c) it's already in the
-  // DOM (race: echo arrived after confirmMessage but before add-to-set).
+  // Skip rendering if: (a) already in state (replay), (b) it's already in the
+  // DOM (race: echo arrived after confirmMessage but before add-to-set), or
+  // (c) it's the echo of our own send, which already drew it.
   const alreadyInDom = !!timeline.getMessageElementById(event.event_id);
-  if (alreadyInState || alreadyInDom || consumeOwnSentEvent(event.event_id)) {
+  if (alreadyInState || alreadyInDom || isDrawnOwnEcho(event, timeline)) {
     return true;
   }
 

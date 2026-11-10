@@ -85,7 +85,7 @@ export function markdownToHtml(text: string, opts: MarkdownOptions = {}): string
     if (!mxc) return full;
     const idx = emojiHtml.length;
     emojiHtml.push(
-      `<img data-mx-emoticon src="${mxc}" alt=":${shortcode}:" title=":${shortcode}:">`,
+      `<img data-mx-emoticon height="32" src="${mxc}" alt=":${shortcode}:" title=":${shortcode}:">`,
     );
     return `${PH}${idx}${PH}`;
   });

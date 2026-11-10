@@ -93,6 +93,13 @@ interface CachedRoomTimeline {
 // Insertion order doubles as LRU recency: every open re-`set`s the room, moving
 // it to newest; eviction drops the oldest (least-recently-opened) entries.
 const _roomTimelineCache = new Map<string, CachedRoomTimeline>();
+/**
+ * Bumped by every selectRoom call. A call whose timeline fetch returns after a
+ * newer one started is stale and must not apply its page (#140). Comparing
+ * room IDs alone can't tell A → B → A's two opens of A apart, so a slow first
+ * fetch could land on top of the second's.
+ */
+let _selectRoomSeq = 0;
 /** Max events retained per room (cap memory; the live tail is what matters). */
 const ROOM_TIMELINE_CACHE_CAP = 200;
 /** Events fetched for the first paint. Smaller = faster first-ever open. */
@@ -232,6 +239,10 @@ export async function selectRoom(
   roomId: string,
   opts: { keepPanelFocus?: boolean } = {},
 ): Promise<void> {
+  const seq = ++_selectRoomSeq;
+  // Whether this is still the open the user is looking at: no newer selectRoom
+  // has started, and the room has not been closed since.
+  const isLatest = () => seq === _selectRoomSeq && AppState.get("currentRoomId") === roomId;
   const { roomList, roomHeader, timeline, memberList, statusBar } = getComponents();
   const prevRoom = AppState.get("currentRoomId");
 
@@ -394,6 +405,16 @@ export async function selectRoom(
 
     const page = await timelinePromise;
     const { events, reached_start } = page;
+    // A newer open started while this fetch was in flight (B then quickly
+    // back to A, or A → B → A), or the room was closed. Applying this page
+    // would clobber the newer open's timeline and pagination state. (#140)
+    if (!isLatest()) {
+      // Keep a first-visit room warm for its next open. Never overwrite an
+      // existing entry: it is a newer open's page, or the live tail has been
+      // appending to it since this page was read.
+      if (!_roomTimelineCache.has(roomId)) _putRoomTimeline(roomId, events, reached_start);
+      return;
+    }
     paginationState.reachedStart = reached_start;
 
     AppState.set("currentTimeline", events);
@@ -487,7 +508,9 @@ export async function selectRoom(
       }
     }
   } catch (err) {
-    showError(`Failed to load timeline: ${err instanceof Error ? err.message : String(err)}`);
+    if (isLatest()) {
+      showError(`Failed to load timeline: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   // Cancel any active reply if we changed rooms
@@ -911,6 +934,32 @@ export async function jumpToLatest(): Promise<void> {
 }
 
 /**
+ * `fetched` plus the live tail that arrived while it was being fetched: the
+ * held events after the last one already held when the fetch started
+ * (`heldBefore`), less any the page has.
+ *
+ * Live events append to `currentTimeline` and older history prepends, so the
+ * position tells them apart, not timestamps. A federated event's clock can run
+ * behind the page and still be new, and the page keeps its own order. An event
+ * that was held before and is missing from the page (redacted server-side, say)
+ * is not brought back.
+ */
+function _mergeLiveTail(
+  fetched: TimelineEvent[],
+  held: readonly TimelineEvent[],
+  heldBefore: ReadonlySet<string>,
+): TimelineEvent[] {
+  let start = held.length;
+  while (start > 0 && !heldBefore.has(held[start - 1].event_id)) start--;
+  // Nothing held before is still held: the list was replaced meanwhile, so
+  // there is no tail to tell apart from it.
+  if (start === 0) return fetched;
+  const inPage = new Set(fetched.map((e) => e.event_id));
+  const tail = held.slice(start).filter((e) => !inPage.has(e.event_id));
+  return tail.length === 0 ? fetched : [...fetched, ...tail];
+}
+
+/**
  * Re-load the current room's timeline and re-render in place (preserving
  * scroll). Called when new room keys arrive (post-verification / key-backup
  * restore) so stale "🔒 unable to decrypt" placeholders refresh to plaintext —
@@ -951,6 +1000,8 @@ export async function reloadCurrentRoomTimeline(): Promise<void> {
   }
 
   const { timeline } = getComponents();
+  // Whatever is held after these when the fetch returns arrived live meanwhile.
+  const heldBefore = new Set(currentEvents.map((e) => e.event_id));
   let page;
   try {
     page = await openRoomTimeline(roomId, ROOM_OPEN_LIMIT);
@@ -960,7 +1011,12 @@ export async function reloadCurrentRoomTimeline(): Promise<void> {
   // A room switch may have happened during the await.
   if (roomId !== AppState.get("currentRoomId")) return;
 
-  const { events, reached_start } = page;
+  const { reached_start } = page;
+  // Events that landed (live sync echo / own just-sent message) while the fetch
+  // was in flight may be missing from the fetched page, which was read before
+  // them. Rebuilding from the page alone would erase them from view until the
+  // next reload (#143), so carry them over after it.
+  const events = _mergeLiveTail(page.events, AppState.get("currentTimeline"), heldBefore);
   paginationState.reachedStart = reached_start;
   AppState.set("currentTimeline", events);
   _putRoomTimeline(roomId, events, reached_start);

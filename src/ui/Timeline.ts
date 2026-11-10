@@ -2121,6 +2121,14 @@ export class Timeline {
     return this._listEl.querySelector<HTMLElement>(`[data-message-id="${eventId}"]`);
   }
 
+  /**
+   * Whether a message with this ID is in the buffer — rendered or not. Unlike
+   * {@link getMessageElementById}, a row windowed out of the DOM still counts.
+   */
+  hasMessage(eventId: string): boolean {
+    return this._messages.some((m) => m.id === eventId);
+  }
+
   // ── Read receipts ──────────────────────────────────────────────────────────
 
   /** Inject resolvers for receipt avatar URLs and display names so decoration

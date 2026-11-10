@@ -822,7 +822,7 @@ describe("a captioned image sent into a thread (#78 + #84)", () => {
     const [send] = sendPastedImage.mock.calls[0];
     expect(send.threadRootEventId).toBe("$root");
     expect(send.caption).toBe(":party: see [docs](https://e.com) 😄");
-    expect(send.formattedCaption).toContain('<img data-mx-emoticon src="mxc://e/party"');
+    expect(send.formattedCaption).toContain('<img data-mx-emoticon height="32" src="mxc://e/party"');
     expect(send.formattedCaption).toContain('<a href="https://e.com">docs</a>');
   });
 });

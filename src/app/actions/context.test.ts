@@ -250,7 +250,7 @@ describe("_buildFormattedBodyWithEmoji", () => {
     _shortcodeToMxc.set("party", "mxc://emoji/party");
     const html = _buildFormattedBodyWithEmoji("yay :party: time");
     expect(html).toBe(
-      'yay <img data-mx-emoticon src="mxc://emoji/party" alt=":party:" title=":party:"> time',
+      'yay <img data-mx-emoticon height="32" src="mxc://emoji/party" alt=":party:" title=":party:"> time',
     );
   });
 
@@ -304,7 +304,7 @@ describe("prepareOutgoingBody", () => {
     const { body, formattedBody } = prepareOutgoingBody("yay :party:");
     expect(body).toBe("yay :party:");
     expect(formattedBody).toBe(
-      'yay <img data-mx-emoticon src="mxc://emoji/party" alt=":party:" title=":party:">',
+      'yay <img data-mx-emoticon height="32" src="mxc://emoji/party" alt=":party:" title=":party:">',
     );
   });
 
@@ -313,7 +313,7 @@ describe("prepareOutgoingBody", () => {
     const { body, formattedBody } = prepareOutgoingBody(":grinning: :party:");
     expect(body).toBe("😀 :party:");
     expect(formattedBody).toBe(
-      '😀 <img data-mx-emoticon src="mxc://emoji/party" alt=":party:" title=":party:">',
+      '😀 <img data-mx-emoticon height="32" src="mxc://emoji/party" alt=":party:" title=":party:">',
     );
   });
 

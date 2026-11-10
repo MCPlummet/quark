@@ -55,7 +55,7 @@ import type { TimelineEvent } from "../../ipc/types.js";
 
 const ROOM = "!room:x";
 const ORIGINAL = "$orig:x";
-const PARTY_IMG = '<img data-mx-emoticon src="mxc://emoji/party" alt=":party:" title=":party:">';
+const PARTY_IMG = '<img data-mx-emoticon height="32" src="mxc://emoji/party" alt=":party:" title=":party:">';
 
 let timeline: Timeline;
 
