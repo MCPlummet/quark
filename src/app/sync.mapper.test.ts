@@ -75,12 +75,16 @@ const ME = "@me:example.com";
 const appendMessage = vi.fn();
 const appendReply = vi.fn();
 const countThreadReply = vi.fn();
+// Rows the timeline holds that are not in the DOM's rendered window — e.g. a
+// sent message's confirmed bubble, for the echo-dedup check.
+const bufferedRows = new Set<string>();
 
 function makeComponents(): AppComponents {
   return {
     timeline: {
       appendMessage,
       getMessageElementById: () => null,
+      hasMessage: (id: string) => bufferedRows.has(id),
       countThreadReply,
       updateMessageBody: vi.fn(),
       updateMessageMedia: vi.fn(),
@@ -148,6 +152,7 @@ describe("sync live-tail messages use the shared mapper", () => {
     appendReply.mockClear();
     countThreadReply.mockClear();
     _ownSentEventIds.clear();
+    bufferedRows.clear();
     AppState.set("currentRoomId", ROOM);
     AppState.set("currentTimeline", []);
     AppState.set("roomListCache", []);
@@ -247,8 +252,15 @@ describe("sync live-tail messages use the shared mapper", () => {
 
   it("still suppresses the echo of a message this client sent (dedup)", () => {
     _ownSentEventIds.add("$img:example.com");
+    bufferedRows.add("$img:example.com"); // the send's confirmed bubble
     deliver(imageEvent("look at this cat"));
     expect(appendMessage).not.toHaveBeenCalled();
+  });
+
+  it("draws the echo of a sent message whose bubble a rebuild removed (#143)", () => {
+    _ownSentEventIds.add("$img:example.com");
+    deliver(imageEvent("look at this cat"));
+    expect(appendMessage).toHaveBeenCalledTimes(1);
   });
 });
 

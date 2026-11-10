@@ -21,7 +21,7 @@ vi.mock("./rooms.js", () => ({
 vi.mock("./home.js", () => ({ homeViewHandleMessage: vi.fn() }));
 
 import { showSentEvent, renderLiveEvent } from "./live.js";
-import { getComponents, setComponents, setContextView } from "./context.js";
+import { getComponents, setComponents, setContextView, _ownSentEventIds } from "./context.js";
 import { AppState } from "../state.js";
 
 const ROOM = "!room:x";
@@ -30,14 +30,18 @@ const appendReply = vi.fn();
 const countThreadReply = vi.fn();
 // The DOM as the timeline would report it: whatever has been appended.
 const rendered = new Set<string>();
+// The timeline's buffer: everything in the DOM plus rows windowed out of it.
+const buffered = new Set<string>();
 
 function makeTimeline() {
   return {
     appendMessage: (msg: { id: string }) => {
       rendered.add(msg.id);
+      buffered.add(msg.id);
       appendMessage(msg);
     },
     getMessageElementById: (id: string) => (rendered.has(id) ? ({} as HTMLElement) : null),
+    hasMessage: (id: string) => buffered.has(id),
     countThreadReply,
     updateMessageBody: vi.fn(),
     updateMessageMedia: vi.fn(),
@@ -69,6 +73,8 @@ function image(over: Partial<TimelineEvent> = {}): TimelineEvent {
 beforeEach(() => {
   vi.clearAllMocks();
   rendered.clear();
+  buffered.clear();
+  _ownSentEventIds.clear();
   setComponents({ timeline: makeTimeline(), threadView } as unknown as AppComponents);
   AppState.patch({
     currentRoomId: ROOM,
@@ -129,5 +135,55 @@ describe("showSentEvent (#112)", () => {
     expect(appendMessage).not.toHaveBeenCalled();
     expect(appendReply).toHaveBeenCalledTimes(1);
     expect(countThreadReply).toHaveBeenCalledWith("$root:x", "$img:x");
+  });
+});
+
+describe("the sync echo of a message this device sent (#143)", () => {
+  const MINE = "$mine:x";
+  const text = (over: Partial<TimelineEvent> = {}) =>
+    image({ event_id: MINE, body: "hi", msg_type: "m.text", media_url: null, media_mimetype: null, ...over });
+  const deliver = (event: TimelineEvent) =>
+    renderLiveEvent(event, getComponents().timeline, getComponents().threadView);
+
+  it("is not drawn again while the send's bubble is in the timeline, rendered or not", () => {
+    // confirmMessage renamed the bubble to the real ID; it sits outside the
+    // rendered window, so only the buffer has it.
+    buffered.add(MINE);
+    _ownSentEventIds.add(MINE);
+
+    deliver(text());
+
+    expect(appendMessage).not.toHaveBeenCalled();
+    expect(_ownSentEventIds.has(MINE)).toBe(false);
+  });
+
+  it("is drawn when a rebuild removed the send's bubble before the echo arrived", () => {
+    // The send returned, then reloadCurrentRoomTimeline rebuilt the rows from
+    // a page read before the send landed.
+    _ownSentEventIds.add(MINE);
+
+    expect(deliver(text())).toBe(true);
+
+    expect(appendMessage).toHaveBeenCalledTimes(1);
+    expect(appendMessage.mock.calls[0][0]).toMatchObject({ id: MINE, isOwn: true });
+    expect(AppState.get("currentTimeline").map((e) => e.event_id)).toEqual([MINE]);
+  });
+
+  it("stays suppressed for a thread reply, whose row is in the thread panel", () => {
+    AppState.set("threadRootEventId", "$root:x");
+    _ownSentEventIds.add(MINE);
+
+    deliver(text({ thread_root: "$root:x" }));
+
+    expect(appendReply).not.toHaveBeenCalled();
+    expect(appendMessage).not.toHaveBeenCalled();
+  });
+
+  it("stays suppressed for an edit, which the send already applied", () => {
+    _ownSentEventIds.add("$edit:x");
+
+    deliver(text({ event_id: "$edit:x", is_edit: true, relates_to_event_id: "$orig:x" }));
+
+    expect(getComponents().timeline.updateMessageBody).not.toHaveBeenCalled();
   });
 });
