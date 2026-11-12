@@ -1288,12 +1288,21 @@ body.quark-room-dragging * {
   text-shadow: 1px 0 var(--fg), -1px 0 var(--fg), 0 1px var(--fg), 0 -1px var(--fg);
 }
 
+/* A letter avatar takes the color under any treatment (above), so it is
+   outlined under any of them; the avatar treatment's ring, next, replaces this
+   frame with its own. */
+.uc-any .message-group-wrapper.user-color--low-contrast .message-group__avatar-fallback {
+  text-shadow: 1px 0 var(--fg), -1px 0 var(--fg), 0 1px var(--fg), 0 -1px var(--fg);
+  box-shadow: 0 0 0 1px var(--fg);
+}
+
 .uc-avatar .message-group-wrapper.user-color--low-contrast :is(.message-group__avatar, .message-group__avatar-fallback) {
   box-shadow: 0 0 0 2px var(--user-color), 0 0 0 3px var(--fg);
 }
 
+/* No wider than the frame: a theme with `borders.style = "none"` gets none. */
 .uc-border .message-group-wrapper.user-color--low-contrast .message-group:not(.message-group--selected) {
-  box-shadow: 0 0 0 1px var(--fg);
+  box-shadow: 0 0 0 min(1px, var(--frame-width)) var(--fg);
 }
 
 .message-group__timestamp {
