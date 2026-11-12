@@ -4,6 +4,7 @@ import { AppState } from "./state.js";
 import {
   bindSpaceBadges,
   buildSpaceMembership,
+  publishSpaceMembers,
   computeSpaceBadges,
   formatMentionCount,
   type SpaceBadge,
@@ -128,8 +129,21 @@ describe("buildSpaceMembership", () => {
   const fromTree = () => vi.fn(async (id: string) => tree[id] ?? []);
 
   it("includes direct rooms and one level of subspace rooms", async () => {
-    const { members } = await buildSpaceMembership([S], fromTree());
-    expect([...members[S]].sort()).toEqual(["!r1", "!r2"]);
+    const { members, complete } = await buildSpaceMembership([S], fromTree());
+    expect(members[S]).toEqual(["!r1"]);
+    expect([...(await complete)[S]].sort()).toEqual(["!r1", "!r2"]);
+  });
+
+  it("resolves without waiting for subspace children", async () => {
+    // An unjoined subspace is a network /hierarchy call: the room list must
+    // not wait for it.
+    let release!: (c: SpaceChild[]) => void;
+    const slow = new Promise<SpaceChild[]>((r) => { release = r; });
+    const getChildren = vi.fn((id: string) => (id === S2 ? slow : Promise.resolve(tree[id] ?? [])));
+    const { members, complete } = await buildSpaceMembership([S], getChildren);
+    expect(members[S]).toEqual(["!r1"]);
+    release([child("!r2")]);
+    expect([...(await complete)[S]].sort()).toEqual(["!r1", "!r2"]);
   });
 
   it("keeps today's spaceRoomIds semantics: direct children of every listed space, subspaces included", async () => {
@@ -149,8 +163,45 @@ describe("buildSpaceMembership", () => {
       if (id === S2) throw new Error("unreachable");
       return tree[id] ?? [];
     });
-    const { members } = await buildSpaceMembership([S], getChildren);
-    expect(members[S]).toEqual(["!r1"]);
+    const { complete } = await buildSpaceMembership([S], getChildren);
+    expect((await complete)[S]).toEqual(["!r1"]);
+  });
+
+  it("counts a room listed directly and in a subspace once", async () => {
+    const getChildren = vi.fn(async (id: string) =>
+      id === S ? [child("!r1"), child(S2, true)] : [child("!r1")],
+    );
+    const { complete } = await buildSpaceMembership([S], getChildren);
+    expect((await complete)[S]).toEqual(["!r1"]);
+  });
+});
+
+describe("publishSpaceMembers", () => {
+  beforeEach(() => AppState.set("spaceMembers", null));
+
+  it("publishes direct rooms at once, subspace rooms when they arrive", async () => {
+    let finish!: (m: Record<string, string[]>) => void;
+    const complete = new Promise<Record<string, string[]>>((r) => { finish = r; });
+    publishSpaceMembers({ members: { [S]: ["!r1"], [S2]: ["!x"] }, complete }, [S]);
+    expect(AppState.get("spaceMembers")).toEqual({ [S]: ["!r1"] });
+    finish({ [S]: ["!r1", "!r2"], [S2]: ["!x"] });
+    await complete;
+    await Promise.resolve();
+    expect(AppState.get("spaceMembers")).toEqual({ [S]: ["!r1", "!r2"] });
+  });
+
+  it("never lets a slow, older fill overwrite a newer refresh", async () => {
+    let finishOld!: (m: Record<string, string[]>) => void;
+    const old = new Promise<Record<string, string[]>>((r) => { finishOld = r; });
+    publishSpaceMembers({ members: { [S]: ["!stale"] }, complete: old }, [S]);
+    const fresh = Promise.resolve({ [S]: ["!new"] });
+    publishSpaceMembers({ members: { [S]: ["!new"] }, complete: fresh }, [S]);
+    await fresh;
+    await Promise.resolve();
+    finishOld({ [S]: ["!stale", "!older"] });
+    await old;
+    await Promise.resolve();
+    expect(AppState.get("spaceMembers")).toEqual({ [S]: ["!new"] });
   });
 });
 
@@ -189,6 +240,31 @@ describe("bindSpaceBadges", () => {
     expect(strip.last()?.has(S)).toBe(true);
     AppState.set("currentRoomId", "!a");
     expect(strip.last()?.has(S)).toBe(false);
+    unbind();
+  });
+
+  it("shows nothing until space membership is known", () => {
+    // Before the first refresh decides which rooms are in spaces, the Home and
+    // Group Rooms filters would count every room.
+    AppState.set("spaceMembers", null);
+    AppState.set("roomListCache", [room("!g", { unread: 1, mentions: 4 })]);
+    const strip = fakeStrip();
+    const unbind = bindSpaceBadges(strip);
+    expect(strip.last()?.size).toBe(0);
+    AppState.set("spaceRoomIds", ["!g"]);
+    AppState.set("spaceMembers", { [S]: ["!g"] });
+    expect(strip.last()?.get(S)?.mentions).toBe(4);
+    expect(strip.last()?.has("__home__")).toBe(false);
+    unbind();
+  });
+
+  it("lights a DM that is also in a space in the space, Home and DMs — not Group Rooms", () => {
+    AppState.set("spaceRoomIds", ["!d"]);
+    AppState.set("spaceMembers", { [S]: ["!d"] });
+    AppState.set("roomListCache", [room("!d", { unread: 1, is_direct: true })]);
+    const strip = fakeStrip();
+    const unbind = bindSpaceBadges(strip);
+    expect([...strip.last()!.keys()].sort()).toEqual([S, "__dms__", "__home__"].sort());
     unbind();
   });
 

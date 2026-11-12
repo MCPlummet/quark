@@ -27,7 +27,7 @@ import {
 } from "../../ipc/index.js";
 
 import { getPseudoSpace, sortByRecency } from "../pseudo_spaces.js";
-import { buildSpaceMembership } from "../space_badges.js";
+import { buildSpaceMembership, publishSpaceMembers } from "../space_badges.js";
 import { clearRoomNotificationsIpc } from "../../ipc/notifications.js";
 import { muteRoom, unmuteRoom } from "../notifications.js";
 import { enterHomeView, exitHomeView } from "./home.js";
@@ -1550,10 +1550,9 @@ async function _doRefreshRooms(): Promise<void> {
 
     // Populate space strip — exclude subspaces (they appear nested inside their parent space)
     const topLevelSpaces = userSpaces.filter((s) => !subspaceIdSet.has(s.room_id));
-    AppState.set(
-      "spaceMembers",
-      Object.fromEntries(topLevelSpaces.map((s) => [s.room_id, membership.members[s.room_id] ?? []])),
-    );
+    // Direct rooms now, subspace rooms when their (possibly network) reads
+    // land — the strip and room list don't wait on them.
+    publishSpaceMembers(membership, topLevelSpaces.map((s) => s.room_id));
     const spaceItems: SpaceItem[] = topLevelSpaces.map((s) => ({
       id: s.room_id,
       name: s.name ?? s.room_id,
