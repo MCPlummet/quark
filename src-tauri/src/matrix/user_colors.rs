@@ -1,7 +1,7 @@
 //! User colors (#45) over the wire: the `tel.quark.usercolor` field of a
 //! user's public profile (Matrix 1.16 extended profiles / MSC4133).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +23,11 @@ pub const UNSUPPORTED: &str = "Your homeserver doesn't support custom profile fi
 
 /// Stable capability name (Matrix 1.16), then MSC4133's unstable one.
 const CAPABILITIES: [&str; 2] = ["m.profile_fields", "uk.tcpip.msc4133.profile_fields"];
+
+/// The spec version that added extended profiles, as `/versions` lists it.
+const FIRST_VERSION_WITH_FIELDS: (u32, u32) = (1, 16);
+/// `/versions` unstable features that mean MSC4133 is there.
+const UNSTABLE_FEATURES: [&str; 2] = ["uk.tcpip.msc4133", "uk.tcpip.msc4133.stable"];
 
 // ── Endpoints ────────────────────────────────────────────────────────────────
 //
@@ -278,6 +283,36 @@ pub async fn set_own_color(client: &Client, color: Option<&str>) -> Result<Optio
     }
 }
 
+// ── Support ──────────────────────────────────────────────────────────────────
+
+/// Does a `/versions` answer advertise extended profiles — Matrix 1.16 or
+/// later, or MSC4133 as an unstable feature?
+pub fn versions_advertise_fields(versions: &[String], unstable: &BTreeMap<String, bool>) -> bool {
+    let spec_has_them = versions.iter().any(|v| {
+        let Some((major, minor)) = v.strip_prefix('v').and_then(|v| v.split_once('.')) else { return false };
+        match (major.parse::<u32>(), minor.parse::<u32>()) {
+            (Ok(major), Ok(minor)) => (major, minor) >= FIRST_VERSION_WITH_FIELDS,
+            _ => false,
+        }
+    });
+    spec_has_them || UNSTABLE_FEATURES.iter().any(|f| unstable.get(*f) == Some(&true))
+}
+
+/// Whether this account's homeserver has extended profiles at all, from what
+/// it advertises: its `/versions`, then a `profile_fields` capability (present
+/// at all, even disabled, means fields can be read). `None` when it couldn't
+/// be asked. A server without them never returns anyone's color, so asking
+/// it about every sender would be load with no possible answer.
+pub async fn server_supports_fields(client: &Client) -> Option<bool> {
+    use matrix_sdk::ruma::api::client::discovery::{get_capabilities, get_supported_versions};
+    let versions = client.send(get_supported_versions::Request::new(), once()).await.ok()?;
+    if versions_advertise_fields(&versions.versions, &versions.unstable_features) {
+        return Some(true);
+    }
+    let caps = client.send(get_capabilities::v3::Request::new(), once()).await.ok()?;
+    Some(CAPABILITIES.iter().any(|name| caps.capabilities.get(name).is_some()))
+}
+
 /// The account's own color and whether it can be changed, for the editor.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct OwnUserColor {
@@ -291,7 +326,8 @@ pub struct OwnUserColor {
 // once flooded its homeserver with concurrent requests — so this is where
 // rate-safety lives: one request per user in flight, at most MAX_CONCURRENT at
 // once, every answer (including "no color") kept for TTL_SECS and persisted so
-// a relaunch doesn't re-ask, and failures backed off for RETRY_SECS.
+// a relaunch doesn't re-ask, failures backed off for RETRY_SECS, and nothing
+// asked at all, for the session, of a server without extended profiles.
 
 /// Concurrent profile lookups, at most.
 pub const MAX_CONCURRENT: usize = 4;
@@ -320,12 +356,17 @@ struct Inner {
     entries: HashMap<String, Entry>,
     in_flight: HashSet<String>,
     retry_after: HashMap<String, u64>,
+    /// Whether the homeserver has extended profiles; `None` until known.
+    supported: Option<bool>,
 }
 
 /// Other users' colors, for one account at a time.
 pub struct UserColorCache {
     inner: Mutex<Inner>,
     permits: Arc<Semaphore>,
+    /// Held while the homeserver's support is being asked, so concurrent
+    /// batches wait for one answer instead of each asking.
+    probing: tokio::sync::Mutex<()>,
     path: Option<PathBuf>,
 }
 
@@ -339,7 +380,12 @@ pub struct UserColorUpdate {
 impl UserColorCache {
     /// A cache persisted at `path` (`None`: memory only).
     pub fn new(path: Option<PathBuf>) -> Self {
-        Self { inner: Mutex::new(Inner::default()), permits: Arc::new(Semaphore::new(MAX_CONCURRENT)), path }
+        Self {
+            inner: Mutex::new(Inner::default()),
+            permits: Arc::new(Semaphore::new(MAX_CONCURRENT)),
+            probing: tokio::sync::Mutex::new(()),
+            path,
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -383,9 +429,13 @@ impl UserColorCache {
     }
 
     /// The IDs among `ids` worth a request now — unknown or stale, not
-    /// already being fetched and not backing off — marked as in flight.
+    /// already being fetched and not backing off — marked as in flight. None,
+    /// once the homeserver is known to have no extended profiles.
     pub fn take_due(&self, ids: &[String], now: u64) -> Vec<String> {
         let mut inner = self.lock();
+        if inner.supported == Some(false) {
+            return Vec::new();
+        }
         let mut due = Vec::new();
         for id in ids {
             if inner.in_flight.contains(id) {
@@ -421,6 +471,28 @@ impl UserColorCache {
         match previous {
             Some(prev) if prev.color == color => None,
             _ => Some(color),
+        }
+    }
+
+    /// What's known of the homeserver having extended profiles.
+    fn supported(&self) -> Option<bool> {
+        self.lock().supported
+    }
+
+    /// Record whether `account`'s homeserver has extended profiles — dropped
+    /// when the cache has moved on to another account since it was asked.
+    fn set_supported(&self, account: &str, supported: bool) {
+        let mut inner = self.lock();
+        if inner.account.as_deref() == Some(account) {
+            inner.supported = Some(supported);
+        }
+    }
+
+    /// Let `ids` (from `take_due`) go unanswered, no longer in flight.
+    fn release(&self, ids: &[String]) {
+        let mut inner = self.lock();
+        for id in ids {
+            inner.in_flight.remove(id);
         }
     }
 
@@ -471,13 +543,38 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Does this account's homeserver have extended profiles? Asked once per
+/// session; when it can't be told, lookups go ahead as if it did.
+async fn ensure_supported(client: &Client, cache: &UserColorCache) -> bool {
+    if let Some(known) = cache.supported() {
+        return known;
+    }
+    let _probing = cache.probing.lock().await;
+    if let Some(known) = cache.supported() {
+        return known;
+    }
+    let Some(account) = client.user_id().map(|u| u.to_string()) else { return true };
+    match server_supports_fields(client).await {
+        Some(verdict) => {
+            cache.set_supported(&account, verdict);
+            verdict
+        }
+        None => true,
+    }
+}
+
 /// Look up `ids` (from `take_due`), at most `MAX_CONCURRENT` at a time,
 /// recording each answer and calling `emit` for those that change something.
-/// Persists once, at the end.
+/// Persists once, at the end. Nothing is looked up from a homeserver without
+/// extended profiles.
 pub async fn refresh<F>(client: Client, cache: Arc<UserColorCache>, ids: Vec<String>, emit: F)
 where
     F: Fn(&str, Option<String>) + Send + Sync + 'static,
 {
+    if !ensure_supported(&client, &cache).await {
+        cache.release(&ids);
+        return;
+    }
     let emit = Arc::new(emit);
     let lookups = ids.into_iter().map(|id| {
         let (client, cache, emit) = (client.clone(), cache.clone(), emit.clone());
@@ -812,5 +909,98 @@ mod tests {
         assert!(took < delay * 6, "{took:?}");
         assert_eq!(MAX_CONCURRENT, 4);
         assert_eq!(cache.snapshot(&users).len(), 10);
+    }
+
+    // ── Servers without extended profiles ───────────────────────────────────
+
+    fn features(list: &[(&str, bool)]) -> BTreeMap<String, bool> {
+        list.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn versions_advertise_extended_profiles() {
+        let none = features(&[]);
+        assert!(!versions_advertise_fields(&ids(&["r0.6.1", "v1.1", "v1.15"]), &none));
+        assert!(versions_advertise_fields(&ids(&["v1.16"]), &none));
+        assert!(versions_advertise_fields(&ids(&["v1.17"]), &none));
+        assert!(versions_advertise_fields(&ids(&["v2.0"]), &none));
+        let v = ids(&["v1.11"]);
+        assert!(versions_advertise_fields(&v, &features(&[("uk.tcpip.msc4133", true)])));
+        assert!(versions_advertise_fields(&v, &features(&[("uk.tcpip.msc4133.stable", true)])));
+        assert!(!versions_advertise_fields(&v, &features(&[("uk.tcpip.msc4133", false)])));
+        assert!(!versions_advertise_fields(&ids(&["v1.1x", "vNaN"]), &none));
+    }
+
+    async fn mount_versions(hs: &TestHomeserver, versions: &[&str], unstable: serde_json::Value) {
+        mount(hs, "GET", "/_matrix/client/versions", 200, json!({ "versions": versions, "unstable_features": unstable })).await;
+    }
+
+    async fn mount_capabilities(hs: &TestHomeserver, caps: serde_json::Value) {
+        mount(hs, "GET", "/_matrix/client/v3/capabilities", 200, json!({ "capabilities": caps })).await;
+    }
+
+    async fn mount_profile(hs: &TestHomeserver, user: &str) {
+        mount(hs, "GET", &format!("/_matrix/client/v3/profile/{user}"), 200, json!({ FIELD: "#ff4466" })).await;
+    }
+
+    #[tokio::test]
+    async fn refresh_stops_asking_a_server_without_extended_profiles() {
+        let hs = TestHomeserver::new().await;
+        mount_versions(&hs, &["v1.11"], json!({})).await;
+        mount_capabilities(&hs, json!({ "m.change_password": { "enabled": true } })).await;
+        mount_profile(&hs, "@nofields:example.org").await;
+        let cache = Arc::new(cache_for(ME));
+        let asked = ids(&["@nofields:example.org"]);
+        let due = cache.take_due(&asked, T);
+        refresh(hs.client.clone(), cache.clone(), due, |_: &str, _: Option<String>| {}).await;
+        assert_eq!(hs.requests_to("/profile/").await, 0);
+        // Nothing more is due this session — not these users, not new ones.
+        assert!(cache.take_due(&asked, T + TTL_SECS + 1).is_empty());
+        assert!(cache.take_due(&ids(&["@later:example.org"]), T).is_empty());
+        assert_eq!(hs.requests_to("/versions").await, 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_asks_when_the_server_advertises_profile_fields() {
+        for (versions, unstable, caps) in [
+            (["v1.16"], json!({}), json!({})),
+            (["v1.11"], json!({ "uk.tcpip.msc4133": true }), json!({})),
+            (["v1.11"], json!({}), json!({ "uk.tcpip.msc4133.profile_fields": { "enabled": false } })),
+        ] {
+            let hs = TestHomeserver::new().await;
+            mount_versions(&hs, &versions, unstable).await;
+            mount_capabilities(&hs, caps).await;
+            mount_profile(&hs, "@fields:example.org").await;
+            let cache = Arc::new(cache_for(ME));
+            let due = cache.take_due(&ids(&["@fields:example.org"]), T);
+            refresh(hs.client.clone(), cache.clone(), due, |_: &str, _: Option<String>| {}).await;
+            assert_eq!(hs.requests_to("/profile/").await, 1);
+            assert_eq!(
+                cache.snapshot(&ids(&["@fields:example.org"])).get("@fields:example.org"),
+                Some(&Some("#ff4466".to_string()))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_asks_when_support_cant_be_told() {
+        let hs = TestHomeserver::new().await;
+        mount(&hs, "GET", "/_matrix/client/versions", 502, json!({})).await;
+        mount_profile(&hs, "@unsure:example.org").await;
+        let cache = Arc::new(cache_for(ME));
+        let due = cache.take_due(&ids(&["@unsure:example.org"]), T);
+        refresh(hs.client.clone(), cache.clone(), due, |_: &str, _: Option<String>| {}).await;
+        assert_eq!(hs.requests_to("/profile/").await, 1);
+    }
+
+    #[test]
+    fn another_account_gets_its_own_verdict() {
+        let cache = cache_for(ME);
+        cache.set_supported(ME, false);
+        assert!(cache.take_due(&ids(&["@a:x.org"]), T).is_empty());
+        // A verdict for an account no longer being served is dropped.
+        cache.ensure_account("@other:x.org");
+        cache.set_supported(ME, false);
+        assert_eq!(cache.take_due(&ids(&["@a:x.org"]), T), ids(&["@a:x.org"]));
     }
 }

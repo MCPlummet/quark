@@ -1951,8 +1951,10 @@ auto-assigned color.
 **Low contrast.** A color whose WCAG contrast ratio against the theme's
 `colors.background` is under 3:1 gets an outline in `colors.foreground`: a
 one-pixel text outline on the name (replacing the own-name glow), an extra ring
-outside the avatar outline, a ring outside the box border. It is re-judged when
-the theme changes.
+outside the avatar outline, a ring outside the box border no wider than the
+theme's frame (so none with `borders.style = "none"`). A letter avatar, which
+takes the color under any treatment, gets a text outline and a one-pixel frame
+under any of them. It is re-judged when the theme changes.
 
 **Setting yours.** The profile editor has a color row: a hex field, preset
 swatches and the platform color picker where there is one, a clear button, and
@@ -1969,11 +1971,17 @@ neither route exists.
 lazily — only for senders actually rendered, once per session each, batched per
 tick. The backend allows one request per user in flight and four at a time,
 caches every answer (including "no color") for 24 hours in `user_colors.json`
-in the app data dir (stale answers are shown while being refreshed), backs a
-failed lookup off for five minutes, and clears the cache on logout. A file
-written for another account is ignored. Changes someone makes to their color
-show up when their entry next expires; there is no push for profile fields.
-Your own color is cached the same way, and updated the moment you save.
+in the app data dir (stale answers are shown while being refreshed), and clears
+the cache on logout. A file written for another account is ignored. Before the
+session's first lookup it checks that the homeserver has extended profiles —
+`/versions` listing v1.16 or later or MSC4133, else a `profile_fields`
+capability — and when it clearly doesn't, nothing more is asked that session
+(when that can't be told, lookups go ahead). A failed lookup (offline,
+rate-limited, 5xx) isn't retried for five minutes; since each sender is asked
+about once per session, in practice that means the next launch. Someone's
+change to their color shows up at the first launch after their entry expires;
+there is no push for profile fields. Your own color is cached the same way,
+and updated the moment you save.
 
 ### Not in Scope (v1)
 - VoIP / MatrixRTC (group calls) — fundamentally incompatible with CLI aesthetic
