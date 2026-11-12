@@ -1249,6 +1249,44 @@ body.quark-room-dragging * {
   text-shadow: 0 0 var(--glow-radius) var(--glow-color);
 }
 
+/* ── User colors (#45) ───────────────────────────────────────────────────
+   `--user-color` is set inline, with `data-user-color`, on a message group's
+   wrapper or a thread row (src/app/user_colors.ts). Root classes say which
+   treatments show; with none of them on, nothing here applies. Selection
+   keeps the accent, so the cursor stays visible on any color. Only existing
+   elements are colored — nothing is added or moved. */
+.uc-name [data-user-color] .message-group:not(.message-group--selected) .message-group__sender,
+.uc-name .thread-view__message[data-user-color]:not(.thread-view__message--selected) .thread-view__message-sender {
+  color: var(--user-color);
+}
+
+.uc-avatar .message-group-wrapper[data-user-color] :is(.message-group__avatar, .message-group__avatar-fallback) {
+  box-shadow: 0 0 0 2px var(--user-color);
+}
+
+.uc-border .message-group-wrapper[data-user-color] .message-group:not(.message-group--selected) {
+  border-color: var(--user-color);
+}
+
+.uc-border .message-group-wrapper[data-user-color] .message-group:not(.message-group--selected):hover {
+  border-color: color-mix(in srgb, var(--user-color) 70%, var(--accent-primary));
+}
+
+/* Too close to the background to read: outline it in the foreground color.
+   On the name this replaces the own-name glow. */
+.uc-name .user-color--low-contrast .message-group:not(.message-group--selected) .message-group__sender,
+.uc-name .thread-view__message.user-color--low-contrast:not(.thread-view__message--selected) .thread-view__message-sender {
+  text-shadow: 1px 0 var(--fg), -1px 0 var(--fg), 0 1px var(--fg), 0 -1px var(--fg);
+}
+
+.uc-avatar .message-group-wrapper.user-color--low-contrast :is(.message-group__avatar, .message-group__avatar-fallback) {
+  box-shadow: 0 0 0 2px var(--user-color), 0 0 0 3px var(--fg);
+}
+
+.uc-border .message-group-wrapper.user-color--low-contrast .message-group:not(.message-group--selected) {
+  box-shadow: 0 0 0 1px var(--fg);
+}
+
 .message-group__timestamp {
   color: var(--msg-timestamp);
   font-family: var(--font-family);

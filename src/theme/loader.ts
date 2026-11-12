@@ -268,6 +268,9 @@ export function applyTheme(theme: Theme, root: HTMLElement = document.documentEl
   for (const [prop, value] of Object.entries(themeToCssVars(theme))) {
     root.style.setProperty(prop, value);
   }
+  // Colors judged against the background (user colors' low-contrast outline)
+  // re-check themselves on this.
+  root.dispatchEvent(new CustomEvent("quark:theme-applied"));
 }
 
 /**
@@ -293,4 +296,5 @@ export function resetTheme(root: HTMLElement = document.documentElement): void {
   for (const prop of props) {
     root.style.removeProperty(prop);
   }
+  root.dispatchEvent(new CustomEvent("quark:theme-applied"));
 }
