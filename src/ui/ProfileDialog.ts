@@ -2,6 +2,17 @@
 
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { DialogBase } from "./DialogBase.js";
+import { ColorField } from "./ColorField.js";
+
+/** Another user's color, for the local-override row (#45). */
+export interface ProfileColorData {
+  /** What they published: a color, `null` for none, `undefined` if unknown. */
+  published: string | null | undefined;
+  /** This device's override, if any. */
+  local: string | null;
+  /** Set (or, with `null`, clear) the override. */
+  onSetLocal: (hex: string | null) => Promise<void>;
+}
 
 export interface ProfileData {
   userId: string;
@@ -14,6 +25,8 @@ export interface ProfileData {
   /** If provided, an [edit profile] button is shown — typically only set
    *  when the profile being shown is the current user's. */
   onEdit?: () => void;
+  /** If provided, a local color override row is shown (other users only). */
+  color?: ProfileColorData;
 }
 
 /**
@@ -31,6 +44,10 @@ export class ProfileDialog extends DialogBase {
   private _dmBtn: HTMLButtonElement;
   private _editBtn: HTMLButtonElement;
   private _actionsEl: HTMLElement;
+  private _colorRow: HTMLElement;
+  private _publishedColorEl: HTMLElement;
+  private _colorField: ColorField;
+  private _onSetLocal: ((hex: string | null) => Promise<void>) | null = null;
 
   constructor() {
     // Profile dialog's root is the box itself, and historically did NOT reset
@@ -124,6 +141,28 @@ export class ProfileDialog extends DialogBase {
     this._statusMsgRow.style.display = "none";
     info.appendChild(this._statusMsgRow);
 
+    // Local color override (#45): this device only, beats what they publish.
+    // Applies as soon as a color is committed — the dialog has no [save].
+    this._colorRow = document.createElement("div");
+    this._colorRow.className = "profile-dialog__row profile-dialog__color-row";
+    const colorLabel = document.createElement("span");
+    colorLabel.className = "profile-dialog__label";
+    colorLabel.textContent = "local color";
+    const colorBody = document.createElement("div");
+    colorBody.className = "profile-dialog__value";
+    this._publishedColorEl = document.createElement("div");
+    this._publishedColorEl.className = "profile-dialog__published-color";
+    this._colorField = new ColorField({
+      previewText: "",
+      onCommit: (hex) => void this._onSetLocal?.(hex),
+    });
+    colorBody.appendChild(this._publishedColorEl);
+    colorBody.appendChild(this._colorField.getElement());
+    this._colorRow.appendChild(colorLabel);
+    this._colorRow.appendChild(colorBody);
+    this._colorRow.style.display = "none";
+    info.appendChild(this._colorRow);
+
     this.root.appendChild(info);
 
     // ── Actions ───────────────────────────────────────────────────────────
@@ -202,6 +241,19 @@ export class ProfileDialog extends DialogBase {
       this._editBtn.style.display = "none";
     }
 
+    if (data.color) {
+      const { published, local, onSetLocal } = data.color;
+      this._onSetLocal = onSetLocal;
+      this._publishedColorEl.textContent =
+        `their color: ${published === undefined ? "unknown" : published ?? "none"}`;
+      this._colorField.value = local;
+      this._colorField.setPreviewText(data.displayName ?? data.userId);
+      this._colorRow.style.display = "";
+    } else {
+      this._onSetLocal = null;
+      this._colorRow.style.display = "none";
+    }
+
     // Show the action row if either button is in use.
     this._actionsEl.style.display = data.onMessage || data.onEdit ? "" : "none";
 
@@ -221,5 +273,19 @@ export class ProfileDialog extends DialogBase {
     }
 
     this.reveal();
+  }
+
+  // While typing a color, keys are text, not dialog shortcuts — only Escape
+  // still closes.
+  protected override handleKeydown(e: KeyboardEvent): void {
+    if (e.target instanceof HTMLInputElement) {
+      e.stopPropagation();
+      if (this.isEscape(e)) {
+        e.preventDefault();
+        this.hide();
+      }
+      return;
+    }
+    super.handleKeydown(e);
   }
 }

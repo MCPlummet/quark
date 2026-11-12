@@ -4335,6 +4335,13 @@ a:hover {
   transition: border-color var(--transition-speed), box-shadow var(--transition-speed);
 }
 
+/* Profile popup → local color (#45): what they published, above the picker. */
+.profile-dialog__published-color {
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) - 2px);
+  margin-bottom: 4px;
+}
+
 /* ── Color field (#45): hex + swatches + native picker + preview ─────────── */
 .color-field {
   display: flex;
