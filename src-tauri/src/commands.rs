@@ -410,8 +410,11 @@ pub async fn logout(
     state: State<'_, MatrixState>,
     sync_state: State<'_, SyncState>,
     paths: State<'_, crate::Paths>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    // Other people's colors as this account saw them go with the account.
+    colors.0.clear();
     // Abort the sync loop before logging out to stop all background requests.
     {
         let mut guard = sync_state.handle.lock().map_err(|_| "SyncState lock poisoned")?;
@@ -474,8 +477,10 @@ pub async fn logout(
 #[tauri::command]
 pub async fn clear_session(
     paths: State<'_, crate::Paths>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    colors.0.clear();
     if let Ok(data_path) = app_handle.path().app_data_dir() {
         let _ = tokio::task::spawn_blocking(move || wipe_local_session(&data_path)).await;
     }
@@ -2192,22 +2197,84 @@ pub async fn get_own_profile(
 #[tauri::command]
 pub async fn get_own_user_color(
     state: State<'_, MatrixState>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
+    app: AppHandle,
 ) -> Result<crate::matrix::user_colors::OwnUserColor, String> {
     use crate::matrix::user_colors::{fetch_color, own_can_set, OwnUserColor};
     let client = get_client(&state)?;
     let me = client.user_id().ok_or("Not logged in")?.to_owned();
     let (color, can_set) = tokio::join!(fetch_color(&client, &me), own_can_set(&client));
-    Ok(OwnUserColor { color: color.ok().flatten(), can_set })
+    // Only a definite answer updates the cache; a failed read leaves it be.
+    let color = match color {
+        Ok(color) => {
+            announce_own_color(&colors, &app, me.as_str(), color.clone());
+            color
+        }
+        Err(_) => None,
+    };
+    Ok(OwnUserColor { color, can_set })
 }
 
 /// Publish (or, with `None`, remove) the account's color. Returns it as stored.
 #[tauri::command]
 pub async fn set_own_user_color(
     state: State<'_, MatrixState>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
+    app: AppHandle,
     color: Option<String>,
 ) -> Result<Option<String>, String> {
     let client = get_client(&state)?;
-    crate::matrix::user_colors::set_own_color(&client, color.as_deref()).await
+    let me = client.user_id().ok_or("Not logged in")?.to_string();
+    let stored = crate::matrix::user_colors::set_own_color(&client, color.as_deref()).await?;
+    announce_own_color(&colors, &app, &me, stored.clone());
+    Ok(stored)
+}
+
+/// Record the account's own color first-hand and repaint its messages now,
+/// rather than when its cache entry would next expire.
+fn announce_own_color(
+    colors: &State<'_, crate::matrix::user_colors::UserColorState>,
+    app: &AppHandle,
+    me: &str,
+    color: Option<String>,
+) {
+    use crate::matrix::user_colors::{now_secs, UserColorUpdate, EVENT};
+    use tauri::Emitter;
+    colors.0.ensure_account(me);
+    colors.0.put_own(me, color.clone(), now_secs());
+    colors.0.persist();
+    let _ = app.emit(EVENT, UserColorUpdate { user_id: me.to_string(), color });
+}
+
+/// What's known of `user_ids`' colors right now (stale answers included,
+/// unknown IDs absent), with lookups started in the background for the ones
+/// that are unknown or stale. Their answers arrive as `quark://user-color`.
+/// Rate-safety lives in the cache: see `matrix::user_colors`.
+#[tauri::command]
+pub async fn request_user_colors(
+    state: State<'_, MatrixState>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
+    app: AppHandle,
+    user_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    use crate::matrix::user_colors::{now_secs, refresh, UserColorUpdate, EVENT};
+    use tauri::Emitter;
+    let client = get_client(&state)?;
+    let me = client.user_id().ok_or("Not logged in")?.to_string();
+    let ids: Vec<String> = user_ids
+        .into_iter()
+        .filter(|id| crate::config::user_colors::is_user_id(id))
+        .collect();
+    let cache = colors.0.clone();
+    cache.ensure_account(&me);
+    let known = cache.snapshot(&ids);
+    let due = cache.take_due(&ids, now_secs());
+    if !due.is_empty() {
+        tokio::spawn(refresh(client, cache, due, move |user_id, color| {
+            let _ = app.emit(EVENT, UserColorUpdate { user_id: user_id.to_string(), color });
+        }));
+    }
+    Ok(known)
 }
 
 #[tauri::command]

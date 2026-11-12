@@ -1,11 +1,16 @@
 //! User colors (#45) over the wire: the `tel.quark.usercolor` field of a
 //! user's public profile (Matrix 1.16 extended profiles / MSC4133).
 
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
 use matrix_sdk::config::RequestConfig;
 use matrix_sdk::ruma::api::client::error::ErrorKind;
 use matrix_sdk::ruma::UserId;
 use matrix_sdk::{Client, HttpError};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
 use serde_json::Value as JsonValue;
 
 use crate::config::user_colors::normalize_color;
@@ -280,6 +285,219 @@ pub struct OwnUserColor {
     pub can_set: Option<bool>,
 }
 
+// ── Cache ────────────────────────────────────────────────────────────────────
+//
+// Colors are read lazily, for senders actually on screen, and an early Quark
+// once flooded its homeserver with concurrent requests — so this is where
+// rate-safety lives: one request per user in flight, at most MAX_CONCURRENT at
+// once, every answer (including "no color") kept for TTL_SECS and persisted so
+// a relaunch doesn't re-ask, and failures backed off for RETRY_SECS.
+
+/// Concurrent profile lookups, at most.
+pub const MAX_CONCURRENT: usize = 4;
+/// How long an answer is trusted before it's refreshed (stale is still shown).
+pub const TTL_SECS: u64 = 24 * 60 * 60;
+/// How long a failed lookup waits before it's tried again.
+pub const RETRY_SECS: u64 = 5 * 60;
+/// Emitted with `{ user_id, color }` when a lookup changes what's known.
+pub const EVENT: &str = "quark://user-color";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Entry {
+    color: Option<String>,
+    fetched_at: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Persisted {
+    account: String,
+    entries: HashMap<String, Entry>,
+}
+
+#[derive(Default)]
+struct Inner {
+    account: Option<String>,
+    entries: HashMap<String, Entry>,
+    in_flight: HashSet<String>,
+    retry_after: HashMap<String, u64>,
+}
+
+/// Other users' colors, for one account at a time.
+pub struct UserColorCache {
+    inner: Mutex<Inner>,
+    permits: Arc<Semaphore>,
+    path: Option<PathBuf>,
+}
+
+/// The payload of `EVENT`.
+#[derive(Debug, Clone, Serialize)]
+pub struct UserColorUpdate {
+    pub user_id: String,
+    pub color: Option<String>,
+}
+
+impl UserColorCache {
+    /// A cache persisted at `path` (`None`: memory only).
+    pub fn new(path: Option<PathBuf>) -> Self {
+        Self { inner: Mutex::new(Inner::default()), permits: Arc::new(Semaphore::new(MAX_CONCURRENT)), path }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        // A poisoned lock only means a panic mid-update of plain maps; the
+        // worst left behind is a stale entry, so carry on with it.
+        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Serve `account`'s cache: loads it from disk the first time, and drops
+    /// whatever another account left in memory. A file written for a
+    /// different account is ignored.
+    pub fn ensure_account(&self, account: &str) {
+        let mut inner = self.lock();
+        if inner.account.as_deref() == Some(account) {
+            return;
+        }
+        *inner = Inner { account: Some(account.to_string()), ..Inner::default() };
+        if let Some(saved) = self.read_file() {
+            if saved.account == account {
+                inner.entries = saved.entries;
+            }
+        }
+    }
+
+    fn read_file(&self) -> Option<Persisted> {
+        let text = std::fs::read_to_string(self.path.as_ref()?).ok()?;
+        let mut saved: Persisted = serde_json::from_str(&text).ok()?;
+        // The file is ours, but it is still not trusted to hold valid colors.
+        for entry in saved.entries.values_mut() {
+            entry.color = entry.color.as_deref().and_then(normalize_color);
+        }
+        Some(saved)
+    }
+
+    /// What's known about `ids`, stale or not; unknown IDs are absent.
+    pub fn snapshot(&self, ids: &[String]) -> HashMap<String, Option<String>> {
+        let inner = self.lock();
+        ids.iter()
+            .filter_map(|id| inner.entries.get(id).map(|e| (id.clone(), e.color.clone())))
+            .collect()
+    }
+
+    /// The IDs among `ids` worth a request now — unknown or stale, not
+    /// already being fetched and not backing off — marked as in flight.
+    pub fn take_due(&self, ids: &[String], now: u64) -> Vec<String> {
+        let mut inner = self.lock();
+        let mut due = Vec::new();
+        for id in ids {
+            if inner.in_flight.contains(id) {
+                continue;
+            }
+            if inner.retry_after.get(id).is_some_and(|&t| now < t) {
+                continue;
+            }
+            if inner.entries.get(id).is_some_and(|e| now < e.fetched_at.saturating_add(TTL_SECS)) {
+                continue;
+            }
+            inner.in_flight.insert(id.clone());
+            due.push(id.clone());
+        }
+        due
+    }
+
+    /// Store a lookup's outcome. Returns `Some(color)` when that changes what's
+    /// known (a first answer counts), `None` otherwise.
+    pub fn record(&self, id: &str, outcome: Result<Option<String>, FetchError>, now: u64) -> Option<Option<String>> {
+        let mut inner = self.lock();
+        inner.in_flight.remove(id);
+        let color = match outcome {
+            Ok(color) => color,
+            Err(FetchError::NotFound | FetchError::Forbidden) => None,
+            Err(FetchError::Unrecognized | FetchError::Transient(_)) => {
+                inner.retry_after.insert(id.to_string(), now.saturating_add(RETRY_SECS));
+                return None;
+            }
+        };
+        inner.retry_after.remove(id);
+        let previous = inner.entries.insert(id.to_string(), Entry { color: color.clone(), fetched_at: now });
+        match previous {
+            Some(prev) if prev.color == color => None,
+            _ => Some(color),
+        }
+    }
+
+    /// The account's own color, known first-hand (just read or just saved).
+    pub fn put_own(&self, id: &str, color: Option<String>, now: u64) {
+        let mut inner = self.lock();
+        inner.entries.insert(id.to_string(), Entry { color, fetched_at: now });
+    }
+
+    /// Write the cache to disk (temp file + rename, so a crash can't leave
+    /// half a file). Best-effort: a failure only costs re-fetching next launch.
+    pub fn persist(&self) {
+        let Some(path) = &self.path else { return };
+        let json = {
+            let inner = self.lock();
+            let Some(account) = inner.account.clone() else { return };
+            match serde_json::to_string(&Persisted { account, entries: inner.entries.clone() }) {
+                Ok(json) => json,
+                Err(_) => return,
+            }
+        };
+        let tmp = path.with_extension("json.tmp");
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+
+    /// Forget everything, on disk too (logout).
+    pub fn clear(&self) {
+        *self.lock() = Inner::default();
+        if let Some(path) = &self.path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Managed state for the color cache.
+pub struct UserColorState(pub Arc<UserColorCache>);
+
+/// Seconds since the Unix epoch.
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Look up `ids` (from `take_due`), at most `MAX_CONCURRENT` at a time,
+/// recording each answer and calling `emit` for those that change something.
+/// Persists once, at the end.
+pub async fn refresh<F>(client: Client, cache: Arc<UserColorCache>, ids: Vec<String>, emit: F)
+where
+    F: Fn(&str, Option<String>) + Send + Sync + 'static,
+{
+    let emit = Arc::new(emit);
+    let lookups = ids.into_iter().map(|id| {
+        let (client, cache, emit) = (client.clone(), cache.clone(), emit.clone());
+        async move {
+            let outcome = match UserId::parse(id.as_str()) {
+                Ok(user_id) => {
+                    let Ok(_permit) = cache.permits.clone().acquire_owned().await else { return };
+                    fetch_color(&client, &user_id).await
+                }
+                Err(_) => Ok(None),
+            };
+            if let Some(color) = cache.record(&id, outcome, now_secs()) {
+                emit(&id, color);
+            }
+        }
+    });
+    futures_util::future::join_all(lookups).await;
+    cache.persist();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,5 +638,179 @@ mod tests {
         let err = set_own_color(&hs.client, Some("red")).await.expect_err("invalid");
         assert!(err.starts_with("Not a color"), "{err}");
         assert_eq!(hs.requests_to("tel.quark.usercolor").await, 0);
+    }
+
+    // ── Cache ────────────────────────────────────────────────────────────────
+
+    const T: u64 = 1_000_000;
+
+    fn ids(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn cache_for(account: &str) -> UserColorCache {
+        let cache = UserColorCache::new(None);
+        cache.ensure_account(account);
+        cache
+    }
+
+    #[test]
+    fn fresh_entries_are_not_due() {
+        let cache = cache_for(ME);
+        assert_eq!(cache.take_due(&ids(&["@a:x.org"]), T), ids(&["@a:x.org"]));
+        cache.record("@a:x.org", Ok(Some("#ff4466".into())), T);
+        assert!(cache.take_due(&ids(&["@a:x.org"]), T + TTL_SECS - 1).is_empty());
+    }
+
+    #[test]
+    fn stale_entries_are_due_but_still_served() {
+        let cache = cache_for(ME);
+        cache.take_due(&ids(&["@a:x.org"]), T);
+        cache.record("@a:x.org", Ok(Some("#ff4466".into())), T);
+        assert_eq!(cache.take_due(&ids(&["@a:x.org"]), T + TTL_SECS), ids(&["@a:x.org"]));
+        assert_eq!(cache.snapshot(&ids(&["@a:x.org"]))["@a:x.org"].as_deref(), Some("#ff4466"));
+    }
+
+    #[test]
+    fn negative_results_are_cached() {
+        let cache = cache_for(ME);
+        cache.take_due(&ids(&["@a:x.org", "@b:x.org"]), T);
+        cache.record("@a:x.org", Err(FetchError::NotFound), T);
+        cache.record("@b:x.org", Err(FetchError::Forbidden), T);
+        let snap = cache.snapshot(&ids(&["@a:x.org", "@b:x.org"]));
+        assert_eq!(snap.get("@a:x.org"), Some(&None));
+        assert_eq!(snap.get("@b:x.org"), Some(&None));
+        assert!(cache.take_due(&ids(&["@a:x.org", "@b:x.org"]), T + 1).is_empty());
+    }
+
+    #[test]
+    fn transient_errors_back_off() {
+        let cache = cache_for(ME);
+        cache.take_due(&ids(&["@a:x.org"]), T);
+        cache.record("@a:x.org", Err(FetchError::Transient("boom".into())), T);
+        assert!(cache.snapshot(&ids(&["@a:x.org"])).is_empty(), "nothing known yet");
+        assert!(cache.take_due(&ids(&["@a:x.org"]), T + RETRY_SECS - 1).is_empty());
+        assert_eq!(cache.take_due(&ids(&["@a:x.org"]), T + RETRY_SECS), ids(&["@a:x.org"]));
+    }
+
+    #[test]
+    fn in_flight_ids_are_not_handed_out_twice() {
+        let cache = cache_for(ME);
+        assert_eq!(cache.take_due(&ids(&["@a:x.org", "@a:x.org"]), T), ids(&["@a:x.org"]));
+        assert!(cache.take_due(&ids(&["@a:x.org"]), T).is_empty());
+    }
+
+    #[test]
+    fn record_reports_only_changes() {
+        let cache = cache_for(ME);
+        assert_eq!(cache.record("@a:x.org", Ok(None), T), Some(None), "first answer is news");
+        assert_eq!(cache.record("@a:x.org", Ok(None), T + 1), None);
+        assert_eq!(cache.record("@a:x.org", Ok(Some("#ffffff".into())), T + 2), Some(Some("#ffffff".into())));
+        assert_eq!(cache.record("@a:x.org", Ok(Some("#ffffff".into())), T + 3), None);
+    }
+
+    #[test]
+    fn persist_and_reload_same_account() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("user_colors.json");
+        let first = UserColorCache::new(Some(path.clone()));
+        first.ensure_account(ME);
+        first.record("@a:x.org", Ok(Some("#ff4466".into())), T);
+        first.record("@b:x.org", Ok(None), T);
+        first.persist();
+
+        let second = UserColorCache::new(Some(path));
+        second.ensure_account(ME);
+        assert_eq!(
+            second.snapshot(&ids(&["@a:x.org", "@b:x.org"])),
+            first.snapshot(&ids(&["@a:x.org", "@b:x.org"]))
+        );
+        assert!(second.take_due(&ids(&["@a:x.org"]), T + 1).is_empty(), "fetched_at survives");
+    }
+
+    #[test]
+    fn other_account_discards_disk_cache() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("user_colors.json");
+        let first = UserColorCache::new(Some(path.clone()));
+        first.ensure_account(ME);
+        first.record("@a:x.org", Ok(Some("#ff4466".into())), T);
+        first.persist();
+
+        let second = UserColorCache::new(Some(path));
+        second.ensure_account("@other:x.org");
+        assert!(second.snapshot(&ids(&["@a:x.org"])).is_empty());
+        // And switching accounts on a live cache drops what it held.
+        first.ensure_account("@other:x.org");
+        assert!(first.snapshot(&ids(&["@a:x.org"])).is_empty());
+    }
+
+    #[test]
+    fn clear_deletes_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("user_colors.json");
+        let cache = UserColorCache::new(Some(path.clone()));
+        cache.ensure_account(ME);
+        cache.record("@a:x.org", Ok(Some("#ff4466".into())), T);
+        cache.persist();
+        assert!(path.exists());
+        cache.clear();
+        assert!(!path.exists());
+        assert!(cache.snapshot(&ids(&["@a:x.org"])).is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_fetches_each_user_once_even_when_asked_twice() {
+        let hs = TestHomeserver::new().await;
+        Mock::given(method("GET"))
+            .and(path("/_matrix/client/v3/profile/@twice:example.org"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ FIELD: "#ff4466" }))
+                    .set_delay(std::time::Duration::from_millis(200)),
+            )
+            .mount(&hs.server)
+            .await;
+        let cache = std::sync::Arc::new(cache_for(ME));
+        let asked = ids(&["@twice:example.org"]);
+        let first = cache.take_due(&asked, T);
+        let second = cache.take_due(&asked, T);
+        let emitted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = emitted.clone();
+        let emit = move |id: &str, c: Option<String>| sink.lock().unwrap().push((id.to_string(), c));
+        tokio::join!(
+            refresh(hs.client.clone(), cache.clone(), first, emit.clone()),
+            refresh(hs.client.clone(), cache.clone(), second, emit),
+        );
+        assert_eq!(hs.requests_to("@twice:example.org").await, 1);
+        assert_eq!(
+            emitted.lock().unwrap().as_slice(),
+            &[("@twice:example.org".to_string(), Some("#ff4466".to_string()))]
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_never_exceeds_the_concurrency_cap() {
+        let hs = TestHomeserver::new().await;
+        let delay = std::time::Duration::from_millis(200);
+        let users: Vec<String> = (0..10).map(|i| format!("@cap{i}:example.org")).collect();
+        for u in &users {
+            Mock::given(method("GET"))
+                .and(path(format!("/_matrix/client/v3/profile/{u}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({})).set_delay(delay))
+                .mount(&hs.server)
+                .await;
+        }
+        let cache = std::sync::Arc::new(cache_for(ME));
+        let due = cache.take_due(&users, T);
+        let started = std::time::Instant::now();
+        refresh(hs.client.clone(), cache.clone(), due, |_: &str, _: Option<String>| {}).await;
+        let took = started.elapsed();
+        // 10 requests, 4 at a time: three rounds of the delay — two would mean
+        // the cap is 5 or more; ten would mean nothing ran in parallel.
+        assert!(took >= delay * 3 - std::time::Duration::from_millis(50), "{took:?}");
+        assert!(took < delay * 6, "{took:?}");
+        assert_eq!(MAX_CONCURRENT, 4);
+        assert_eq!(cache.snapshot(&users).len(), 10);
     }
 }

@@ -31,3 +31,30 @@ export async function getOwnUserColor(): Promise<OwnUserColor> {
 export async function setOwnUserColor(color: string | null): Promise<string | null> {
   return invoke<string | null>("set_own_user_color", { color });
 }
+
+/** Emitted when a background lookup changes what's known of a user's color. */
+export const EVENT_USER_COLOR = "quark://user-color";
+
+export interface UserColorUpdate {
+  user_id: string;
+  color: string | null;
+}
+
+/**
+ * What's known of `userIds`' colors right now (stale answers included,
+ * unknown IDs absent). Lookups for unknown or stale IDs run in the background
+ * and report through `listenUserColors`; the backend dedupes and rate-limits.
+ */
+export async function requestUserColors(userIds: string[]): Promise<Record<string, string | null>> {
+  return invoke<Record<string, string | null>>("request_user_colors", { userIds });
+}
+
+/** Subscribe to color updates. Outside Tauri (mock dev) this is a no-op. */
+export async function listenUserColors(onUpdate: (u: UserColorUpdate) => void): Promise<() => void> {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    return await listen<UserColorUpdate>(EVENT_USER_COLOR, (e) => onUpdate(e.payload));
+  } catch {
+    return () => {};
+  }
+}

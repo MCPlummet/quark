@@ -882,6 +882,19 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         updater: { channel: "stable", auto_check: true },
         user_colors: structuredClone(_mockUserColors),
       };
+    case "request_user_colors": {
+      // A few mock senders carry a color; everyone else has none. One is
+      // deliberately near the default background, to show the outline.
+      const mockColors: Record<string, string> = {
+        "@alice:matrix.org": "#ff4466",
+        "@bob:matrix.org": "#ffaa00",
+        "@carol:matrix.org": "#111111",
+        "@you:matrix.org": _mockOwnColor ?? "",
+      };
+      const out: Record<string, string | null> = {};
+      for (const id of (args?.userIds as string[]) ?? []) out[id] = mockColors[id] || null;
+      return out;
+    }
     case "get_own_user_color":
       return { color: _mockOwnColor, can_set: true };
     case "set_own_user_color": {
