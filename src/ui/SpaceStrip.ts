@@ -4,6 +4,7 @@ import { isAnimatedUrl } from "../app/animated_urls.js";
 import { PSEUDO_SPACES, isPseudoSpace } from "../app/pseudo_spaces.js";
 import { attachLongPress } from "../app/long_press.js";
 import { plusIcon } from "./icons.js";
+import { formatMentionCount, type SpaceBadge } from "../app/space_badges.js";
 
 export interface SpaceItem {
   id: string;
@@ -31,6 +32,8 @@ export class SpaceStrip {
    * render path restores what has already been downloaded.
    */
   private _resolvedAvatars = new Map<string, string>();
+  /** Unread/mention state per space ID (#148); absent = nothing to show. */
+  private _badges = new Map<string, SpaceBadge>();
   private _activeId: string | null = null;
   private _onSelect: ((id: string) => void) | null = null;
   private _onContextMenu: ((spaceId: string, x: number, y: number) => void) | null = null;
@@ -83,6 +86,17 @@ export class SpaceStrip {
       if (!live.has(id)) this._resolvedAvatars.delete(id);
     }
     this._render();
+  }
+
+  /**
+   * Replace every space's badge. Spaces missing from `badges` show none.
+   * Kept on the strip, like resolved avatars, so a re-render restores them.
+   */
+  setBadges(badges: Map<string, SpaceBadge>): void {
+    this._badges = new Map(badges);
+    for (const el of this._el.querySelectorAll<HTMLElement>(".space-strip__item")) {
+      this._applyBadge(el);
+    }
   }
 
   /** Space IDs whose avatar has already been downloaded and cached. */
@@ -146,9 +160,12 @@ export class SpaceStrip {
       existing.src = dataUrl;
       if (isAnimatedUrl(dataUrl)) existing.dataset.gif = "1";
     } else {
-      const label = item.textContent ?? "";
+      // The letter is kept on the item rather than read back from its text,
+      // which would include the badge's count.
+      const label = item.dataset.glyph ?? "";
       item.textContent = "";
       item.appendChild(this._createIcon(dataUrl, label));
+      this._applyBadge(item);
     }
   }
 
@@ -170,6 +187,7 @@ export class SpaceStrip {
       if (!parent) return;
       img.remove();
       parent.textContent = fallbackLabel;
+      this._applyBadge(parent);
     });
     return img;
   }
@@ -211,8 +229,10 @@ export class SpaceStrip {
     el.setAttribute("tabindex", "0");
     el.setAttribute("aria-label", item.name);
     el.dataset.spaceId = item.id;
+    el.dataset.label = item.name;
 
     const label = overrideLabel ?? item.name.charAt(0).toUpperCase();
+    el.dataset.glyph = label;
     // An avatar resolved by an earlier download survives this rebuild; without
     // it, any render triggered after the download would drop the icon for good.
     const resolved = this._resolvedAvatars.get(item.id) ?? item.avatarUrl;
@@ -221,6 +241,7 @@ export class SpaceStrip {
     } else {
       el.textContent = label;
     }
+    this._applyBadge(el);
 
     el.addEventListener("click", () => this._selectId(item.id));
     if (!isPseudoSpace(item.id)) {
@@ -241,6 +262,33 @@ export class SpaceStrip {
     });
 
     return el;
+  }
+
+  /**
+   * Draw (or clear) an item's badge and fold its state into the accessible
+   * name. A mention count replaces the unread dot, as on a room-list row.
+   */
+  private _applyBadge(el: HTMLElement): void {
+    el.querySelector(".space-strip__badge")?.remove();
+    const name = el.dataset.label ?? "";
+    const badge = el.dataset.spaceId ? this._badges.get(el.dataset.spaceId) : undefined;
+    if (!badge || (!badge.unread && badge.mentions <= 0)) {
+      el.setAttribute("aria-label", name);
+      return;
+    }
+    const dot = document.createElement("span");
+    dot.setAttribute("aria-hidden", "true");
+    if (badge.mentions > 0) {
+      dot.className = "space-strip__badge space-strip__badge--mention";
+      dot.textContent = formatMentionCount(badge.mentions);
+      const noun = badge.mentions === 1 ? "mention" : "mentions";
+      el.setAttribute("aria-label", `${name}, ${badge.mentions} ${noun}`);
+    } else {
+      dot.className = "space-strip__badge space-strip__badge--unread";
+      dot.textContent = "●";
+      el.setAttribute("aria-label", `${name}, unread`);
+    }
+    el.appendChild(dot);
   }
 
   private _createAddButton(): HTMLElement {

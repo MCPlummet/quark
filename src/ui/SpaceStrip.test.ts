@@ -91,4 +91,85 @@ describe("SpaceStrip", () => {
     strip.setSpaces([{ id: SPACE_ID, name: "Space" }]);
     expect(iconSrc()).toBe(SPACE_ICON);
   });
+  describe("badges", () => {
+    const badgeEl = (id = SPACE_ID) =>
+      strip.getElement().querySelector<HTMLElement>(
+        `[data-space-id="${CSS.escape(id)}"] .space-strip__badge`,
+      );
+    /** The letter fallback, read without the badge's own text. */
+    const glyph = () =>
+      [...(itemEl()?.childNodes ?? [])]
+        .filter((n) => n.nodeType === Node.TEXT_NODE)
+        .map((n) => n.textContent)
+        .join("");
+
+    beforeEach(() => strip.setSpaces([{ id: SPACE_ID, name: "Work" }]));
+
+    it("shows a dot for unread", () => {
+      strip.setBadges(new Map([[SPACE_ID, { unread: true, mentions: 0 }]]));
+      expect(badgeEl()?.classList.contains("space-strip__badge--unread")).toBe(true);
+      expect(itemEl()?.getAttribute("aria-label")).toBe("Work, unread");
+    });
+
+    it("shows the mention count instead of the dot", () => {
+      strip.setBadges(new Map([[SPACE_ID, { unread: true, mentions: 3 }]]));
+      expect(badgeEl()?.classList.contains("space-strip__badge--mention")).toBe(true);
+      expect(badgeEl()?.classList.contains("space-strip__badge--unread")).toBe(false);
+      expect(badgeEl()?.textContent).toBe("3");
+      expect(itemEl()?.getAttribute("aria-label")).toBe("Work, 3 mentions");
+    });
+
+    it("uses the singular for one mention", () => {
+      strip.setBadges(new Map([[SPACE_ID, { unread: false, mentions: 1 }]]));
+      expect(itemEl()?.getAttribute("aria-label")).toBe("Work, 1 mention");
+    });
+
+    it("caps the count at 99+", () => {
+      strip.setBadges(new Map([[SPACE_ID, { unread: false, mentions: 120 }]]));
+      expect(badgeEl()?.textContent).toBe("99+");
+    });
+
+    it("clears a badge when the space leaves the map", () => {
+      strip.setBadges(new Map([[SPACE_ID, { unread: true, mentions: 0 }]]));
+      strip.setBadges(new Map());
+      expect(badgeEl()).toBeNull();
+      expect(itemEl()?.getAttribute("aria-label")).toBe("Work");
+    });
+
+    it("badges pseudo-spaces", () => {
+      strip.setBadges(new Map([["__dms__", { unread: true, mentions: 0 }]]));
+      expect(badgeEl("__dms__")).not.toBeNull();
+      const dms = strip.getElement().querySelector('[data-space-id="__dms__"]');
+      expect(dms?.getAttribute("aria-label")).toBe("Direct Messages, unread");
+    });
+
+    it("survives setSpaces() re-render", () => {
+      strip.setBadges(new Map([[SPACE_ID, { unread: false, mentions: 2 }]]));
+      strip.setSpaces([{ id: SPACE_ID, name: "Work" }]);
+      expect(badgeEl()?.textContent).toBe("2");
+    });
+
+    it("survives an avatar resolving", () => {
+      strip.setBadges(new Map([[SPACE_ID, { unread: false, mentions: 2 }]]));
+      strip.updateSpaceAvatar(SPACE_ID, SPACE_ICON);
+      expect(iconSrc()).toBe(SPACE_ICON);
+      expect(badgeEl()?.textContent).toBe("2");
+    });
+
+    it("survives the image failing and falling back to the letter", () => {
+      strip.updateSpaceAvatar(SPACE_ID, "data:image/png;base64,BROKEN");
+      strip.setBadges(new Map([[SPACE_ID, { unread: false, mentions: 3 }]]));
+      itemEl()?.querySelector("img")?.dispatchEvent(new Event("error"));
+      expect(badgeEl()?.textContent).toBe("3");
+      expect(glyph()).toBe("W");
+    });
+
+    it("keeps the letter label clean when an avatar resolves after a badge", () => {
+      strip.setBadges(new Map([[SPACE_ID, { unread: false, mentions: 3 }]]));
+      strip.updateSpaceAvatar(SPACE_ID, "data:image/png;base64,BROKEN");
+      itemEl()?.querySelector("img")?.dispatchEvent(new Event("error"));
+      expect(glyph()).toBe("W");
+      expect(badgeEl()?.textContent).toBe("3");
+    });
+  });
 });
