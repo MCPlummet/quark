@@ -45,7 +45,8 @@ let _unlisten: (() => void) | null = null;
 
 const anyOn = (t: UserColorToggles) => t.name || t.avatar || t.border;
 
-function themeBackground(): string {
+/** The theme background colors are judged against for contrast. */
+export function themeBackground(): string {
   const root = document.documentElement;
   return (
     root.style.getPropertyValue("--bg").trim() ||

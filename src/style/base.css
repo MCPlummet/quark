@@ -4335,6 +4335,116 @@ a:hover {
   transition: border-color var(--transition-speed), box-shadow var(--transition-speed);
 }
 
+/* ── Color field (#45): hex + swatches + native picker + preview ─────────── */
+.color-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.color-field__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.color-field__hex {
+  width: 10ch;
+  background-color: var(--input-bg, var(--bg));
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  border: var(--border-width) solid var(--border-color);
+  padding: 4px 6px;
+  outline: none;
+}
+
+.color-field__hex:focus {
+  border-color: var(--accent-primary);
+}
+
+.color-field__hex--invalid,
+.color-field__hex--invalid:focus {
+  border-color: var(--accent-error);
+}
+
+.color-field__native {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-color);
+  background: none;
+  cursor: pointer;
+}
+
+.color-field__clear {
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: calc(var(--font-size) - 2px);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.color-field__clear:hover:not(:disabled) {
+  color: var(--accent-primary);
+}
+
+.color-field__swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.color-field__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-color);
+  background-color: var(--swatch);
+  cursor: pointer;
+}
+
+.color-field__swatch:hover:not(:disabled),
+.color-field__swatch:focus-visible {
+  outline: 1px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.color-field__preview {
+  font-family: var(--font-family);
+  font-weight: bold;
+  color: var(--msg-other);
+}
+
+.color-field__preview[data-user-color] {
+  color: var(--user-color);
+}
+
+.color-field__preview.user-color--low-contrast {
+  text-shadow: 1px 0 var(--fg), -1px 0 var(--fg), 0 1px var(--fg), 0 -1px var(--fg);
+}
+
+.color-field__warning {
+  color: var(--accent-warning);
+  font-size: calc(var(--font-size) - 2px);
+}
+
+.color-field__reason {
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) - 2px);
+}
+
+.color-field--disabled :is(.color-field__swatches, .color-field__controls, .color-field__preview) {
+  opacity: 0.45;
+}
+
+.color-field :disabled {
+  cursor: not-allowed;
+}
+
 .profile-edit-dialog__input:focus {
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
