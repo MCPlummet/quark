@@ -299,6 +299,7 @@ pub fn run() {
             // App Config
             commands::get_app_config,
             commands::set_app_config,
+            commands::set_user_color_override,
             // Updater
             commands::update_check,
             commands::update_install,

@@ -58,6 +58,11 @@ function mockSpaceChildren(spaceId: string): SpaceChild[] {
 
 let msgCounter = 100;
 
+/** Mock `[user_colors]` — kept across calls so a local override set from the
+ *  profile popup survives the next `get_app_config`. */
+let _mockUserColors: { name: boolean; avatar: boolean; border: boolean; overrides: Record<string, string> } =
+  { name: true, avatar: false, border: false, overrides: {} };
+
 // Deterministic SVG avatar per sender (colored initial square)
 const AVATAR_COLORS: Record<string, string> = {
   "@alice:matrix.org": "#00ff41",
@@ -874,7 +879,21 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         home: { dm_limit: 12 },
         cache: { image_memory_mb: 150, timeline_rooms: 30 },
         updater: { channel: "stable", auto_check: true },
+        user_colors: structuredClone(_mockUserColors),
       };
+    case "set_user_color_override": {
+      const userId = args?.userId as string;
+      const raw = args?.color as string | null;
+      if (raw == null) {
+        delete _mockUserColors.overrides[userId];
+        return null;
+      }
+      if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw)) throw new Error(`Not a color: ${raw}`);
+      const hex = raw.toLowerCase();
+      const color = hex.length === 4 ? "#" + [...hex.slice(1)].map((c) => c + c).join("") : hex;
+      _mockUserColors.overrides[userId] = color;
+      return color;
+    }
     case "get_event_cache_size":
       return 487654321;
     case "get_event_cache_diagnostics":
@@ -899,7 +918,11 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       // gets" here — reporting a warning would train the UI on a failure the
       // real backend only reports when the push rule genuinely didn't land.
       return { synced: true, warning: null };
-    case "set_app_config":
+    case "set_app_config": {
+      const cfg = args?.config as { user_colors?: typeof _mockUserColors } | undefined;
+      if (cfg?.user_colors) _mockUserColors = structuredClone(cfg.user_colors);
+      return null;
+    }
     case "set_notification_config":
     case "clear_media_cache":
     case "set_cache_size_limit":

@@ -220,6 +220,8 @@ pub struct AppConfig {
     pub cache: CacheConfig,
     #[serde(default)]
     pub updater: UpdaterConfig,
+    #[serde(default)]
+    pub user_colors: super::user_colors::UserColorsConfig,
 }
 
 // ─── Default impls ────────────────────────────────────────────────────────────
@@ -307,6 +309,7 @@ impl Default for AppConfig {
             home: HomeConfig::default(),
             cache: CacheConfig::default(),
             updater: UpdaterConfig::default(),
+            user_colors: super::user_colors::UserColorsConfig::default(),
         }
     }
 }

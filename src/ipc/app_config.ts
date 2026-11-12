@@ -79,6 +79,15 @@ export interface UpdaterConfig {
   auto_check: boolean;
 }
 
+/** `[user_colors]` (#45): which treatments show a sender's color, and this
+ *  device's local per-user overrides (`"@user:server" → "#rrggbb"`). */
+export interface UserColorsConfig {
+  name: boolean;
+  avatar: boolean;
+  border: boolean;
+  overrides: Record<string, string>;
+}
+
 export interface AppConfig {
   general: GeneralConfig;
   sync: SyncConfig;
@@ -88,6 +97,7 @@ export interface AppConfig {
   home: HomeConfig;
   cache: CacheConfig;
   updater: UpdaterConfig;
+  user_colors: UserColorsConfig;
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -99,6 +109,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   home: { dm_limit: 12 },
   cache: { image_memory_mb: 150, timeline_rooms: 30 },
   updater: { channel: "stable", auto_check: true },
+  user_colors: { name: true, avatar: false, border: false, overrides: {} },
 };
 
 export async function getAppConfig(): Promise<AppConfig> {

@@ -2649,6 +2649,37 @@ pub async fn set_app_config(
     Ok(())
 }
 
+/// Set (or, with `None`, remove) this device's local color for another user
+/// (#45). Mutates `[user_colors.overrides]` under the config lock and saves, so
+/// it can't race a whole-config write with a stale copy of the table. Returns
+/// the color as stored (normalized).
+#[tauri::command]
+pub async fn set_user_color_override(
+    config_state: State<'_, Mutex<AppConfig>>,
+    paths: State<'_, crate::Paths>,
+    user_id: String,
+    color: Option<String>,
+) -> Result<Option<String>, String> {
+    use crate::config::user_colors::{is_user_id, normalize_color};
+    if !is_user_id(&user_id) {
+        return Err(format!("Not a user ID: {user_id}"));
+    }
+    let color = match color {
+        Some(raw) => Some(normalize_color(&raw).ok_or_else(|| format!("Not a color: {raw}"))?),
+        None => None,
+    };
+    let path = crate::config::app_config::config_path_in(&paths.config_dir);
+    let mut guard = config_state.lock().map_err(|_| "App config lock poisoned")?;
+    let mut next = guard.clone();
+    match &color {
+        Some(c) => next.user_colors.overrides.insert(user_id, c.clone()),
+        None => next.user_colors.overrides.remove(&user_id),
+    };
+    crate::config::app_config::save_app_config_to(&path, &next)?;
+    *guard = next;
+    Ok(color)
+}
+
 /// Check the user's configured channel for an available update. Returns
 /// metadata when one exists (the `Update` itself is stashed in `UpdaterState`
 /// for `update_install`), `None` when up to date. Desktop-only.

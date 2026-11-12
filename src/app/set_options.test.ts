@@ -15,6 +15,14 @@ describe("applySetOptions", () => {
     vi.restoreAllMocks();
   });
 
+  it("carries [user_colors] through untouched, overrides included", () => {
+    const cfg = baseConfig();
+    cfg.user_colors = { name: false, avatar: true, border: true, overrides: { "@a:x.org": "#ff4466" } };
+    const out = applySetOptions(cfg, [{ name: "theme", value: "gruvbox" }]);
+    expect(out.user_colors).toEqual(cfg.user_colors);
+    expect(out.user_colors).not.toBe(cfg.user_colors);
+  });
+
   it("applies string, boolean and number options", () => {
     const out = applySetOptions(baseConfig(), [
       { name: "theme", value: "gruvbox" },

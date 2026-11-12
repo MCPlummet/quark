@@ -2139,6 +2139,14 @@ timeline_rooms = 30           # rooms kept in memory for instant re-open
 channel = "stable"            # stable | beta — which release channel to follow
 auto_check = true             # check for an update shortly after sync starts
 
+[user_colors]                 # see User colors
+name = true                   # color the sender's name
+avatar = false                # outline the sender's avatar in their color
+border = false                # draw the message box border in their color
+
+[user_colors.overrides]       # this device only; beats the color they published
+"@alice:example.org" = "#ff4466"   # #rgb or #rrggbb; invalid entries are dropped on load
+
 # Keybindings are configured in ~/.config/quark/quarkrc (see Keybinding Configuration)
 # NOT in this file — quarkrc uses vimrc-style syntax for full flexibility
 ```
