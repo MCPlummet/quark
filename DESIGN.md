@@ -1558,6 +1558,12 @@ Discord-style integrated GIF search, accessible from insert mode or command bar.
 
 **Backend:**
 - Rust backend handles API calls to Klipy/Giphy (API keys stored in config)
+- Keys are bring-your-own: set one in Settings → GIF or as `[gif] api_key` in
+  config.toml (the default is empty). `search_gifs` trims the key and, if it is
+  empty, fails before any network call with "No Klipy API key set. GIF search
+  needs your own key: …" (naming the active provider) instead of the
+  provider's bare HTTP error — an empty Klipy key otherwise yields a
+  `/api/v1//gifs/search` 404.
 - Downloads selected GIF, uploads to homeserver via media API
 - Caches recent search results and thumbnails locally
 

@@ -2378,11 +2378,13 @@ pub async fn search_gifs(
 
     match provider.as_str() {
         "giphy" => {
-            let client = crate::gif::giphy::GiphyClient::new(api_key);
+            let key = crate::gif::validate_api_key("Giphy", &api_key)?;
+            let client = crate::gif::giphy::GiphyClient::new(key);
             client.search(&query, limit, rating_str).await
         }
         "klipy" => {
-            let client = crate::gif::klipy::KlipyClient::new(api_key);
+            let key = crate::gif::validate_api_key("Klipy", &api_key)?;
+            let client = crate::gif::klipy::KlipyClient::new(key);
             client.search(&query, limit, rating_str).await
         }
         other => Err(format!("Unknown GIF provider: '{}'", other)),
