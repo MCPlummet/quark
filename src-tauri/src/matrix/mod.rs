@@ -14,6 +14,7 @@ pub mod spaces;
 pub mod stickers;
 pub mod threads;
 pub mod timeline;
+pub mod user_colors;
 pub mod verification;
 #[cfg(test)]
 pub mod test_support;

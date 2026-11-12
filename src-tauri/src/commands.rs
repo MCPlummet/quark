@@ -2187,6 +2187,29 @@ pub async fn get_own_profile(
     crate::matrix::client::get_own_profile(&client).await
 }
 
+/// The account's published color (`tel.quark.usercolor`, #45) and whether the
+/// homeserver lets it be changed (`None`: it doesn't say — saving will tell).
+#[tauri::command]
+pub async fn get_own_user_color(
+    state: State<'_, MatrixState>,
+) -> Result<crate::matrix::user_colors::OwnUserColor, String> {
+    use crate::matrix::user_colors::{fetch_color, own_can_set, OwnUserColor};
+    let client = get_client(&state)?;
+    let me = client.user_id().ok_or("Not logged in")?.to_owned();
+    let (color, can_set) = tokio::join!(fetch_color(&client, &me), own_can_set(&client));
+    Ok(OwnUserColor { color: color.ok().flatten(), can_set })
+}
+
+/// Publish (or, with `None`, remove) the account's color. Returns it as stored.
+#[tauri::command]
+pub async fn set_own_user_color(
+    state: State<'_, MatrixState>,
+    color: Option<String>,
+) -> Result<Option<String>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::user_colors::set_own_color(&client, color.as_deref()).await
+}
+
 #[tauri::command]
 pub async fn set_display_name(
     state: State<'_, MatrixState>,

@@ -60,6 +60,7 @@ let msgCounter = 100;
 
 /** Mock `[user_colors]` — kept across calls so a local override set from the
  *  profile popup survives the next `get_app_config`. */
+let _mockOwnColor: string | null = "#00aaff";
 let _mockUserColors: { name: boolean; avatar: boolean; border: boolean; overrides: Record<string, string> } =
   { name: true, avatar: false, border: false, overrides: {} };
 
@@ -881,6 +882,19 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         updater: { channel: "stable", auto_check: true },
         user_colors: structuredClone(_mockUserColors),
       };
+    case "get_own_user_color":
+      return { color: _mockOwnColor, can_set: true };
+    case "set_own_user_color": {
+      const raw = args?.color as string | null;
+      if (raw == null) {
+        _mockOwnColor = null;
+        return null;
+      }
+      if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw)) throw new Error(`Not a color: ${raw}`);
+      const hex = raw.toLowerCase();
+      _mockOwnColor = hex.length === 4 ? "#" + [...hex.slice(1)].map((c) => c + c).join("") : hex;
+      return _mockOwnColor;
+    }
     case "set_user_color_override": {
       const userId = args?.userId as string;
       const raw = args?.color as string | null;

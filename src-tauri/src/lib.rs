@@ -280,6 +280,8 @@ pub fn run() {
             // Profile
             commands::get_own_profile,
             commands::set_display_name,
+            commands::get_own_user_color,
+            commands::set_own_user_color,
             commands::set_avatar,
             commands::get_home_data,
             commands::set_presence_status,
