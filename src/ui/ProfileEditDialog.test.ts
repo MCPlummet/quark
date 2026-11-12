@@ -98,6 +98,46 @@ describe("ProfileEditDialog — color", () => {
     expect(q<HTMLInputElement>(".color-field__hex").disabled).toBe(false);
   });
 
+  const renameTo = (name: string) => {
+    const input = q<HTMLInputElement>(".profile-edit-dialog__input");
+    input.value = name;
+    input.dispatchEvent(new Event("input"));
+  };
+  const enterOn = (el: HTMLElement): KeyboardEvent => {
+    const e = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    el.dispatchEvent(e);
+    return e;
+  };
+
+  it("Enter on a swatch or [ clear ] presses that button, not save", async () => {
+    open();
+    renameTo("Myself");
+    for (const button of [
+      d.getElement().querySelectorAll<HTMLButtonElement>(".color-field__swatch")[1],
+      q<HTMLButtonElement>(".color-field__clear"),
+    ]) {
+      const e = enterOn(button);
+      await Promise.resolve();
+      expect(e.defaultPrevented).toBe(false);
+    }
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("won't save over a color typed wrong", async () => {
+    open();
+    renameTo("Myself");
+    const hex = q<HTMLInputElement>(".color-field__hex");
+    hex.value = "#12";
+    enterOn(hex);
+    await Promise.resolve();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(q(".profile-edit-dialog__status").textContent).toBe("That isn't a color — use #rrggbb.");
+    hex.value = "#00ff41";
+    enterOn(hex);
+    await Promise.resolve();
+    expect(submitted().userColor).toBe("#00ff41");
+  });
+
   it("surfaces a save failure", async () => {
     onSubmit.mockRejectedValue(new Error(UNSUPPORTED));
     open();

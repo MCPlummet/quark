@@ -196,6 +196,9 @@ export class ProfileEditDialog extends DialogBase {
       return;
     }
     if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) {
+      // A focused button — a swatch, [ clear ], [ cancel ] — activates on
+      // Enter by itself; submitting instead would skip what it does.
+      if (e.target instanceof HTMLButtonElement) return;
       e.preventDefault();
       void this._submit();
       return;
@@ -207,6 +210,10 @@ export class ProfileEditDialog extends DialogBase {
 
   private async _submit(): Promise<void> {
     if (!this._initial || !this._onSubmit) return;
+    if (this._colorField.hasInvalidInput) {
+      this._setStatus("That isn't a color — use #rrggbb.", "error");
+      return;
+    }
     const displayName = this._displayNameInput.value.trim();
     const statusMessage = this._statusInput.value.trim();
     const displayNameChanged = displayName !== (this._initial.displayName ?? "");

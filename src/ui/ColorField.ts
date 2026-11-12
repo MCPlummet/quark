@@ -117,6 +117,11 @@ export class ColorField {
     return this._value;
   }
 
+  /** Is the hex field holding typed text that isn't a color (not committed)? */
+  get hasInvalidInput(): boolean {
+    return this._hex.classList.contains("color-field__hex--invalid");
+  }
+
   /** Show `v` (normalized; anything invalid shows as none). Never commits. */
   set value(v: string | null) {
     this._show(normalizeHex(v));
