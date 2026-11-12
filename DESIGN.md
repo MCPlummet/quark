@@ -1843,6 +1843,15 @@ alongside `openExternalUrl` opened every link twice.
   encrypted. Applies to images (pasted and picked), files, videos and GIFs.
   Stickers are exempt — they reference media from an existing MSC2545 pack
   rather than uploading anything, so that media is already public.
+- **Upload size limit.** A file over the homeserver's upload limit (or its
+  reverse proxy's, e.g. nginx `client_max_body_size`, which answers with an
+  HTML page) fails with HTTP 413 / `M_TOO_LARGE`. Every upload (attachments,
+  GIFs, `upload_media`, avatars) maps that to "File (59.0 MB) is too large for
+  your homeserver's upload limit. Try a smaller file, or ask your server admin
+  to raise the limit." instead of the SDK's `[413] <non-json-bytes>`
+  (`upload_error_message` in `matrix/media.rs`). There is no pre-check against
+  `m.upload.size`: matrix-sdk 0.9 has no cached accessor for it, and an extra
+  config request per send is not worth it for an error the server reports anyway.
 - **Attachment progress.** Attaching is several phases the user cannot see —
   reading the picked file's bytes, handing them across IPC, then the upload
   itself — and on Android a multi-megabyte pick spends long enough in the first
