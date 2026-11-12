@@ -610,6 +610,7 @@ export function timelineEventToThreadMessage(
     (e.media_url ? _messageMediaCache.get(e.media_url) : undefined) ?? e.media_url ?? undefined;
   return {
     id: e.event_id,
+    senderId: e.sender,
     senderName: resolveDisplayName(e.sender),
     isOwn: ownUserId ? e.sender === ownUserId : false,
     timestamp: new Date(e.timestamp).toISOString(),
