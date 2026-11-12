@@ -8,7 +8,10 @@ import {
   setPresenceStatus as ipcSetPresenceStatus,
   setDisplayName as ipcSetDisplayName,
   setAvatar as ipcSetAvatar,
+  getOwnUserColor,
+  setOwnUserColor,
 } from "../../ipc/index.js";
+import { receiveUserColor } from "../user_colors.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
@@ -241,21 +244,30 @@ export async function openProfileEdit(): Promise<void> {
   // falls back to an active fetch; if even that fails (e.g. offline), read the
   // status bar as a last resort — it's either fresh from the user's last edit
   // or from the homeserver's previous presence push.
-  const fetchedStatus = await resolveUserStatus(profile.user_id);
+  const [fetchedStatus, ownColor] = await Promise.all([
+    resolveUserStatus(profile.user_id),
+    // Read fresh (not from the cache) — this is the one place it's edited.
+    getOwnUserColor().catch(() => ({ color: null, can_set: null })),
+  ]);
   const currentStatus = fetchedStatus ?? statusBar.getStatusMessage() ?? null;
   profileEditDialog.show(
     {
       userId: profile.user_id,
       displayName: profile.display_name,
       statusMessage: currentStatus,
+      userColor: ownColor.color,
+      userColorSettable: ownColor.can_set,
     },
-    async ({ displayName, statusMessage, displayNameChanged, statusChanged }) => {
-      // Persist in parallel — neither call depends on the other and there's
+    async ({ displayName, statusMessage, displayNameChanged, statusChanged, userColor, userColorChanged }) => {
+      // Persist in parallel — none of the calls depends on another and there's
       // no rollback story we can offer either way. The dialog surfaces any
-      // error string returned from either IPC.
+      // error string returned from any IPC.
       const ops: Promise<unknown>[] = [];
       if (displayNameChanged) ops.push(ipcSetDisplayName(displayName));
       if (statusChanged) ops.push(ipcSetPresenceStatus(statusMessage));
+      if (userColorChanged) {
+        ops.push(setOwnUserColor(userColor).then((stored) => receiveUserColor(profile.user_id, stored)));
+      }
       await Promise.all(ops);
       // Reflect the change on the status line so the user sees it without
       // re-opening their profile (it shows the name as well as the status).
