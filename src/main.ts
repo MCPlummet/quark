@@ -16,6 +16,9 @@ import { maybeCheckForUpdates, rememberDismissed } from "./app/update_check.js";
 import { updateInstall } from "./ipc/updater.js";
 import { showMainLayout } from "./ui/App.js";
 import { bindSpaceBadges } from "./app/space_badges.js";
+import { initUserColors } from "./app/user_colors.js";
+import { getAppConfig } from "./ipc/app_config.js";
+import { requestUserColors } from "./ipc/user_colors.js";
 
 // ── Debug mode ────────────────────────────────────────────────────────────────
 // Append ?debug to the URL to skip login and show the chat UI with mock data.
@@ -83,6 +86,8 @@ if (DEBUG_MODE) {
   AppState.set("loggedIn", true);
   showMainLayout(components);
   setupKeyboard(components);
+  // The session-start path that normally does this is skipped here.
+  void getAppConfig().then((cfg) => initUserColors({ config: cfg.user_colors, request: requestUserColors }));
   void refreshRooms().then(async () => {
     dismissStartupOverlay();
     // Auto-select the first room so the timeline is populated
