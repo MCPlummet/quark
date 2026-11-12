@@ -62,12 +62,25 @@ pub fn is_user_id(user_id: &str) -> bool {
     UserId::parse(user_id).is_ok()
 }
 
+/// An override's value as written: a string, or anything else (dropped). A
+/// mistyped entry — say `0xff4466`, a TOML integer — must not fail the whole
+/// config, which would load as defaults and be saved back over the file.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OverrideValue {
+    Text(String),
+    Other(serde::de::IgnoredAny),
+}
+
 fn valid_overrides<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, String>, D::Error> {
-    let raw = BTreeMap::<String, String>::deserialize(d)?;
+    let raw = BTreeMap::<String, OverrideValue>::deserialize(d)?;
     Ok(raw
         .into_iter()
         .filter(|(user, _)| is_user_id(user))
-        .filter_map(|(user, color)| normalize_color(&color).map(|c| (user, c)))
+        .filter_map(|(user, value)| match value {
+            OverrideValue::Text(color) => normalize_color(&color).map(|c| (user, c)),
+            OverrideValue::Other(_) => None,
+        })
         .collect())
 }
 
@@ -119,6 +132,28 @@ mod tests {
 "@bad:x.org" = "url(x)"
 "##;
         let cfg: AppConfig = toml::from_str(text).expect("parse");
+        let expected: BTreeMap<String, String> =
+            [("@ok:x.org".to_string(), "#aabbcc".to_string())].into_iter().collect();
+        assert_eq!(cfg.user_colors.overrides, expected);
+    }
+
+    /// A hand-edited `0xff4466` (TOML's hex integer) or any other non-string
+    /// is one bad entry, not a config that fails to load — which would fall
+    /// back to defaults and overwrite every other setting on the next save.
+    #[test]
+    fn non_string_overrides_are_dropped_not_fatal() {
+        let text = r##"
+[user_colors]
+border = true
+
+[user_colors.overrides]
+"@ok:x.org" = "#ABC"
+"@hex:x.org" = 0xff4466
+"@list:x.org" = ["#fff"]
+"@table:x.org" = { color = "#fff" }
+"##;
+        let cfg: AppConfig = toml::from_str(text).expect("parse");
+        assert!(cfg.user_colors.border);
         let expected: BTreeMap<String, String> =
             [("@ok:x.org".to_string(), "#aabbcc".to_string())].into_iter().collect();
         assert_eq!(cfg.user_colors.overrides, expected);
