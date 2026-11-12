@@ -8,6 +8,7 @@
 
 import type { RoomInfo, SpaceChild } from "../ipc/types.js";
 import { PSEUDO_SPACES } from "./pseudo_spaces.js";
+import { AppState } from "./state.js";
 
 export interface SpaceBadge {
   unread: boolean;
@@ -109,4 +110,30 @@ export async function buildSpaceMembership(
   );
 
   return { members, spaceRoomIds, subspaceIds };
+}
+
+/**
+ * Keep a strip's badges current: recompute whenever the rooms' unread state,
+ * space membership or the open room changes. Every unread path (live sync,
+ * mark-as-read, opening a room, mute, refresh) writes `roomListCache`, so this
+ * is the one place badges have to listen. Returns an unbind function.
+ */
+export function bindSpaceBadges(strip: { setBadges(badges: Map<string, SpaceBadge>): void }): () => void {
+  const update = () =>
+    strip.setBadges(
+      computeSpaceBadges({
+        rooms: AppState.get("roomListCache"),
+        spaceMembers: AppState.get("spaceMembers"),
+        spaceRoomIds: new Set(AppState.get("spaceRoomIds")),
+        currentRoomId: AppState.get("currentRoomId"),
+      }),
+    );
+  const unbinds = [
+    AppState.on("roomListCache", update),
+    AppState.on("spaceMembers", update),
+    AppState.on("spaceRoomIds", update),
+    AppState.on("currentRoomId", update),
+  ];
+  update();
+  return () => unbinds.forEach((u) => u());
 }

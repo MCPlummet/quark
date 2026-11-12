@@ -27,6 +27,7 @@ import {
 } from "../../ipc/index.js";
 
 import { getPseudoSpace, sortByRecency } from "../pseudo_spaces.js";
+import { buildSpaceMembership } from "../space_badges.js";
 import { clearRoomNotificationsIpc } from "../../ipc/notifications.js";
 import { muteRoom, unmuteRoom } from "../notifications.js";
 import { enterHomeView, exitHomeView } from "./home.js";
@@ -1535,28 +1536,24 @@ async function _doRefreshRooms(): Promise<void> {
     ]);
     AppState.set("roomListCache", rooms);
 
-    // Build the set of rooms/subspaces that belong to any space, and collect
-    // subspace IDs so they can be excluded from the sidebar strip.
-    const spaceRoomIdSet = new Set<string>();
-    const subspaceIdSet = new Set<string>();
-    await Promise.all(
-      userSpaces.map(async (space) => {
-        try {
-          const children = await getSpaceChildren(space.room_id);
-          for (const c of children) {
-            // Add all children (rooms and subspaces) so they're hidden from the home list
-            spaceRoomIdSet.add(c.room_id);
-            if (c.is_space) subspaceIdSet.add(c.room_id);
-          }
-        } catch {
-          // Non-critical — worst case the home view shows extra rooms
-        }
-      })
+    // Build the set of rooms/subspaces that belong to any space (hidden from
+    // the home list), collect subspace IDs so they can be excluded from the
+    // sidebar strip, and record which rooms each space's list shows for its
+    // badge. A space whose children fail to load is skipped — worst case the
+    // home view shows extra rooms.
+    const membership = await buildSpaceMembership(
+      userSpaces.map((s) => s.room_id),
+      getSpaceChildren,
     );
-    AppState.set("spaceRoomIds", [...spaceRoomIdSet]);
+    const subspaceIdSet = membership.subspaceIds;
+    AppState.set("spaceRoomIds", [...membership.spaceRoomIds]);
 
     // Populate space strip — exclude subspaces (they appear nested inside their parent space)
     const topLevelSpaces = userSpaces.filter((s) => !subspaceIdSet.has(s.room_id));
+    AppState.set(
+      "spaceMembers",
+      Object.fromEntries(topLevelSpaces.map((s) => [s.room_id, membership.members[s.room_id] ?? []])),
+    );
     const spaceItems: SpaceItem[] = topLevelSpaces.map((s) => ({
       id: s.room_id,
       name: s.name ?? s.room_id,

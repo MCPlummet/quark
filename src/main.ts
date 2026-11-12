@@ -15,6 +15,7 @@ import { setForceMock } from "./ipc/invoke.js";
 import { maybeCheckForUpdates, rememberDismissed } from "./app/update_check.js";
 import { updateInstall } from "./ipc/updater.js";
 import { showMainLayout } from "./ui/App.js";
+import { bindSpaceBadges } from "./app/space_badges.js";
 
 // ── Debug mode ────────────────────────────────────────────────────────────────
 // Append ?debug to the URL to skip login and show the chat UI with mock data.
@@ -146,6 +147,9 @@ components.roomList.onSelect((roomId) => {
 components.spaceStrip.onSelect((spaceId) => {
   void selectSpace(spaceId);
 });
+
+// Unread dot / mention count on each space icon (#148).
+bindSpaceBadges(components.spaceStrip);
 
 // ── Status line wiring ───────────────────────────────────────────────────────
 // Search and invites are wired in setupKeyboard, beside the palette and dialogs.

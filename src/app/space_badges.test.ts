@@ -1,6 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { RoomInfo, SpaceChild } from "../ipc/types.js";
-import { buildSpaceMembership, computeSpaceBadges, formatMentionCount } from "./space_badges.js";
+import { AppState } from "./state.js";
+import {
+  bindSpaceBadges,
+  buildSpaceMembership,
+  computeSpaceBadges,
+  formatMentionCount,
+  type SpaceBadge,
+} from "./space_badges.js";
 
 function room(
   room_id: string,
@@ -144,5 +151,53 @@ describe("buildSpaceMembership", () => {
     });
     const { members } = await buildSpaceMembership([S], getChildren);
     expect(members[S]).toEqual(["!r1"]);
+  });
+});
+
+describe("bindSpaceBadges", () => {
+  // AppState is a singleton: reset what these tests touch.
+  beforeEach(() => {
+    AppState.set("currentRoomId", null);
+    AppState.set("spaceRoomIds", []);
+    AppState.set("spaceMembers", {});
+    AppState.set("roomListCache", []);
+  });
+
+  const fakeStrip = () => {
+    const calls: Map<string, SpaceBadge>[] = [];
+    return { calls, last: () => calls[calls.length - 1], setBadges: (b: Map<string, SpaceBadge>) => void calls.push(b) };
+  };
+
+  it("pushes badges on bind and on roomListCache changes", () => {
+    AppState.set("spaceRoomIds", ["!a"]);
+    AppState.set("spaceMembers", { [S]: ["!a"] });
+    AppState.set("roomListCache", [room("!a")]);
+    const strip = fakeStrip();
+    const unbind = bindSpaceBadges(strip);
+    expect(strip.last()?.size).toBe(0);
+    AppState.set("roomListCache", [room("!a", { unread: 1 })]);
+    expect(strip.last()?.get(S)).toEqual({ unread: true, mentions: 0 });
+    unbind();
+  });
+
+  it("drops the open room's contribution as soon as it is opened", () => {
+    AppState.set("spaceRoomIds", ["!a"]);
+    AppState.set("spaceMembers", { [S]: ["!a"] });
+    AppState.set("roomListCache", [room("!a", { unread: 1 })]);
+    const strip = fakeStrip();
+    const unbind = bindSpaceBadges(strip);
+    expect(strip.last()?.has(S)).toBe(true);
+    AppState.set("currentRoomId", "!a");
+    expect(strip.last()?.has(S)).toBe(false);
+    unbind();
+  });
+
+  it("stops updating after unbind", () => {
+    const strip = fakeStrip();
+    const unbind = bindSpaceBadges(strip);
+    const before = strip.calls.length;
+    unbind();
+    AppState.set("roomListCache", [room("!z", { unread: 1 })]);
+    expect(strip.calls.length).toBe(before);
   });
 });

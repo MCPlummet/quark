@@ -32,6 +32,9 @@ export interface AppStateSnapshot {
   roomListCache: RoomInfo[];
   /** Room IDs that belong to at least one space (used to filter home view). */
   spaceRoomIds: string[];
+  /** Top-level space ID → the room IDs its room list shows (direct rooms plus
+   *  one level of subspace rooms). Drives the space-strip badges (#148). */
+  spaceMembers: Record<string, string[]>;
   /** Pending room invites, refreshed with the room list. */
   invites: InviteInfo[];
   currentTimeline: TimelineEvent[];
@@ -130,6 +133,7 @@ class AppStateManager {
     activePanel: "roomlist",
     roomListCache: [],
     spaceRoomIds: [],
+    spaceMembers: {},
     invites: [],
     currentTimeline: [],
     replyToEventId: null,
