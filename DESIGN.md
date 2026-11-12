@@ -1846,7 +1846,7 @@ alongside `openExternalUrl` opened every link twice.
 - **Upload size limit.** A file over the homeserver's upload limit (or its
   reverse proxy's, e.g. nginx `client_max_body_size`, which answers with an
   HTML page) fails with HTTP 413 / `M_TOO_LARGE`. Every upload (attachments,
-  GIFs, `upload_media`, avatars) maps that to "File (59.0 MB) is too large for
+  GIFs, `upload_media`, avatars) maps that to "File (56.3 MB) is too large for
   your homeserver's upload limit. Try a smaller file, or ask your server admin
   to raise the limit." instead of the SDK's `[413] <non-json-bytes>`
   (`upload_error_message` in `matrix/media.rs`). There is no pre-check against
