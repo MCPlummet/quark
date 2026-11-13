@@ -103,6 +103,73 @@ async fn room_needs_encryption(room: &Room) -> bool {
     encrypt_for_room_state(room.is_encrypted().await.ok())
 }
 
+/// Turn a failed upload into the message the user sees.
+///
+/// Pure so it can be tested without a homeserver: the callers below pull the
+/// HTTP status and errcode out of matrix-sdk's error and hand them here.
+///
+/// A file over the homeserver's (or its reverse proxy's — nginx's
+/// `client_max_body_size` answers with an HTML page, so there is no errcode)
+/// size limit comes back as HTTP 413 / `M_TOO_LARGE`, which matrix-sdk renders
+/// as "the server returned an error: [413] <non-json-bytes>" (#151). The client
+/// cannot make that upload succeed, so say what happened instead. Any other
+/// failure keeps `context` plus the SDK's own text.
+pub(crate) fn upload_error_message(
+    context: &str,
+    status: Option<u16>,
+    errcode_too_large: bool,
+    size_bytes: usize,
+    raw: &str,
+) -> String {
+    if status == Some(413) || errcode_too_large {
+        return format!(
+            "File ({}) is too large for your homeserver's upload limit. \
+             Try a smaller file, or ask your server admin to raise the limit.",
+            format_megabytes(size_bytes)
+        );
+    }
+    format!("{context}: {raw}")
+}
+
+/// Render a byte count as megabytes with one decimal ("56.3 MB"), in binary
+/// units (1 MB = 1024² bytes) to match the attachment row's `formatBytes`, so
+/// the size in the error agrees with the one the user just watched upload.
+fn format_megabytes(bytes: usize) -> String {
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+}
+
+/// `upload_error_message` for a client-API error, whichever matrix-sdk wrapper
+/// it arrived in.
+fn client_api_upload_error(
+    context: &str,
+    api: Option<&matrix_sdk::ruma::api::client::Error>,
+    size_bytes: usize,
+    raw: &dyn std::fmt::Display,
+) -> String {
+    use matrix_sdk::ruma::api::client::error::ErrorKind;
+    let status = api.map(|e| e.status_code.as_u16());
+    let too_large = api.is_some_and(|e| matches!(e.error_kind(), Some(ErrorKind::TooLarge)));
+    upload_error_message(context, status, too_large, size_bytes, &raw.to_string())
+}
+
+/// Map a plain (`Media::upload`) upload failure.
+pub(crate) fn map_upload_http_error(
+    context: &str,
+    e: &matrix_sdk::HttpError,
+    size_bytes: usize,
+) -> String {
+    client_api_upload_error(context, e.as_client_api_error(), size_bytes, e)
+}
+
+/// Map an encrypted-upload or avatar-upload failure.
+pub(crate) fn map_upload_sdk_error(
+    context: &str,
+    e: &matrix_sdk::Error,
+    size_bytes: usize,
+) -> String {
+    client_api_upload_error(context, e.as_client_api_error(), size_bytes, e)
+}
+
 /// Upload a file to the homeserver and return the source to reference it by.
 ///
 /// Returns a `MediaSource` rather than an mxc URL because an encrypted upload
@@ -120,11 +187,12 @@ pub async fn upload_media(
         .map_err(|e| format!("Invalid MIME type: {e}"))?;
 
     if room_needs_encryption(room).await {
+        let size = data.len();
         let mut cursor = std::io::Cursor::new(data);
         let file = client
             .upload_encrypted_file(&mime, &mut cursor)
             .await
-            .map_err(|e| format!("Failed to upload encrypted media: {e}"))?;
+            .map_err(|e| map_upload_sdk_error("Failed to upload encrypted media", &e, size))?;
         info!(url = %file.url, "Media uploaded (encrypted)");
         return Ok(MediaSource::Encrypted(Box::new(file)));
     }
@@ -146,11 +214,12 @@ async fn upload_plain(
     mime: &mime::Mime,
     data: Vec<u8>,
 ) -> Result<matrix_sdk::ruma::OwnedMxcUri, String> {
+    let size = data.len();
     let response = client
         .media()
         .upload(mime, data, None)
         .await
-        .map_err(|e| format!("Failed to upload media: {e}"))?;
+        .map_err(|e| map_upload_http_error("Failed to upload media", &e, size))?;
     Ok(response.content_uri)
 }
 
@@ -369,6 +438,7 @@ where
     // encrypted leg reports real bytes exactly as the plain one does — the
     // progress row (#63) does not care which path ran. What it measures on the
     // encrypted leg is the ciphertext, which is what actually goes over the wire.
+    let size = data.len();
     if room_needs_encryption(room).await {
         let mut cursor = std::io::Cursor::new(data);
         let request = client.upload_encrypted_file(&mime, &mut cursor);
@@ -378,7 +448,8 @@ where
         let result = request.await;
         pump.abort();
 
-        let file = result.map_err(|e| format!("Failed to upload encrypted media: {e}"))?;
+        let file = result
+            .map_err(|e| map_upload_sdk_error("Failed to upload encrypted media", &e, size))?;
         info!(url = %file.url, "Media uploaded (encrypted, with progress)");
         return Ok(MediaSource::Encrypted(Box::new(file)));
     }
@@ -390,7 +461,8 @@ where
     let response = request.await;
     pump.abort();
 
-    let response = response.map_err(|e| format!("Failed to upload media: {e}"))?;
+    let response =
+        response.map_err(|e| map_upload_http_error("Failed to upload media", &e, size))?;
 
     info!(url = %response.content_uri, "Media uploaded (with progress)");
     Ok(MediaSource::Plain(response.content_uri))
@@ -429,6 +501,90 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    // ── upload error mapping (#151) ──────────────────────────────────────────
+
+    #[test]
+    fn http_413_without_errcode_names_the_size_limit() {
+        // nginx's client_max_body_size: 413 with an HTML body, no errcode.
+        let msg = upload_error_message(
+            "Failed to upload media",
+            Some(413),
+            false,
+            59_000_000,
+            "the server returned an error: [413] <non-json-bytes>",
+        );
+        assert!(msg.contains("too large for your homeserver's upload limit"), "{msg}");
+        assert!(msg.contains("56.3 MB"), "{msg}");
+        assert!(!msg.contains("non-json"), "{msg}");
+    }
+
+    #[test]
+    fn m_too_large_errcode_is_mapped_even_without_413() {
+        let msg = upload_error_message("Failed to upload media", Some(400), true, 1_572_864, "raw");
+        assert!(msg.contains("too large"), "{msg}");
+        assert!(msg.contains("1.5 MB"), "{msg}");
+    }
+
+    #[test]
+    fn other_upload_errors_keep_context_and_sdk_text() {
+        let msg = upload_error_message("Failed to upload encrypted media", Some(500), false, 10, "boom");
+        assert_eq!(msg, "Failed to upload encrypted media: boom");
+        let msg = upload_error_message("Failed to upload media", None, false, 10, "timed out");
+        assert_eq!(msg, "Failed to upload media: timed out");
+    }
+
+    #[test]
+    fn client_api_413_error_routes_to_size_message() {
+        use matrix_sdk::ruma::api::client::error::{Error, ErrorBody};
+        let err = Error::new(
+            matrix_sdk::ruma::exports::http::StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorBody::NotJson {
+                bytes: Default::default(),
+                deserialization_error: std::sync::Arc::new(
+                    serde_json::from_str::<serde_json::Value>("<html>").unwrap_err(),
+                ),
+            },
+        );
+        let msg = client_api_upload_error("Failed to upload media", Some(&err), 59_000_000, &"raw");
+        assert!(msg.contains("56.3 MB"), "{msg}");
+    }
+
+    /// A 413 with a non-JSON body, wrapped the way matrix-sdk hands it back.
+    fn non_json_413() -> matrix_sdk::ruma::api::client::Error {
+        use matrix_sdk::ruma::api::client::error::{Error, ErrorBody};
+        Error::new(
+            matrix_sdk::ruma::exports::http::StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorBody::NotJson {
+                bytes: Default::default(),
+                deserialization_error: std::sync::Arc::new(
+                    serde_json::from_str::<serde_json::Value>("<html>").unwrap_err(),
+                ),
+            },
+        )
+    }
+
+    fn wrap_http(err: matrix_sdk::ruma::api::client::Error) -> matrix_sdk::HttpError {
+        use matrix_sdk::ruma::api::error::FromHttpResponseError;
+        use matrix_sdk::RumaApiError;
+        matrix_sdk::HttpError::Api(FromHttpResponseError::Server(RumaApiError::ClientApi(err)))
+    }
+
+    // Pins the real unwrapping, so a matrix-sdk upgrade that changes the error
+    // nesting fails here instead of bringing back "[413] <non-json-bytes>".
+    #[test]
+    fn plain_upload_http_413_maps_through_sdk_wrappers() {
+        let msg = map_upload_http_error("Failed to upload media", &wrap_http(non_json_413()), 59_000_000);
+        assert!(msg.contains("too large for your homeserver's upload limit"), "{msg}");
+    }
+
+    #[test]
+    fn encrypted_upload_sdk_413_maps_through_sdk_wrappers() {
+        let e = matrix_sdk::Error::Http(wrap_http(non_json_413()));
+        let msg = map_upload_sdk_error("Failed to upload encrypted media", &e, 59_000_000);
+        assert!(msg.contains("too large for your homeserver's upload limit"), "{msg}");
+    }
     use super::encrypt_for_room_state;
 
     /// The fail-safe direction is the whole point, so it is pinned rather than

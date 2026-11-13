@@ -1558,6 +1558,12 @@ Discord-style integrated GIF search, accessible from insert mode or command bar.
 
 **Backend:**
 - Rust backend handles API calls to Klipy/Giphy (API keys stored in config)
+- Keys are bring-your-own: set one in Settings → GIF or as `[gif] api_key` in
+  config.toml (the default is empty). `search_gifs` trims the key and, if it is
+  empty, fails before any network call with "No Klipy API key set. GIF search
+  needs your own key: …" (naming the active provider) instead of the
+  provider's bare HTTP error — an empty Klipy key otherwise yields a
+  `/api/v1//gifs/search` 404.
 - Downloads selected GIF, uploads to homeserver via media API
 - Caches recent search results and thumbnails locally
 
@@ -1837,6 +1843,15 @@ alongside `openExternalUrl` opened every link twice.
   encrypted. Applies to images (pasted and picked), files, videos and GIFs.
   Stickers are exempt — they reference media from an existing MSC2545 pack
   rather than uploading anything, so that media is already public.
+- **Upload size limit.** A file over the homeserver's upload limit (or its
+  reverse proxy's, e.g. nginx `client_max_body_size`, which answers with an
+  HTML page) fails with HTTP 413 / `M_TOO_LARGE`. Every upload (attachments,
+  GIFs, `upload_media`, avatars) maps that to "File (56.3 MB) is too large for
+  your homeserver's upload limit. Try a smaller file, or ask your server admin
+  to raise the limit." instead of the SDK's `[413] <non-json-bytes>`
+  (`upload_error_message` in `matrix/media.rs`). There is no pre-check against
+  `m.upload.size`: matrix-sdk 0.9 has no cached accessor for it, and an extra
+  config request per send is not worth it for an error the server reports anyway.
 - **Attachment progress.** Attaching is several phases the user cannot see —
   reading the picked file's bytes, handing them across IPC, then the upload
   itself — and on Android a multi-megabyte pick spends long enough in the first

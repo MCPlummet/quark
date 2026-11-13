@@ -213,8 +213,10 @@ export function openGifPicker(): void {
       gifPicker.setStatus(
         `${more.length} results · Tab: more · Enter: send · Esc: close`,
       );
-    } catch {
-      gifPicker.setStatus("Failed to load more");
+    } catch (err) {
+      gifPicker.setStatus(
+        `Failed to load more: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   });
 

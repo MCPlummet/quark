@@ -248,11 +248,12 @@ pub async fn set_avatar(
     let content_type: mime::Mime = mime
         .parse()
         .map_err(|e| format!("Invalid mime type {mime:?}: {e}"))?;
+    let size = bytes.len();
     let mxc = client
         .account()
         .upload_avatar(&content_type, bytes)
         .await
-        .map_err(|e| format!("Failed to upload avatar: {e}"))?;
+        .map_err(|e| crate::matrix::media::map_upload_sdk_error("Failed to upload avatar", &e, size))?;
     Ok(mxc.to_string())
 }
 
