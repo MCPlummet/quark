@@ -8,9 +8,12 @@
 // border) is decided in CSS by root classes, so flipping a setting is a class
 // change, not a re-render.
 //
-// Lookups are lazy and frugal: a sender is asked about once per session, the
-// first time they're painted while a treatment is on, in one batched request
-// per tick. The backend owns the cache, TTL and rate limit.
+// Lookups are lazy and frugal: a sender is asked about the first time they're
+// painted while a treatment is on, in one batched request per tick, and again
+// only when painted after RETRY_MS (still unknown: the lookup failed or is
+// slow) or TTL_MS (known: the answer is due a refresh). The backend owns the
+// cache, TTL, backoff and rate limit, and decides what is actually fetched;
+// these windows only keep every paint from asking it.
 
 import type { UserColorsConfig } from "../ipc/app_config.js";
 import { listenUserColors } from "../ipc/user_colors.js";
@@ -36,7 +39,11 @@ let _toggles: UserColorToggles = { name: false, avatar: false, border: false };
 /** Published colors; `null` = asked, has none. Absent = not known yet. */
 const _published = new Map<string, string | null>();
 const _overrides = new Map<string, string>();
-const _requested = new Set<string>();
+/** When each sender was last asked about. */
+const _askedAt = new Map<string, number>();
+/** The backend's RETRY_SECS and TTL_SECS (`matrix/user_colors.rs`). */
+const RETRY_MS = 5 * 60_000;
+const TTL_MS = 24 * 60 * 60_000;
 const _pending = new Set<string>();
 let _flushTimer: ReturnType<typeof setTimeout> | null = null;
 /** Bumped on reset, so answers for a previous session are dropped. */
@@ -91,7 +98,7 @@ export function resetUserColors(): void {
   _toggles = { name: false, avatar: false, border: false };
   _published.clear();
   _overrides.clear();
-  _requested.clear();
+  _askedAt.clear();
   _pending.clear();
   if (_flushTimer) clearTimeout(_flushTimer);
   _flushTimer = null;
@@ -160,7 +167,7 @@ export function paintUserColor(el: HTMLElement, userId: string): void {
     el.removeAttribute("data-user-color");
     el.classList.remove(LOW_CONTRAST);
   }
-  if (_initialized && anyOn(_toggles) && !_published.has(userId) && !_requested.has(userId)) {
+  if (_initialized && anyOn(_toggles) && dueToAsk(userId)) {
     queue(userId);
   }
 }
@@ -192,8 +199,15 @@ function repaintAll(): void {
   }
 }
 
+function dueToAsk(userId: string): boolean {
+  const at = _askedAt.get(userId);
+  // Known without asking (your own color, set this session): nothing to ask.
+  if (at === undefined) return !_published.has(userId);
+  return Date.now() - at >= (_published.has(userId) ? TTL_MS : RETRY_MS);
+}
+
 function queue(userId: string): void {
-  _requested.add(userId);
+  _askedAt.set(userId, Date.now());
   _pending.add(userId);
   _flushTimer ??= setTimeout(flush, 0);
 }
@@ -204,8 +218,8 @@ function flush(): void {
   _pending.clear();
   if (!ids.length || !_request) return;
   const generation = _generation;
-  // A failed ask isn't retried this session: the backend only refuses when
-  // logged out, and retrying on every paint is the storm this avoids.
+  // A failed ask (the backend only refuses when logged out) is asked again
+  // like any unanswered one: on a paint after RETRY_MS, never on every paint.
   _request(ids)
     .then((known) => {
       if (generation !== _generation) return;

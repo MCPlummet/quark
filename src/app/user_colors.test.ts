@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   initUserColors,
   localUserColor,
@@ -123,6 +123,49 @@ describe("user colors store", () => {
     paintUserColor(el(), "@a:x");
     await flush();
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  describe("asking again", () => {
+    // Only Date is faked: the store's setTimeout(0) batching stays real.
+    const T0 = Date.UTC(2026, 10, 13, 12);
+    const MIN = 60_000;
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("re-asks about a sender still unknown five minutes on", async () => {
+      // A lookup that failed (offline, 429, 5xx) answers nothing; the backend
+      // backs off, and a sender painted after that is asked about again.
+      initUserColors({ config: config(), request });
+      paintUserColor(el(), "@a:x");
+      await flush();
+      vi.setSystemTime(T0 + 4 * MIN);
+      paintUserColor(el(), "@a:x");
+      await flush();
+      expect(request).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(T0 + 5 * MIN);
+      paintUserColor(el(), "@a:x");
+      await flush();
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls[1][0]).toEqual(["@a:x"]);
+    });
+
+    it("re-asks about a known sender only once the answer is a day old", async () => {
+      request.mockResolvedValue({ "@a:x": "#ff4466" });
+      initUserColors({ config: config(), request });
+      paintUserColor(el(), "@a:x");
+      await flush();
+      vi.setSystemTime(T0 + 60 * MIN);
+      paintUserColor(el(), "@a:x");
+      await flush();
+      expect(request).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(T0 + 24 * 60 * MIN);
+      paintUserColor(el(), "@a:x");
+      await flush();
+      expect(request).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("applies what the request returns", async () => {

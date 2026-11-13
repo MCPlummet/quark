@@ -1976,19 +1976,21 @@ neither route exists.
 
 **Fetching.** Other users' colors are read from their full profile
 (`GET /profile/{userId}`; custom fields ride along on servers that have them),
-lazily — only for senders actually rendered, once per session each, batched per
-tick. The backend allows one request per user in flight and four at a time,
+lazily — only for senders actually rendered, batched per tick — and a sender is
+asked about again only when rendered five minutes on with no answer yet, or a
+day after their answer. The backend allows one request per user in flight and four at a time,
 caches every answer (including "no color") for 24 hours in `user_colors.json`
 in the app data dir (stale answers are shown while being refreshed), and clears
 the cache on logout. A file written for another account is ignored. Before the
 session's first lookup it checks that the homeserver has extended profiles —
 `/versions` listing v1.16 or later or MSC4133, else a `profile_fields`
 capability — and when it clearly doesn't, nothing more is asked that session
-(when that can't be told, lookups go ahead). A failed lookup (offline,
-rate-limited, 5xx) isn't retried for five minutes; since each sender is asked
-about once per session, in practice that means the next launch. Someone's
-change to their color shows up at the first launch after their entry expires;
-there is no push for profile fields. Your own color is cached the same way,
+(when that can't be told, lookups go ahead). A failed lookup isn't retried for
+five minutes, and a 429 (for its `retry_after`) or a 5xx pauses every lookup,
+not just that one — the batch's queued lookups aren't sent. An answer that lands
+after logout is dropped rather than written into the next account's cache.
+Someone's change to their color shows up once their entry is a day old and
+they're rendered again; there is no push for profile fields. Your own color is cached the same way,
 and updated the moment you save.
 
 ### Not in Scope (v1)
