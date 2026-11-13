@@ -2721,6 +2721,7 @@ pub async fn get_app_config(
 
 /// Persist updated application configuration to disk and update in-memory state.
 /// Also syncs the media cache size limit when `media.cache_size_mb` changes.
+/// `[user_colors.overrides]` is kept as stored: `set_user_color_override` owns it.
 #[tauri::command]
 pub async fn set_app_config(
     config_state: State<'_, Mutex<AppConfig>>,
@@ -2728,11 +2729,15 @@ pub async fn set_app_config(
     paths: State<'_, crate::Paths>,
     config: AppConfig,
 ) -> Result<(), String> {
-    let path = crate::config::app_config::config_path_in(&paths.config_dir);
-    crate::config::app_config::save_app_config_to(&path, &config)?;
-    let new_cache_mb = config.media.cache_size_mb;
+    use crate::config::app_config::{apply_whole_config, config_path_in, save_app_config_to};
+    let path = config_path_in(&paths.config_dir);
+    // Saved and swapped under the lock, like `set_user_color_override`, so the
+    // file and the state can't end up holding different writes.
     let mut guard = config_state.lock().map_err(|_| "App config lock poisoned")?;
-    *guard = config;
+    let next = apply_whole_config(&guard, config);
+    save_app_config_to(&path, &next)?;
+    let new_cache_mb = next.media.cache_size_mb;
+    *guard = next;
     drop(guard);
     // Sync MediaCache size limit in case it changed.
     let _ = cache_state.0.set_max_size_mb(new_cache_mb);
@@ -2740,9 +2745,10 @@ pub async fn set_app_config(
 }
 
 /// Set (or, with `None`, remove) this device's local color for another user
-/// (#45). Mutates `[user_colors.overrides]` under the config lock and saves, so
-/// it can't race a whole-config write with a stale copy of the table. Returns
-/// the color as stored (normalized).
+/// (#45). Mutates `[user_colors.overrides]` under the config lock and saves.
+/// This is the table's only writer — `set_app_config` keeps the stored one —
+/// so a whole-config write with a stale copy can't undo it. Returns the color
+/// as stored (normalized).
 #[tauri::command]
 pub async fn set_user_color_override(
     config_state: State<'_, Mutex<AppConfig>>,

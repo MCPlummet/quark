@@ -947,7 +947,8 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       return { synced: true, warning: null };
     case "set_app_config": {
       const cfg = args?.config as { user_colors?: typeof _mockUserColors } | undefined;
-      if (cfg?.user_colors) _mockUserColors = structuredClone(cfg.user_colors);
+      // As in the backend, overrides are only set_user_color_override's.
+      if (cfg?.user_colors) _mockUserColors = { ...structuredClone(cfg.user_colors), overrides: _mockUserColors.overrides };
       return null;
     }
     case "set_notification_config":
