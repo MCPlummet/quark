@@ -210,6 +210,7 @@ export class ProfileEditDialog extends DialogBase {
 
   private async _submit(): Promise<void> {
     if (!this._initial || !this._onSubmit) return;
+    this._colorField.commitPending();
     if (this._colorField.hasInvalidInput) {
       this._setStatus("That isn't a color — use #rrggbb.", "error");
       return;

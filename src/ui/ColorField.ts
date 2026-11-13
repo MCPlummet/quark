@@ -138,6 +138,17 @@ export class ColorField {
     this._reason.hidden = !(disabled && reason);
   }
 
+  /**
+   * Commit whatever the hex field holds but hasn't committed yet — for a
+   * caller about to read `value`. Typing commits on change or Enter, and a
+   * click that doesn't take focus (macOS WebKit) fires neither. A no-op when
+   * the text already matches the committed color.
+   */
+  commitPending(): void {
+    if (this._hex.value === (this._value ?? "")) return;
+    this._commitTyped();
+  }
+
   /** Re-judge the preview's contrast (after a theme change). */
   refreshPreview(): void {
     const low = this._value !== null && isLowContrast(this._value, themeBackground());

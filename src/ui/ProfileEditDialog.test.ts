@@ -138,6 +138,25 @@ describe("ProfileEditDialog — color", () => {
     expect(submitted().userColor).toBe("#00ff41");
   });
 
+  // A click that doesn't take focus (macOS WebKit; jsdom's .click() too)
+  // fires no change on the hex field, so save must read what's typed.
+  it("saves a hex typed but never committed", async () => {
+    open();
+    q<HTMLInputElement>(".color-field__hex").value = "#ff4466";
+    await save();
+    expect(submitted().userColor).toBe("#ff4466");
+    expect(submitted().userColorChanged).toBe(true);
+  });
+
+  it("won't save junk typed but never committed", async () => {
+    open();
+    renameTo("Myself");
+    q<HTMLInputElement>(".color-field__hex").value = "zzz";
+    await save();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(q(".profile-edit-dialog__status").textContent).toBe("That isn't a color — use #rrggbb.");
+  });
+
   it("surfaces a save failure", async () => {
     onSubmit.mockRejectedValue(new Error(UNSUPPORTED));
     open();
