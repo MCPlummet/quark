@@ -7,6 +7,7 @@ import {
   publishSpaceMembers,
   computeSpaceBadges,
   formatMentionCount,
+  readSpaceListing,
   type SpaceBadge,
 } from "./space_badges.js";
 
@@ -167,6 +168,25 @@ describe("buildSpaceMembership", () => {
     expect((await complete)[S]).toEqual(["!r1"]);
   });
 
+  it("never reads below a top-level space's own subspaces", async () => {
+    // S2 is a joined subspace of S, listed too; S3 (inside S2) is a level
+    // further down — no space's list shows its rooms, so reading it (for an
+    // unjoined S3, a federated /hierarchy) would be wasted load.
+    const getChildren = fromTree();
+    const { complete } = await buildSpaceMembership([S, S2], getChildren);
+    await complete;
+    expect(getChildren.mock.calls.map(([id]) => id)).not.toContain(S3);
+  });
+
+  it("reuses its reads for the open space's list", async () => {
+    const getChildren = fromTree();
+    const { complete, childrenOf } = await buildSpaceMembership([S, S2], getChildren);
+    await complete;
+    const listing = await readSpaceListing(S, childrenOf);
+    expect(listing.subspaces.map((s) => s.space.room_id)).toEqual([S2]);
+    expect(getChildren).toHaveBeenCalledTimes(2); // S and S2, once each
+  });
+
   it("counts a room listed directly and in a subspace once", async () => {
     const getChildren = vi.fn(async (id: string) =>
       id === S ? [child("!r1"), child(S2, true)] : [child("!r1")],
@@ -188,6 +208,29 @@ describe("publishSpaceMembers", () => {
     await complete;
     await Promise.resolve();
     expect(AppState.get("spaceMembers")).toEqual({ [S]: ["!r1", "!r2"] });
+  });
+
+  it("keeps the last subspace rooms while a refresh re-reads them", async () => {
+    // A badge lit only by a subspace room must not blink off on each refresh.
+    publishSpaceMembers({ members: { [S]: ["!r1"] }, complete: Promise.resolve({ [S]: ["!r1", "!r2"] }) }, [S]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(AppState.get("spaceMembers")).toEqual({ [S]: ["!r1", "!r2"] });
+
+    const pending = new Promise<Record<string, string[]>>(() => {});
+    publishSpaceMembers({ members: { [S]: ["!r1", "!r9"], [S2]: ["!x"] }, complete: pending }, [S, S2]);
+    const interim = AppState.get("spaceMembers")!;
+    expect([...interim[S]].sort()).toEqual(["!r1", "!r2", "!r9"]);
+    expect(interim[S2]).toEqual(["!x"]);
+  });
+
+  it("drops a room the finished refresh no longer lists", async () => {
+    AppState.set("spaceMembers", { [S]: ["!r1", "!gone"] });
+    const complete = Promise.resolve({ [S]: ["!r1"] });
+    publishSpaceMembers({ members: { [S]: ["!r1"] }, complete }, [S]);
+    await complete;
+    await Promise.resolve();
+    expect(AppState.get("spaceMembers")).toEqual({ [S]: ["!r1"] });
   });
 
   it("never lets a slow, older fill overwrite a newer refresh", async () => {
