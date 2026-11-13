@@ -86,6 +86,19 @@ describe("refreshRooms", () => {
     expect(listed()).toEqual(["!c:x", "!a:x"]);
   });
 
+  it("reads the open space's children once per refresh, for its badge and its list", async () => {
+    vi.mocked(ipc.getRooms).mockResolvedValue([room("!a:x"), room("!b:x")]);
+    const sub = child("!sub:x", { is_space: true, name: "Sub" });
+    vi.mocked(ipc.getSpaceChildren).mockImplementation(async (id: string) =>
+      id === "!work:x" ? [child("!a:x"), sub] : [child("!b:x")],
+    );
+    await refreshRooms();
+    expect(listed()).toEqual(["!a:x", "!b:x"]);
+    const reads = vi.mocked(ipc.getSpaceChildren).mock.calls.map(([id]) => id);
+    expect(reads.filter((id) => id === "!work:x")).toHaveLength(1);
+    expect(reads.filter((id) => id === "!sub:x")).toHaveLength(1);
+  });
+
   it("clears the open room when it was left elsewhere", async () => {
     AppState.set("currentRoomId", "!gone:x");
     vi.mocked(ipc.getRooms).mockResolvedValue([room("!a:x")]);
