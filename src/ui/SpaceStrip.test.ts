@@ -143,6 +143,26 @@ describe("SpaceStrip", () => {
       expect(dms?.getAttribute("aria-label")).toBe("Direct Messages, unread");
     });
 
+    it("leaves a space whose badge didn't change untouched", () => {
+      // roomListCache is rewritten on every incoming message; most of those
+      // writes change no badge, and must not churn the strip's DOM.
+      strip.setSpaces([{ id: SPACE_ID, name: "Work" }, { id: "!b:server", name: "Other" }]);
+      strip.setBadges(new Map([
+        [SPACE_ID, { unread: true, mentions: 0 }],
+        ["!b:server", { unread: false, mentions: 1 }],
+      ]));
+      const kept = badgeEl();
+      const observer = new MutationObserver(() => {});
+      observer.observe(itemEl()!, { childList: true, attributes: true, subtree: true });
+      strip.setBadges(new Map([
+        [SPACE_ID, { unread: true, mentions: 0 }],
+        ["!b:server", { unread: false, mentions: 2 }],
+      ]));
+      expect(observer.takeRecords()).toEqual([]);
+      expect(badgeEl()).toBe(kept);
+      expect(badgeEl("!b:server")?.textContent).toBe("2");
+    });
+
     it("survives setSpaces() re-render", () => {
       strip.setBadges(new Map([[SPACE_ID, { unread: false, mentions: 2 }]]));
       strip.setSpaces([{ id: SPACE_ID, name: "Work" }]);

@@ -93,8 +93,13 @@ export class SpaceStrip {
    * Kept on the strip, like resolved avatars, so a re-render restores them.
    */
   setBadges(badges: Map<string, SpaceBadge>): void {
+    const previous = this._badges;
     this._badges = new Map(badges);
+    // Called on every roomListCache write — each incoming message — so only
+    // touch the items whose badge actually changed.
     for (const el of this._el.querySelectorAll<HTMLElement>(".space-strip__item")) {
+      const id = el.dataset.spaceId;
+      if (id !== undefined && sameBadge(previous.get(id), this._badges.get(id))) continue;
       this._applyBadge(el);
     }
   }
@@ -332,4 +337,12 @@ export class SpaceStrip {
 
   // Navigation (j/k/arrows) is handled by the global keymap via AppState.navDown/navUp.
   // Enter/Space activation is handled by individual item listeners in _createItem.
+}
+
+/** Would these two draw the same badge (and label)? A zero badge draws none. */
+function sameBadge(a: SpaceBadge | undefined, b: SpaceBadge | undefined): boolean {
+  const shown = (x: SpaceBadge | undefined) => (x && (x.unread || x.mentions > 0) ? x : undefined);
+  const [x, y] = [shown(a), shown(b)];
+  if (!x || !y) return x === y;
+  return x.mentions > 0 || y.mentions > 0 ? x.mentions === y.mentions : x.unread === y.unread;
 }
