@@ -11,9 +11,15 @@
 // Lookups are lazy and frugal: a sender is asked about the first time they're
 // painted while a treatment is on, in one batched request per tick, and again
 // only when painted after RETRY_MS (still unknown: the lookup failed or is
-// slow) or TTL_MS (known: the answer is due a refresh). The backend owns the
-// cache, TTL, backoff and rate limit, and decides what is actually fetched;
-// these windows only keep every paint from asking it.
+// slow) or TTL_MS (known: the answer is due a refresh) — or at once when their
+// profile is opened. The backend owns the cache, TTL, backoff and rate limit,
+// and decides what is actually fetched; these windows only keep every paint
+// from asking it.
+//
+// Answers come two ways that nothing orders: the request's reply (what the
+// backend had cached, possibly a day old) and the pushed result of the fresh
+// lookup it starts. So nothing is asked before pushes are listened for, and a
+// reply never overwrites what was pushed for a user after it was asked.
 
 import type { UserColorsConfig } from "../ipc/app_config.js";
 import { listenUserColors } from "../ipc/user_colors.js";
@@ -25,7 +31,13 @@ export interface UserColorToggles {
   border: boolean;
 }
 
-type RequestColors = (userIds: string[]) => Promise<Record<string, string | null>>;
+type RequestColors = (
+  userIds: string[],
+  opts?: { force: boolean },
+) => Promise<Record<string, string | null>>;
+
+/** Hears a user's published color: a color, `null` for none, `undefined` if unknown. */
+export type UserColorWatcher = (published: string | null | undefined) => void;
 
 /** Painted elements carry their user here, so repaints find them. */
 const PAINTED_ATTR = "data-user-color-for";
@@ -49,6 +61,14 @@ let _flushTimer: ReturnType<typeof setTimeout> | null = null;
 /** Bumped on reset, so answers for a previous session are dropped. */
 let _generation = 0;
 let _unlisten: (() => void) | null = null;
+/** Settles once pushed answers are listened for; requests wait on it. */
+let _listening: Promise<void> = Promise.resolve();
+/** Counts answers received first-hand (pushed, or your own just saved)... */
+let _received = 0;
+/** ...and the count at each user's latest, which a reply sent before it
+ *  mustn't overwrite. */
+const _receivedAt = new Map<string, number>();
+const _watchers = new Map<string, Set<UserColorWatcher>>();
 
 const anyOn = (t: UserColorToggles) => t.name || t.avatar || t.border;
 
@@ -81,10 +101,14 @@ export function initUserColors(opts: { config: UserColorsConfig; request: Reques
     _initialized = true;
     document.documentElement.addEventListener("quark:theme-applied", onThemeApplied);
     const generation = _generation;
-    void listenUserColors((u) => receiveUserColor(u.user_id, u.color)).then((unlisten) => {
-      if (generation === _generation) _unlisten = unlisten;
-      else unlisten();
-    });
+    _listening = listenUserColors((u) => receiveUserColor(u.user_id, u.color)).then(
+      (unlisten) => {
+        if (generation === _generation) _unlisten = unlisten;
+        else unlisten();
+      },
+      // Not listening (no Tauri): replies are all there is, so don't hold them.
+      () => {},
+    );
   }
   setUserColorToggles(opts.config);
   repaintAll();
@@ -100,6 +124,9 @@ export function resetUserColors(): void {
   _overrides.clear();
   _askedAt.clear();
   _pending.clear();
+  _receivedAt.clear();
+  _watchers.clear();
+  _listening = Promise.resolve();
   if (_flushTimer) clearTimeout(_flushTimer);
   _flushTimer = null;
   _unlisten?.();
@@ -145,10 +172,36 @@ export function setLocalUserColor(userId: string, color: string | null): void {
   repaintUser(userId);
 }
 
-/** A published color learned from the backend; invalid values mean none. */
+/**
+ * A published color learned first-hand — pushed by the backend, or your own
+ * just saved; invalid values mean none. Beats any reply already on its way.
+ */
 export function receiveUserColor(userId: string, color: string | null): void {
-  _published.set(userId, normalizeHex(color));
-  repaintUser(userId);
+  _receivedAt.set(userId, ++_received);
+  applyPublished(userId, color);
+}
+
+/**
+ * Ask about `userId` again now, as their profile is being opened: past the
+ * day an answer is trusted (the backend still won't re-ask within a minute,
+ * nor while backing off). The answer is pushed; nothing if lookups are off.
+ */
+export function refetchUserColor(userId: string): void {
+  if (!_initialized || !anyOn(_toggles)) return;
+  _askedAt.set(userId, Date.now());
+  send([userId], { force: true });
+}
+
+/** Call `onChange` whenever `userId`'s published color changes, until the
+ *  returned function is called. */
+export function watchUserColor(userId: string, onChange: UserColorWatcher): () => void {
+  let set = _watchers.get(userId);
+  if (!set) _watchers.set(userId, (set = new Set()));
+  set.add(onChange);
+  return () => {
+    set.delete(onChange);
+    if (!set.size && _watchers.get(userId) === set) _watchers.delete(userId);
+  };
 }
 
 /**
@@ -178,6 +231,14 @@ export function refreshUserColorContrast(): void {
 }
 
 // ── Internals ────────────────────────────────────────────────────────────────
+
+function applyPublished(userId: string, color: string | null): void {
+  const next = normalizeHex(color);
+  const changed = !_published.has(userId) || _published.get(userId) !== next;
+  _published.set(userId, next);
+  repaintUser(userId);
+  if (changed) for (const watch of [...(_watchers.get(userId) ?? [])]) watch(next);
+}
 
 function unpaint(el: HTMLElement): void {
   el.removeAttribute(PAINTED_ATTR);
@@ -216,14 +277,27 @@ function flush(): void {
   _flushTimer = null;
   const ids = [..._pending];
   _pending.clear();
-  if (!ids.length || !_request) return;
+  if (ids.length) send(ids);
+}
+
+function send(ids: string[], opts?: { force: boolean }): void {
   const generation = _generation;
   // A failed ask (the backend only refuses when logged out) is asked again
   // like any unanswered one: on a paint after RETRY_MS, never on every paint.
-  _request(ids)
-    .then((known) => {
-      if (generation !== _generation) return;
-      for (const [userId, color] of Object.entries(known)) receiveUserColor(userId, color);
+  void _listening
+    .then(() => {
+      const request = _request;
+      if (generation !== _generation || !request) return;
+      const sentAt = _received;
+      return (opts ? request(ids, opts) : request(ids)).then((known) => {
+        if (generation !== _generation) return;
+        for (const [userId, color] of Object.entries(known)) {
+          // Received first-hand since asking: newer than this reply, which
+          // may have been a day old already.
+          if ((_receivedAt.get(userId) ?? 0) > sentAt) continue;
+          applyPublished(userId, color);
+        }
+      });
     })
     .catch(() => {});
 }
