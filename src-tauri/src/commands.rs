@@ -410,8 +410,11 @@ pub async fn logout(
     state: State<'_, MatrixState>,
     sync_state: State<'_, SyncState>,
     paths: State<'_, crate::Paths>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    // Other people's colors as this account saw them go with the account.
+    colors.0.clear();
     // Abort the sync loop before logging out to stop all background requests.
     {
         let mut guard = sync_state.handle.lock().map_err(|_| "SyncState lock poisoned")?;
@@ -474,8 +477,10 @@ pub async fn logout(
 #[tauri::command]
 pub async fn clear_session(
     paths: State<'_, crate::Paths>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    colors.0.clear();
     if let Ok(data_path) = app_handle.path().app_data_dir() {
         let _ = tokio::task::spawn_blocking(move || wipe_local_session(&data_path)).await;
     }
@@ -2187,6 +2192,91 @@ pub async fn get_own_profile(
     crate::matrix::client::get_own_profile(&client).await
 }
 
+/// The account's published color (`tel.quark.usercolor`, #45) and whether the
+/// homeserver lets it be changed (`None`: it doesn't say — saving will tell).
+#[tauri::command]
+pub async fn get_own_user_color(
+    state: State<'_, MatrixState>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
+    app: AppHandle,
+) -> Result<crate::matrix::user_colors::OwnUserColor, String> {
+    use crate::matrix::user_colors::{fetch_color, own_can_set, OwnUserColor};
+    let client = get_client(&state)?;
+    let me = client.user_id().ok_or("Not logged in")?.to_owned();
+    let (color, can_set) = tokio::join!(fetch_color(&client, &me), own_can_set(&client));
+    // Only a definite answer updates the cache; a failed read leaves it be.
+    let color = match color {
+        Ok(color) => {
+            announce_own_color(&colors, &app, me.as_str(), color.clone());
+            color
+        }
+        Err(_) => None,
+    };
+    Ok(OwnUserColor { color, can_set })
+}
+
+/// Publish (or, with `None`, remove) the account's color. Returns it as stored.
+#[tauri::command]
+pub async fn set_own_user_color(
+    state: State<'_, MatrixState>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
+    app: AppHandle,
+    color: Option<String>,
+) -> Result<Option<String>, String> {
+    let client = get_client(&state)?;
+    let me = client.user_id().ok_or("Not logged in")?.to_string();
+    let stored = crate::matrix::user_colors::set_own_color(&client, color.as_deref()).await?;
+    announce_own_color(&colors, &app, &me, stored.clone());
+    Ok(stored)
+}
+
+/// Record the account's own color first-hand and repaint its messages now,
+/// rather than when its cache entry would next expire.
+fn announce_own_color(
+    colors: &State<'_, crate::matrix::user_colors::UserColorState>,
+    app: &AppHandle,
+    me: &str,
+    color: Option<String>,
+) {
+    use crate::matrix::user_colors::{now_secs, UserColorUpdate, EVENT};
+    use tauri::Emitter;
+    colors.0.ensure_account(me);
+    colors.0.put_own(me, color.clone(), now_secs());
+    colors.0.persist();
+    let _ = app.emit(EVENT, UserColorUpdate { user_id: me.to_string(), color });
+}
+
+/// What's known of `user_ids`' colors right now (stale answers included,
+/// unknown IDs absent), with lookups started in the background for the ones
+/// that are unknown or stale. Their answers arrive as `quark://user-color`.
+/// Rate-safety lives in the cache: see `matrix::user_colors`.
+#[tauri::command]
+pub async fn request_user_colors(
+    state: State<'_, MatrixState>,
+    colors: State<'_, crate::matrix::user_colors::UserColorState>,
+    app: AppHandle,
+    user_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    use crate::matrix::user_colors::{now_secs, refresh, UserColorUpdate, EVENT};
+    use tauri::Emitter;
+    let client = get_client(&state)?;
+    let me = client.user_id().ok_or("Not logged in")?.to_string();
+    let ids: Vec<String> = user_ids
+        .into_iter()
+        .filter(|id| crate::config::user_colors::is_user_id(id))
+        .collect();
+    let cache = colors.0.clone();
+    cache.ensure_account(&me);
+    let known = cache.snapshot(&ids);
+    let due = cache.take_due(&ids, now_secs());
+    if !due.is_empty() {
+        tokio::spawn(refresh(client, cache, due, move |user_id, color| {
+            let _ = app.emit(EVENT, UserColorUpdate { user_id: user_id.to_string(), color });
+        }));
+    }
+    Ok(known)
+}
+
 #[tauri::command]
 pub async fn set_display_name(
     state: State<'_, MatrixState>,
@@ -2633,6 +2723,7 @@ pub async fn get_app_config(
 
 /// Persist updated application configuration to disk and update in-memory state.
 /// Also syncs the media cache size limit when `media.cache_size_mb` changes.
+/// `[user_colors.overrides]` is kept as stored: `set_user_color_override` owns it.
 #[tauri::command]
 pub async fn set_app_config(
     config_state: State<'_, Mutex<AppConfig>>,
@@ -2640,15 +2731,51 @@ pub async fn set_app_config(
     paths: State<'_, crate::Paths>,
     config: AppConfig,
 ) -> Result<(), String> {
-    let path = crate::config::app_config::config_path_in(&paths.config_dir);
-    crate::config::app_config::save_app_config_to(&path, &config)?;
-    let new_cache_mb = config.media.cache_size_mb;
+    use crate::config::app_config::{apply_whole_config, config_path_in, save_app_config_to};
+    let path = config_path_in(&paths.config_dir);
+    // Saved and swapped under the lock, like `set_user_color_override`, so the
+    // file and the state can't end up holding different writes.
     let mut guard = config_state.lock().map_err(|_| "App config lock poisoned")?;
-    *guard = config;
+    let next = apply_whole_config(&guard, config);
+    save_app_config_to(&path, &next)?;
+    let new_cache_mb = next.media.cache_size_mb;
+    *guard = next;
     drop(guard);
     // Sync MediaCache size limit in case it changed.
     let _ = cache_state.0.set_max_size_mb(new_cache_mb);
     Ok(())
+}
+
+/// Set (or, with `None`, remove) this device's local color for another user
+/// (#45). Mutates `[user_colors.overrides]` under the config lock and saves.
+/// This is the table's only writer — `set_app_config` keeps the stored one —
+/// so a whole-config write with a stale copy can't undo it. Returns the color
+/// as stored (normalized).
+#[tauri::command]
+pub async fn set_user_color_override(
+    config_state: State<'_, Mutex<AppConfig>>,
+    paths: State<'_, crate::Paths>,
+    user_id: String,
+    color: Option<String>,
+) -> Result<Option<String>, String> {
+    use crate::config::user_colors::{is_user_id, normalize_color};
+    if !is_user_id(&user_id) {
+        return Err(format!("Not a user ID: {user_id}"));
+    }
+    let color = match color {
+        Some(raw) => Some(normalize_color(&raw).ok_or_else(|| format!("Not a color: {raw}"))?),
+        None => None,
+    };
+    let path = crate::config::app_config::config_path_in(&paths.config_dir);
+    let mut guard = config_state.lock().map_err(|_| "App config lock poisoned")?;
+    let mut next = guard.clone();
+    match &color {
+        Some(c) => next.user_colors.overrides.insert(user_id, c.clone()),
+        None => next.user_colors.overrides.remove(&user_id),
+    };
+    crate::config::app_config::save_app_config_to(&path, &next)?;
+    *guard = next;
+    Ok(color)
 }
 
 /// Check the user's configured channel for an available update. Returns

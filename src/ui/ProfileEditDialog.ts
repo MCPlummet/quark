@@ -4,6 +4,10 @@
 
 import { keymapManager } from "../vim/keybindings.js";
 import { DialogBase } from "./DialogBase.js";
+import { ColorField } from "./ColorField.js";
+
+/** Why the color row is disabled, when the homeserver says it can't be set. */
+const COLOR_UNSUPPORTED = "Your homeserver doesn't support custom profile fields.";
 
 export interface ProfileEditInitial {
   /** Read-only display of the user's MXID for context. */
@@ -12,6 +16,10 @@ export interface ProfileEditInitial {
   displayName: string | null;
   /** Current status (presence status_msg); null when unset. */
   statusMessage: string | null;
+  /** Published color (`tel.quark.usercolor`); null when unset. */
+  userColor: string | null;
+  /** Whether the homeserver lets it be set; null when it doesn't say. */
+  userColorSettable: boolean | null;
 }
 
 export interface ProfileEditSubmit {
@@ -23,12 +31,17 @@ export interface ProfileEditSubmit {
   displayNameChanged: boolean;
   /** True if the status message was changed from initial. */
   statusChanged: boolean;
+  /** The chosen color (normalized), or null to clear it. */
+  userColor: string | null;
+  /** True if the color was changed from initial. */
+  userColorChanged: boolean;
 }
 
 export class ProfileEditDialog extends DialogBase {
   private _userIdEl: HTMLElement;
   private _displayNameInput: HTMLInputElement;
   private _statusInput: HTMLInputElement;
+  private _colorField: ColorField;
   private _saveBtn: HTMLButtonElement;
   private _avatarBtn: HTMLButtonElement;
   private _statusEl: HTMLElement;
@@ -90,6 +103,19 @@ export class ProfileEditDialog extends DialogBase {
     statusRow.appendChild(statusLabel);
     this.content.appendChild(statusRow);
 
+    // Color (#45) — published as tel.quark.usercolor. Not a <label>: the field
+    // holds several controls. Saved with the rest on [save].
+    const colorRow = document.createElement("div");
+    colorRow.className = "profile-edit-dialog__row";
+    const colorLabel = document.createElement("div");
+    colorLabel.className = "profile-edit-dialog__label";
+    colorLabel.textContent = "color";
+    this._colorField = new ColorField({ previewText: "" });
+    colorLabel.appendChild(this._colorField.getElement());
+    colorRow.appendChild(colorLabel);
+    this.content.appendChild(colorRow);
+    this._displayNameInput.addEventListener("input", () => this._syncColorPreview());
+
     // Avatar row — delegates to the shared picker/upload pipeline; hidden
     // when no handler was supplied.
     const avatarRow = document.createElement("div");
@@ -140,6 +166,9 @@ export class ProfileEditDialog extends DialogBase {
     this._userIdEl.textContent = initial.userId;
     this._displayNameInput.value = initial.displayName ?? "";
     this._statusInput.value = initial.statusMessage ?? "";
+    this._colorField.value = initial.userColor;
+    this._colorField.setDisabled(initial.userColorSettable === false, COLOR_UNSUPPORTED);
+    this._syncColorPreview();
     this._setStatus("", "neutral");
     this._setSaving(false);
     this.reveal();
@@ -167,6 +196,9 @@ export class ProfileEditDialog extends DialogBase {
       return;
     }
     if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) {
+      // A focused button — a swatch, [ clear ], [ cancel ] — activates on
+      // Enter by itself; submitting instead would skip what it does.
+      if (e.target instanceof HTMLButtonElement) return;
       e.preventDefault();
       void this._submit();
       return;
@@ -178,12 +210,19 @@ export class ProfileEditDialog extends DialogBase {
 
   private async _submit(): Promise<void> {
     if (!this._initial || !this._onSubmit) return;
+    this._colorField.commitPending();
+    if (this._colorField.hasInvalidInput) {
+      this._setStatus("That isn't a color — use #rrggbb.", "error");
+      return;
+    }
     const displayName = this._displayNameInput.value.trim();
     const statusMessage = this._statusInput.value.trim();
     const displayNameChanged = displayName !== (this._initial.displayName ?? "");
     const statusChanged = statusMessage !== (this._initial.statusMessage ?? "");
+    const userColor = this._colorField.value;
+    const userColorChanged = userColor !== this._initial.userColor;
 
-    if (!displayNameChanged && !statusChanged) {
+    if (!displayNameChanged && !statusChanged && !userColorChanged) {
       this._setStatus("Nothing changed.", "neutral");
       return;
     }
@@ -191,7 +230,9 @@ export class ProfileEditDialog extends DialogBase {
     this._setSaving(true);
     this._setStatus("Saving…", "neutral");
     try {
-      await this._onSubmit({ displayName, statusMessage, displayNameChanged, statusChanged });
+      await this._onSubmit({
+        displayName, statusMessage, displayNameChanged, statusChanged, userColor, userColorChanged,
+      });
       this._setStatus("Saved.", "success");
       // Briefly show success before dismissing, so the user gets feedback.
       setTimeout(() => this.hide(), 400);
@@ -200,6 +241,11 @@ export class ProfileEditDialog extends DialogBase {
       this._setStatus(`Failed: ${msg}`, "error");
       this._setSaving(false);
     }
+  }
+
+  /** The preview shows the name being typed, or the user ID when it's blank. */
+  private _syncColorPreview(): void {
+    this._colorField.setPreviewText(this._displayNameInput.value.trim() || this._initial?.userId || "");
   }
 
   private _setSaving(saving: boolean): void {

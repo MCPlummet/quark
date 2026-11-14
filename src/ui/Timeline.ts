@@ -7,6 +7,7 @@ import type { SearchResult } from "../ipc/types.js";
 import { appendCaption, buildFileAffordance, renderMessageText } from "./message_body.js";
 import { isAnimatedUrl } from "../app/animated_urls.js";
 import { hashColor } from "./avatarColors.js";
+import { paintUserColor } from "../app/user_colors.js";
 import { isMobile, viewportPan } from "../app/mobile.js";
 import { mountOverlay } from "./overlay.js";
 import { ReceiptIndex, readersSignature, type Reader } from "./receipt_placement.js";
@@ -171,9 +172,8 @@ function buildFallbackAvatar(sender: string): HTMLElement {
   const el = document.createElement("span");
   el.className = "message-group__avatar-fallback";
   el.textContent = initial;
-  el.style.color = color;
-  el.style.border = `1px solid ${color}`;
-  el.style.opacity = "0.85";
+  // Drawn by CSS from this, so a sender's user color can take its place.
+  el.style.setProperty("--hash-color", color);
   el.setAttribute("aria-hidden", "true");
   return el;
 }
@@ -812,6 +812,8 @@ function buildMessageGroup(msgs: MessageData[]): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "message-group-wrapper";
   wrapper.dataset.sender = first.senderId ?? first.senderName;
+  // A bare display name isn't a user ID, so there's no color to look up.
+  if (first.senderId) paintUserColor(wrapper, first.senderId);
 
   // Wrap the avatar in a column that stretches to the full group height.
   // This gives position:sticky on the avatar a proper containing block —

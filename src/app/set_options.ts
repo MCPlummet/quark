@@ -26,6 +26,9 @@ export function applySetOptions(cfg: AppConfig, sets: SetOption[]): AppConfig {
     home: { ...cfg.home },
     cache: { ...cfg.cache },
     updater: { ...cfg.updater },
+    // No `set` option touches it, but dropping it here would wipe the local
+    // color overrides on the next config write.
+    user_colors: { ...cfg.user_colors, overrides: { ...cfg.user_colors.overrides } },
   };
 
   for (const { name, value } of sets) {

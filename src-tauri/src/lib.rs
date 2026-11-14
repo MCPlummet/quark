@@ -280,6 +280,9 @@ pub fn run() {
             // Profile
             commands::get_own_profile,
             commands::set_display_name,
+            commands::get_own_user_color,
+            commands::set_own_user_color,
+            commands::request_user_colors,
             commands::set_avatar,
             commands::get_home_data,
             commands::set_presence_status,
@@ -299,6 +302,7 @@ pub fn run() {
             // App Config
             commands::get_app_config,
             commands::set_app_config,
+            commands::set_user_color_override,
             // Updater
             commands::update_check,
             commands::update_install,
@@ -396,6 +400,13 @@ pub fn run() {
             }
 
             app.manage(Paths { config_dir });
+
+            // Other users' colors (#45), cached beside the session store so
+            // a relaunch doesn't re-ask the homeserver for every sender.
+            let colors_path = app.path().app_data_dir().ok().map(|d| d.join("user_colors.json"));
+            app.manage(matrix::user_colors::UserColorState(Arc::new(
+                matrix::user_colors::UserColorCache::new(colors_path),
+            )));
 
             // Publish the handle for work that arrives from Kotlin rather than
             // from a command — a push has no AppHandle of its own, and needs

@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Timeline, type MessageData } from "./Timeline.js";
+import { hashColor } from "./avatarColors.js";
+import { initUserColors, receiveUserColor, resetUserColors } from "../app/user_colors.js";
+import { DEFAULT_APP_CONFIG } from "../ipc/app_config.js";
 
 // Regression cover for #55 — "Profile pictures disappear when loading older
 // messages".
@@ -132,3 +135,57 @@ describe("Timeline sender avatars (#55)", () => {
     expect(avatarSrcs(timeline)).toEqual([AVATAR]);
   });
 });
+
+describe("Timeline user colors (#45)", () => {
+  let timeline: Timeline;
+  const wrapperOf = (sender: string) =>
+    timeline.getElement().querySelector<HTMLElement>(
+      `.message-group-wrapper[data-sender="${CSS.escape(sender)}"]`,
+    );
+
+  beforeEach(() => {
+    resetUserColors();
+    initUserColors({
+      config: structuredClone(DEFAULT_APP_CONFIG.user_colors),
+      request: vi.fn().mockResolvedValue({}),
+    });
+    timeline = new Timeline();
+    document.body.appendChild(timeline.getElement());
+  });
+
+  afterEach(() => {
+    timeline.getElement().remove();
+    resetUserColors();
+  });
+
+  it("paints a group with its sender's color", () => {
+    receiveUserColor("@alice:x", "#ff4466");
+    timeline.setMessages([makeMsg()]);
+    const w = wrapperOf("@alice:x");
+    expect(w?.hasAttribute("data-user-color")).toBe(true);
+    expect(w?.style.getPropertyValue("--user-color")).toBe("#ff4466");
+  });
+
+  it("repaints already-rendered groups when a color arrives later", () => {
+    timeline.setMessages([makeMsg()]);
+    expect(wrapperOf("@alice:x")?.hasAttribute("data-user-color")).toBe(false);
+    receiveUserColor("@alice:x", "#00aaff");
+    expect(wrapperOf("@alice:x")?.style.getPropertyValue("--user-color")).toBe("#00aaff");
+  });
+
+  it("leaves groups without a color unpainted", () => {
+    receiveUserColor("@alice:x", null);
+    timeline.setMessages([makeMsg()]);
+    const w = wrapperOf("@alice:x");
+    expect(w?.hasAttribute("data-user-color")).toBe(false);
+    expect(w?.style.getPropertyValue("--user-color")).toBe("");
+  });
+
+  it("letter avatar carries its hash color as a custom property", () => {
+    timeline.setMessages([makeMsg()]);
+    const fallback = timeline.getElement().querySelector<HTMLElement>(".message-group__avatar-fallback");
+    expect(fallback?.style.getPropertyValue("--hash-color")).toBe(hashColor("Alice"));
+    expect(fallback?.style.color).toBe("");
+  });
+});
+

@@ -8,7 +8,16 @@ import {
   setPresenceStatus as ipcSetPresenceStatus,
   setDisplayName as ipcSetDisplayName,
   setAvatar as ipcSetAvatar,
+  getOwnUserColor,
+  setOwnUserColor,
+  setUserColorOverride,
 } from "../../ipc/index.js";
+import {
+  localUserColor,
+  publishedUserColor,
+  receiveUserColor,
+  setLocalUserColor,
+} from "../user_colors.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
 
@@ -23,30 +32,50 @@ import {
 import { openOrCreateDm } from "./rooms.js";
 
 /**
+ * Show a room member's profile: avatar (full media, so animated avatars stay
+ * animated), presence status, a [message] button and — for anyone but
+ * yourself — this device's local color override (#45). Throws on failure;
+ * callers report it.
+ */
+export async function showOtherUserProfile(userId: string, displayName: string | null): Promise<void> {
+  const { profileDialog } = getComponents();
+  const mxcUrl = _memberAvatarMxc.get(userId);
+  const cachedDataUrl = mxcUrl ? _avatarDataUrl.get(mxcUrl) : undefined;
+  let avatarUrl: string | null = null;
+  if (cachedDataUrl) {
+    avatarUrl = cachedDataUrl;
+  } else if (mxcUrl) {
+    try {
+      const dl = await downloadMedia(mxcUrl);
+      avatarUrl = _mediaToBlobUrl(dl.mime_type, dl.data_base64);
+      _avatarDataUrl.set(mxcUrl, avatarUrl);
+    } catch { /* non-critical */ }
+  }
+  const isOwn = userId === AppState.get("ownUserId");
+  const onMessage = isOwn ? undefined : () => { void openOrCreateDm(userId); };
+  const statusMessage = await resolveUserStatus(userId);
+  const color = isOwn
+    ? undefined
+    : {
+        published: publishedUserColor(userId),
+        local: localUserColor(userId),
+        onSetLocal: async (hex: string | null) => {
+          try {
+            setLocalUserColor(userId, await setUserColorOverride(userId, hex));
+          } catch (err) {
+            showError(`Failed to set color: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      };
+  profileDialog.show({ userId, displayName, avatarUrl, statusMessage, onMessage, color });
+}
+
+/**
  * Open the profile dialog for a specific user ID.
  */
 export async function openProfileForUser(userId: string): Promise<void> {
-  const { profileDialog } = getComponents();
   try {
-    const displayName = resolveDisplayName(userId);
-    const mxcUrl = _memberAvatarMxc.get(userId);
-    const cachedDataUrl = mxcUrl ? _avatarDataUrl.get(mxcUrl) : undefined;
-    let avatarUrl: string | null = null;
-    if (cachedDataUrl) {
-      avatarUrl = cachedDataUrl;
-    } else if (mxcUrl) {
-      try {
-        const dl = await downloadMedia(mxcUrl);
-        avatarUrl = _mediaToBlobUrl(dl.mime_type, dl.data_base64);
-        _avatarDataUrl.set(mxcUrl, avatarUrl);
-      } catch { /* non-critical */ }
-    }
-    const ownUserId = AppState.get("ownUserId");
-    const onMessage = userId !== ownUserId
-      ? () => { void openOrCreateDm(userId); }
-      : undefined;
-    const statusMessage = await resolveUserStatus(userId);
-    profileDialog.show({ userId, displayName, avatarUrl, statusMessage, onMessage });
+    await showOtherUserProfile(userId, resolveDisplayName(userId));
   } catch (err) {
     showError(`Failed to load profile: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -57,31 +86,14 @@ export async function openProfileForUser(userId: string): Promise<void> {
  * selected, otherwise shows the current user's own profile.
  */
 export async function openProfileDialog(): Promise<void> {
-  const { profileDialog, timeline, memberList } = getComponents();
+  const { timeline, memberList } = getComponents();
   try {
     // When the member list is focused, show that member's profile instead of
     // the selected message's sender.
     if (AppState.get("activePanel") === "members") {
       const focused = memberList.getFocusedMember();
       if (focused) {
-        const mxcUrl = _memberAvatarMxc.get(focused.userId);
-        const cachedDataUrl = mxcUrl ? _avatarDataUrl.get(mxcUrl) : undefined;
-        let avatarUrl: string | null = null;
-        if (cachedDataUrl) {
-          avatarUrl = cachedDataUrl;
-        } else if (mxcUrl) {
-          try {
-            const dl = await downloadMedia(mxcUrl);
-            avatarUrl = _mediaToBlobUrl(dl.mime_type, dl.data_base64);
-            _avatarDataUrl.set(mxcUrl, avatarUrl);
-          } catch { /* non-critical */ }
-        }
-        const ownUserId = AppState.get("ownUserId");
-        const onMessage = focused.userId !== ownUserId
-          ? () => { void openOrCreateDm(focused.userId); }
-          : undefined;
-        const statusMessage = await resolveUserStatus(focused.userId);
-        profileDialog.show({ userId: focused.userId, displayName: focused.name, avatarUrl, statusMessage, onMessage });
+        await showOtherUserProfile(focused.userId, focused.name);
         return;
       }
     }
@@ -92,26 +104,7 @@ export async function openProfileDialog(): Promise<void> {
       const events = AppState.get("currentTimeline");
       const evt = events.find((e) => e.event_id === selectedId);
       if (evt) {
-        const displayName = resolveDisplayName(evt.sender);
-        const mxcUrl = _memberAvatarMxc.get(evt.sender);
-        const cachedDataUrl = mxcUrl ? _avatarDataUrl.get(mxcUrl) : undefined;
-        let avatarUrl: string | null = null;
-        if (cachedDataUrl) {
-          avatarUrl = cachedDataUrl;
-        } else if (mxcUrl) {
-          try {
-            // Use full media (not thumbnail) so animated GIF/WEBP avatars are preserved.
-            const dl = await downloadMedia(mxcUrl);
-            avatarUrl = _mediaToBlobUrl(dl.mime_type, dl.data_base64);
-            _avatarDataUrl.set(mxcUrl, avatarUrl);
-          } catch { /* non-critical */ }
-        }
-        const ownUserId = AppState.get("ownUserId");
-        const onMessage = evt.sender !== ownUserId
-          ? () => { void openOrCreateDm(evt.sender); }
-          : undefined;
-        const statusMessage = await resolveUserStatus(evt.sender);
-        profileDialog.show({ userId: evt.sender, displayName, avatarUrl, statusMessage, onMessage });
+        await showOtherUserProfile(evt.sender, resolveDisplayName(evt.sender));
         return;
       }
     }
@@ -241,21 +234,30 @@ export async function openProfileEdit(): Promise<void> {
   // falls back to an active fetch; if even that fails (e.g. offline), read the
   // status bar as a last resort — it's either fresh from the user's last edit
   // or from the homeserver's previous presence push.
-  const fetchedStatus = await resolveUserStatus(profile.user_id);
+  const [fetchedStatus, ownColor] = await Promise.all([
+    resolveUserStatus(profile.user_id),
+    // Read fresh (not from the cache) — this is the one place it's edited.
+    getOwnUserColor().catch(() => ({ color: null, can_set: null })),
+  ]);
   const currentStatus = fetchedStatus ?? statusBar.getStatusMessage() ?? null;
   profileEditDialog.show(
     {
       userId: profile.user_id,
       displayName: profile.display_name,
       statusMessage: currentStatus,
+      userColor: ownColor.color,
+      userColorSettable: ownColor.can_set,
     },
-    async ({ displayName, statusMessage, displayNameChanged, statusChanged }) => {
-      // Persist in parallel — neither call depends on the other and there's
+    async ({ displayName, statusMessage, displayNameChanged, statusChanged, userColor, userColorChanged }) => {
+      // Persist in parallel — none of the calls depends on another and there's
       // no rollback story we can offer either way. The dialog surfaces any
-      // error string returned from either IPC.
+      // error string returned from any IPC.
       const ops: Promise<unknown>[] = [];
       if (displayNameChanged) ops.push(ipcSetDisplayName(displayName));
       if (statusChanged) ops.push(ipcSetPresenceStatus(statusMessage));
+      if (userColorChanged) {
+        ops.push(setOwnUserColor(userColor).then((stored) => receiveUserColor(profile.user_id, stored)));
+      }
       await Promise.all(ops);
       // Reflect the change on the status line so the user sees it without
       // re-opening their profile (it shows the name as well as the status).

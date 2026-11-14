@@ -1244,7 +1244,16 @@ body.quark-room-dragging * {
   justify-content: center;
   font-size: 12px;
   line-height: 1;
-  /* color and border-color set inline from JS */
+  /* --hash-color is set inline from JS (hashColor of the sender's name) */
+  color: var(--hash-color);
+  border: 1px solid var(--hash-color);
+  opacity: 0.85;
+}
+
+/* While any user-color treatment is on, a letter avatar takes its sender's color. */
+.uc-any .message-group-wrapper[data-user-color] .message-group__avatar-fallback {
+  color: var(--user-color);
+  border-color: var(--user-color);
 }
 
 .message-group__sender {
@@ -1257,6 +1266,53 @@ body.quark-room-dragging * {
 .message-group__sender--own {
   color: var(--msg-own);
   text-shadow: 0 0 var(--glow-radius) var(--glow-color);
+}
+
+/* ── User colors (#45) ───────────────────────────────────────────────────
+   `--user-color` is set inline, with `data-user-color`, on a message group's
+   wrapper or a thread row (src/app/user_colors.ts). Root classes say which
+   treatments show; with none of them on, nothing here applies. Selection
+   keeps the accent, so the cursor stays visible on any color. Only existing
+   elements are colored — nothing is added or moved. */
+.uc-name [data-user-color] .message-group:not(.message-group--selected) .message-group__sender,
+.uc-name .thread-view__message[data-user-color]:not(.thread-view__message--selected) .thread-view__message-sender {
+  color: var(--user-color);
+}
+
+.uc-avatar .message-group-wrapper[data-user-color] :is(.message-group__avatar, .message-group__avatar-fallback) {
+  box-shadow: 0 0 0 2px var(--user-color);
+}
+
+.uc-border .message-group-wrapper[data-user-color] .message-group:not(.message-group--selected) {
+  border-color: var(--user-color);
+}
+
+.uc-border .message-group-wrapper[data-user-color] .message-group:not(.message-group--selected):hover {
+  border-color: color-mix(in srgb, var(--user-color) 70%, var(--accent-primary));
+}
+
+/* Too close to the background to read: outline it in the foreground color.
+   On the name this replaces the own-name glow. */
+.uc-name .user-color--low-contrast .message-group:not(.message-group--selected) .message-group__sender,
+.uc-name .thread-view__message.user-color--low-contrast:not(.thread-view__message--selected) .thread-view__message-sender {
+  text-shadow: 1px 0 var(--fg), -1px 0 var(--fg), 0 1px var(--fg), 0 -1px var(--fg);
+}
+
+/* A letter avatar takes the color under any treatment (above), so it is
+   outlined under any of them; the avatar treatment's ring, next, replaces this
+   frame with its own. */
+.uc-any .message-group-wrapper.user-color--low-contrast .message-group__avatar-fallback {
+  text-shadow: 1px 0 var(--fg), -1px 0 var(--fg), 0 1px var(--fg), 0 -1px var(--fg);
+  box-shadow: 0 0 0 1px var(--fg);
+}
+
+.uc-avatar .message-group-wrapper.user-color--low-contrast :is(.message-group__avatar, .message-group__avatar-fallback) {
+  box-shadow: 0 0 0 2px var(--user-color), 0 0 0 3px var(--fg);
+}
+
+/* No wider than the frame: a theme with `borders.style = "none"` gets none. */
+.uc-border .message-group-wrapper.user-color--low-contrast .message-group:not(.message-group--selected) {
+  box-shadow: 0 0 0 min(1px, var(--frame-width)) var(--fg);
 }
 
 .message-group__timestamp {
@@ -4296,6 +4352,123 @@ a:hover {
   padding: 6px 8px;
   outline: none;
   transition: border-color var(--transition-speed), box-shadow var(--transition-speed);
+}
+
+/* Profile popup → local color (#45): what they published, above the picker. */
+.profile-dialog__published-color {
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) - 2px);
+  margin-bottom: 4px;
+}
+
+/* ── Color field (#45): hex + swatches + native picker + preview ─────────── */
+.color-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.color-field__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.color-field__hex {
+  width: 10ch;
+  background-color: var(--input-bg, var(--bg));
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  border: var(--border-width) solid var(--border-color);
+  padding: 4px 6px;
+  outline: none;
+}
+
+.color-field__hex:focus {
+  border-color: var(--accent-primary);
+}
+
+.color-field__hex--invalid,
+.color-field__hex--invalid:focus {
+  border-color: var(--accent-error);
+}
+
+.color-field__native {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-color);
+  background: none;
+  cursor: pointer;
+}
+
+.color-field__clear {
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: calc(var(--font-size) - 2px);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.color-field__clear:hover:not(:disabled) {
+  color: var(--accent-primary);
+}
+
+.color-field__swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.color-field__swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: var(--border-width) solid var(--border-color);
+  background-color: var(--swatch);
+  cursor: pointer;
+}
+
+.color-field__swatch:hover:not(:disabled),
+.color-field__swatch:focus-visible {
+  outline: 1px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.color-field__preview {
+  font-family: var(--font-family);
+  font-weight: bold;
+  color: var(--msg-other);
+}
+
+.color-field__preview[data-user-color] {
+  color: var(--user-color);
+}
+
+.color-field__preview.user-color--low-contrast {
+  text-shadow: 1px 0 var(--fg), -1px 0 var(--fg), 0 1px var(--fg), 0 -1px var(--fg);
+}
+
+.color-field__warning {
+  color: var(--accent-warning);
+  font-size: calc(var(--font-size) - 2px);
+}
+
+.color-field__reason {
+  color: var(--roomlist-muted);
+  font-size: calc(var(--font-size) - 2px);
+}
+
+.color-field--disabled :is(.color-field__swatches, .color-field__controls, .color-field__preview) {
+  opacity: 0.45;
+}
+
+.color-field :disabled {
+  cursor: not-allowed;
 }
 
 .profile-edit-dialog__input:focus {

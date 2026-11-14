@@ -9,6 +9,7 @@ import { getAppConfig, setAppConfig } from "../../../ipc/app_config.js";
 import type { AppConfig } from "../../../ipc/app_config.js";
 import { applyReadReceiptVisibility } from "../../../app/actions.js";
 import { AppState } from "../../../app/state.js";
+import { setUserColorToggles } from "../../../app/user_colors.js";
 import type { SettingsTab } from "../types.js";
 
 export const generalTab: SettingsTab = {
@@ -75,6 +76,19 @@ export const generalTab: SettingsTab = {
         document.documentElement.style.setProperty("--icon-radius", v);
       },
     ));
+
+    // User colors (#45): which parts of a message group show its sender's color.
+    const userColorsLead = document.createElement("div");
+    userColorsLead.className = "settings-dialog__hint";
+    userColorsLead.textContent = "Show user color via…";
+    section.appendChild(userColorsLead);
+    for (const [key, label] of [["name", "Name"], ["avatar", "Avatar outline"], ["border", "Box border"]] as const) {
+      section.appendChild(controls.checkbox(
+        label,
+        draft.user_colors[key],
+        (v) => { draft = { ...draft, user_colors: { ...draft.user_colors, [key]: v } }; },
+      ));
+    }
 
     section.appendChild(controls.sectionTitle("Home"));
 
@@ -147,6 +161,7 @@ export const generalTab: SettingsTab = {
       if (receiptsChanged) void applyReadReceiptVisibility();
       // Opting out withdraws a live announcement (the typing wiring listens).
       AppState.set("sendTypingNotices", draft.general.send_typing_notifications);
+      setUserColorToggles(draft.user_colors);
     }));
     content.appendChild(actions);
   },

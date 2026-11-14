@@ -428,6 +428,17 @@ describe("reply counts and replies still sending", () => {
     expect(panelCount()).toBe("3 replies");
   });
 
+  it("our reply carries our user ID, sending and sent, so its row takes our color", async () => {
+    const send = deferredSend();
+    const sent = sendMessage("mine");
+    await flush();
+    const row = () => threadView.getElement().querySelector<HTMLElement>(".thread-view__timeline [data-message-id]:last-child")!;
+    expect(row().dataset.sender).toBe("@me:x");
+    send.resolve("$mine");
+    await sent;
+    expect(threadView.getMessageEl("$mine")!.dataset.sender).toBe("@me:x");
+  });
+
   it("does not count a reply that failed to send", async () => {
     const send = deferredSend();
     const sent = sendMessage("hi");

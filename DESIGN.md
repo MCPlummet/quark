@@ -1943,6 +1943,71 @@ alongside `openExternalUrl` opened every link twice.
   Photos work lives in `main.mm`, reached through a function pointer and
   answered through `quark_media_save_finished`, like the other Rust↔ObjC calls.
 
+### User Colors
+
+A user can pick a color that other Quark users see on their messages. It is
+published on their public profile as the custom field **`tel.quark.usercolor`**
+(Matrix 1.16 extended profiles / MSC4133), a JSON string `"#rrggbb"`; clearing
+it deletes the field. Only `#rgb` / `#rrggbb` is accepted, anywhere — a value
+that isn't one (a name, alpha, anything with CSS in it) is treated as no color
+and never reaches a style, since it comes from someone else's profile.
+
+**What gets colored.** A message group has three parts: the avatar on the left,
+the box around the messages, and the name in the box's header. Settings →
+General → Appearance → *Show user color via…* turns each on separately
+(`config.toml` `[user_colors]`): **Name** (on by default), **Avatar outline**,
+**Box border**. All three off disables the feature — no lookups at all, and the
+letter avatar keeps its auto-assigned color; while any is on, a letter avatar
+takes its sender's color. The thread view has no avatars or per-sender boxes,
+so only Name applies there. Colors are applied to what is already on screen;
+nothing is added or rearranged to carry them. A selected message keeps the
+accent border and name, so the cursor stays visible; hover mixes from the user
+color when Box border is on. Member list, room header and receipts are not
+colored.
+
+**Whose color.** A sender's color is, in order: this device's local override
+(`[user_colors.overrides]`, set from their profile popup), else the color they
+published, else none — and none means the theme exactly as before
+(`messages.other`, or `messages.own` for yourself). Nobody gets an
+auto-assigned color.
+
+**Low contrast.** A color whose WCAG contrast ratio against the theme's
+`colors.background` is under 3:1 gets an outline in `colors.foreground`: a
+one-pixel text outline on the name (replacing the own-name glow), an extra ring
+outside the avatar outline, a ring outside the box border no wider than the
+theme's frame (so none with `borders.style = "none"`). A letter avatar, which
+takes the color under any treatment, gets a text outline and a one-pixel frame
+under any of them. It is re-judged when the theme changes.
+
+**Setting yours.** The profile editor has a color row: a hex field, preset
+swatches and the platform color picker where there is one, a clear button, and
+a preview of your name in the color against the current theme (with a warning
+when it would be outlined). It saves with the editor's other fields. If the
+homeserver's `m.profile_fields` capability (or MSC4133's unstable alias) says
+the field can't be set, the row is disabled with "Your homeserver doesn't
+support custom profile fields."; when it says nothing, saving is tried — stable
+path, then the MSC4133 unstable path — and that message is the error if
+neither route exists.
+
+**Fetching.** Other users' colors are read from their full profile
+(`GET /profile/{userId}`; custom fields ride along on servers that have them),
+lazily — only for senders actually rendered, batched per tick — and a sender is
+asked about again only when rendered five minutes on with no answer yet, or a
+day after their answer. The backend allows one request per user in flight and four at a time,
+caches every answer (including "no color") for 24 hours in `user_colors.json`
+in the app data dir (stale answers are shown while being refreshed), and clears
+the cache on logout. A file written for another account is ignored. Before the
+session's first lookup it checks that the homeserver has extended profiles —
+`/versions` listing v1.16 or later or MSC4133, else a `profile_fields`
+capability — and when it clearly doesn't, nothing more is asked that session
+(when that can't be told, lookups go ahead). A failed lookup isn't retried for
+five minutes, and a 429 (for its `retry_after`) or a 5xx pauses every lookup,
+not just that one — the batch's queued lookups aren't sent. An answer that lands
+after logout is dropped rather than written into the next account's cache.
+Someone's change to their color shows up once their entry is a day old and
+they're rendered again; there is no push for profile fields. Your own color is cached the same way,
+and updated the moment you save.
+
 ### Not in Scope (v1)
 - VoIP / MatrixRTC (group calls) — fundamentally incompatible with CLI aesthetic
 - Widgets — no iframe support in terminal-styled UI
@@ -2161,6 +2226,14 @@ timeline_rooms = 30           # rooms kept in memory for instant re-open
 [updater]
 channel = "stable"            # stable | beta — which release channel to follow
 auto_check = true             # check for an update shortly after sync starts
+
+[user_colors]                 # see User colors
+name = true                   # color the sender's name
+avatar = false                # outline the sender's avatar in their color
+border = false                # draw the message box border in their color
+
+[user_colors.overrides]       # this device only; beats the color they published
+"@alice:example.org" = "#ff4466"   # #rgb or #rrggbb; invalid entries are dropped on load
 
 # Keybindings are configured in ~/.config/quark/quarkrc (see Keybinding Configuration)
 # NOT in this file — quarkrc uses vimrc-style syntax for full flexibility

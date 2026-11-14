@@ -22,9 +22,12 @@ import { attachLongPress } from "../app/long_press.js";
 import { appendCaption, buildFileAffordance, renderMessageText } from "./message_body.js";
 import { buildReplyPreview, buildVideoAffordance, playVideoInline, type ReplyPreviewData } from "./Timeline.js";
 import { TimelineSplit, type SplitHost } from "./thread_split.js";
+import { paintUserColor } from "../app/user_colors.js";
 
 export interface ThreadMessageData {
   id: string;
+  /** Matrix user ID of the sender, when known (drives their user color). */
+  senderId?: string;
   senderName: string;
   isOwn?: boolean;
   timestamp: string;
@@ -654,6 +657,10 @@ export class ThreadView {
       (msg.isOwn ? " thread-view__message--own" : "");
     row.setAttribute("role", isRoot ? "article" : "listitem");
     row.dataset.messageId = msg.id;
+    if (msg.senderId) {
+      row.dataset.sender = msg.senderId;
+      paintUserColor(row, msg.senderId);
+    }
 
     // A reply inside the thread — drawn the way the main timeline draws one,
     // for every in-thread reply alike (see timelineEventToThreadMessage).

@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ThreadView, type ThreadMessageData } from "./ThreadView.js";
 import { Timeline } from "./Timeline.js";
+import { initUserColors, receiveUserColor, resetUserColors } from "../app/user_colors.js";
+import { DEFAULT_APP_CONFIG } from "../ipc/app_config.js";
+import { vi } from "vitest";
 
 function msg(over: Partial<ThreadMessageData> = {}): ThreadMessageData {
   return {
@@ -369,3 +372,46 @@ describe("thread file and image replies", () => {
     expect(view.getPendingInlineEmojiUrls()).toContain("mxc://e/1");
   });
 });
+
+describe("ThreadView user colors (#45)", () => {
+  let view: ThreadView;
+
+  beforeEach(() => {
+    resetUserColors();
+    initUserColors({
+      config: structuredClone(DEFAULT_APP_CONFIG.user_colors),
+      request: vi.fn().mockResolvedValue({}),
+    });
+    view = new ThreadView();
+    document.body.appendChild(view.getElement());
+  });
+
+  afterEach(() => {
+    view.getElement().remove();
+    resetUserColors();
+  });
+
+  const rowFor = (id: string) =>
+    view.getElement().querySelector<HTMLElement>(`.thread-view__message[data-message-id="${id}"]`);
+
+  it("tags rows with the sender and paints them", () => {
+    receiveUserColor("@bob:x", "#ffaa00");
+    view.open(ROOT);
+    view.appendReply(msg({ senderId: "@bob:x" }));
+    const row = rowFor("$reply");
+    expect(row?.dataset.sender).toBe("@bob:x");
+    expect(row?.hasAttribute("data-user-color")).toBe(true);
+    expect(row?.style.getPropertyValue("--user-color")).toBe("#ffaa00");
+  });
+
+  it("adds no elements for color", () => {
+    view.open(ROOT);
+    view.appendReply(msg({ id: "$plain", senderId: "@carol:x" }));
+    receiveUserColor("@bob:x", "#ffaa00");
+    view.appendReply(msg({ id: "$colored", senderId: "@bob:x" }));
+    const shape = (el: HTMLElement | null) =>
+      [...(el?.querySelectorAll("*") ?? [])].map((n) => n.className).join("|");
+    expect(shape(rowFor("$colored"))).toBe(shape(rowFor("$plain")));
+  });
+});
+

@@ -276,6 +276,7 @@ export async function sendThreadReply(
   const optimistic: ThreadMessageData = {
     id: optimisticId,
     senderName: ownName,
+    senderId: ownUserId ?? undefined,
     isOwn: true,
     timestamp: new Date().toISOString(),
     body,

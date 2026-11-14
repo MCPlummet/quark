@@ -161,7 +161,9 @@ export {
 export { loadTheme, listCustomThemes, importCustomTheme, customThemesDir, parseQuarkrc } from "./config.js";
 export type { CustomThemeEntry, ImportThemeOutcome } from "./config.js";
 export { getAppConfig, setAppConfig, DEFAULT_APP_CONFIG } from "./app_config.js";
-export type { AppConfig, GeneralConfig, SyncConfig, MediaConfig, GifConfig, GifRating, EmojiConfig, CacheConfig, UpdaterConfig } from "./app_config.js";
+export type { AppConfig, GeneralConfig, SyncConfig, MediaConfig, GifConfig, GifRating, EmojiConfig, CacheConfig, UpdaterConfig, UserColorsConfig } from "./app_config.js";
+export { setUserColorOverride, getOwnUserColor, setOwnUserColor, requestUserColors, listenUserColors, EVENT_USER_COLOR } from "./user_colors.js";
+export type { OwnUserColor, UserColorUpdate } from "./user_colors.js";
 
 // ─── Devices / Sessions ───────────────────────────────────────────────────────
 export { listSessions, renameDevice, deleteDevices } from "./devices.js";

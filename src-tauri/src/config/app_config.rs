@@ -220,6 +220,8 @@ pub struct AppConfig {
     pub cache: CacheConfig,
     #[serde(default)]
     pub updater: UpdaterConfig,
+    #[serde(default)]
+    pub user_colors: super::user_colors::UserColorsConfig,
 }
 
 // ─── Default impls ────────────────────────────────────────────────────────────
@@ -307,6 +309,7 @@ impl Default for AppConfig {
             home: HomeConfig::default(),
             cache: CacheConfig::default(),
             updater: UpdaterConfig::default(),
+            user_colors: super::user_colors::UserColorsConfig::default(),
         }
     }
 }
@@ -345,6 +348,16 @@ pub fn load_app_config_from(path: &std::path::Path) -> AppConfig {
             AppConfig::default()
         }
     }
+}
+
+/// A whole-config write (`set_app_config`) applied over `current`: the
+/// incoming config, except `[user_colors.overrides]`, which only
+/// `set_user_color_override` writes. A copy the frontend read before an
+/// override changed (a settings draft, `quarkrc` `set` options) would
+/// otherwise undo it.
+pub fn apply_whole_config(current: &AppConfig, mut incoming: AppConfig) -> AppConfig {
+    incoming.user_colors.overrides = current.user_colors.overrides.clone();
+    incoming
 }
 
 /// Serialize config and write it to `path`.
@@ -512,5 +525,25 @@ mod sync_config_tests {
     fn missing_sync_section_falls_back_to_default() {
         let cfg: AppConfig = toml::from_str("[general]\ntheme = \"phosphor\"\n").unwrap();
         assert_eq!(cfg.sync.timeline_limit, default_timeline_limit());
+    }
+}
+
+#[cfg(test)]
+mod whole_config_write_tests {
+    use super::*;
+
+    #[test]
+    fn a_whole_config_write_keeps_the_stored_color_overrides() {
+        // A settings draft read before an override was set carries the old
+        // table; writing it must not undo the override (#45).
+        let mut current = AppConfig::default();
+        current.user_colors.overrides.insert("@alice:x.org".into(), "#ff4466".into());
+        let mut draft = AppConfig::default();
+        draft.user_colors.border = true;
+        draft.general.theme = "gruvbox".into();
+        let next = apply_whole_config(&current, draft);
+        assert_eq!(next.user_colors.overrides, current.user_colors.overrides);
+        assert!(next.user_colors.border);
+        assert_eq!(next.general.theme, "gruvbox");
     }
 }

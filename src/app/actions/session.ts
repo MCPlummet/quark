@@ -12,6 +12,7 @@ import {
   downloadMedia,
   getAppConfig,
   setAppConfig,
+  requestUserColors,
   verificationPromptTarget,
   logVerificationPromptChoice,
 } from "../../ipc/index.js";
@@ -24,6 +25,7 @@ import { showSuccess } from "../../ui/NotificationToast.js";
 import { getComponents } from "./context.js";
 import { refreshRooms, applyCacheConfig } from "./rooms.js";
 import { loadThemeFromConfig } from "./theme.js";
+import { initUserColors, resetUserColors } from "../user_colors.js";
 
 /** Apply persisted runtime preferences from config at session start: the
  *  in-memory cache budgets, the read-receipt display setting and the typing
@@ -31,6 +33,7 @@ import { loadThemeFromConfig } from "./theme.js";
 function _applyStartupConfig(): void {
   void getAppConfig().then((cfg) => {
     applyCacheConfig(cfg);
+    initUserColors({ config: cfg.user_colors, request: requestUserColors });
     AppState.set("showReadReceipts", cfg.general.show_read_receipts);
     AppState.set("sendTypingNotices", cfg.general.send_typing_notifications);
   }).catch(() => { /* defaults stand */ });
@@ -244,6 +247,7 @@ export async function logout(): Promise<void> {
     console.warn("Logout IPC failed (continuing anyway):", err);
   }
   clearLegacySession();
+  resetUserColors();
   AppState.set("loggedIn", false);
   window.location.reload();
 }

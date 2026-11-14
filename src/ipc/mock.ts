@@ -58,6 +58,12 @@ function mockSpaceChildren(spaceId: string): SpaceChild[] {
 
 let msgCounter = 100;
 
+/** Mock `[user_colors]` — kept across calls so a local override set from the
+ *  profile popup survives the next `get_app_config`. */
+let _mockOwnColor: string | null = "#00aaff";
+let _mockUserColors: { name: boolean; avatar: boolean; border: boolean; overrides: Record<string, string> } =
+  { name: true, avatar: false, border: false, overrides: {} };
+
 // Deterministic SVG avatar per sender (colored initial square)
 const AVATAR_COLORS: Record<string, string> = {
   "@alice:matrix.org": "#00ff41",
@@ -874,7 +880,47 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
         home: { dm_limit: 12 },
         cache: { image_memory_mb: 150, timeline_rooms: 30 },
         updater: { channel: "stable", auto_check: true },
+        user_colors: structuredClone(_mockUserColors),
       };
+    case "request_user_colors": {
+      // A few mock senders carry a color; everyone else has none. One is
+      // deliberately near the default background, to show the outline.
+      const mockColors: Record<string, string> = {
+        "@alice:matrix.org": "#ff4466",
+        "@bob:matrix.org": "#ffaa00",
+        "@carol:matrix.org": "#111111",
+        "@you:matrix.org": _mockOwnColor ?? "",
+      };
+      const out: Record<string, string | null> = {};
+      for (const id of (args?.userIds as string[]) ?? []) out[id] = mockColors[id] || null;
+      return out;
+    }
+    case "get_own_user_color":
+      return { color: _mockOwnColor, can_set: true };
+    case "set_own_user_color": {
+      const raw = args?.color as string | null;
+      if (raw == null) {
+        _mockOwnColor = null;
+        return null;
+      }
+      if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw)) throw new Error(`Not a color: ${raw}`);
+      const hex = raw.toLowerCase();
+      _mockOwnColor = hex.length === 4 ? "#" + [...hex.slice(1)].map((c) => c + c).join("") : hex;
+      return _mockOwnColor;
+    }
+    case "set_user_color_override": {
+      const userId = args?.userId as string;
+      const raw = args?.color as string | null;
+      if (raw == null) {
+        delete _mockUserColors.overrides[userId];
+        return null;
+      }
+      if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw)) throw new Error(`Not a color: ${raw}`);
+      const hex = raw.toLowerCase();
+      const color = hex.length === 4 ? "#" + [...hex.slice(1)].map((c) => c + c).join("") : hex;
+      _mockUserColors.overrides[userId] = color;
+      return color;
+    }
     case "get_event_cache_size":
       return 487654321;
     case "get_event_cache_diagnostics":
@@ -899,7 +945,12 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       // gets" here — reporting a warning would train the UI on a failure the
       // real backend only reports when the push rule genuinely didn't land.
       return { synced: true, warning: null };
-    case "set_app_config":
+    case "set_app_config": {
+      const cfg = args?.config as { user_colors?: typeof _mockUserColors } | undefined;
+      // As in the backend, overrides are only set_user_color_override's.
+      if (cfg?.user_colors) _mockUserColors = { ...structuredClone(cfg.user_colors), overrides: _mockUserColors.overrides };
+      return null;
+    }
     case "set_notification_config":
     case "clear_media_cache":
     case "set_cache_size_limit":
