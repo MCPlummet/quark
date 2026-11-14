@@ -1,14 +1,39 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { UserColorUpdate } from "../ipc/user_colors.js";
+
+// The backend's pushed answers (`quark://user-color`): `push` delivers one to
+// the store's listener, and `listening` is when that listener is attached —
+// at once unless a test holds it back.
+const events = vi.hoisted(() => ({
+  handler: null as ((u: UserColorUpdate) => void) | null,
+  listening: Promise.resolve() as Promise<void>,
+}));
+vi.mock("../ipc/user_colors.js", () => ({
+  listenUserColors: async (cb: (u: UserColorUpdate) => void) => {
+    await events.listening;
+    events.handler = cb;
+    return () => {
+      if (events.handler === cb) events.handler = null;
+    };
+  },
+}));
+const push = (user_id: string, color: string | null) => {
+  if (!events.handler) throw new Error("no listener attached");
+  events.handler({ user_id, color });
+};
+
 import {
   initUserColors,
   localUserColor,
   paintUserColor,
   publishedUserColor,
   receiveUserColor,
+  refetchUserColor,
   resetUserColors,
   resolveUserColor,
   setLocalUserColor,
   setUserColorToggles,
+  watchUserColor,
 } from "./user_colors.js";
 import type { UserColorsConfig } from "../ipc/app_config.js";
 
@@ -38,6 +63,7 @@ describe("user colors store", () => {
   let request: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    events.listening = Promise.resolve();
     resetUserColors();
     document.body.innerHTML = "";
     root.style.removeProperty("--bg");
@@ -233,6 +259,107 @@ describe("user colors store", () => {
     paintUserColor(el(), "@c:x");
     await flush();
     expect(request.mock.calls[request.mock.calls.length - 1]?.[0]).toEqual(["@c:x"]);
+  });
+
+  describe("reply vs. pushed answers", () => {
+    // The reply carries what the backend had cached (possibly a day old), and
+    // the fresh lookup it starts is pushed separately; nothing orders the two.
+    it("a pushed answer isn't overwritten by the stale reply that lands after it", async () => {
+      let answer!: (v: Record<string, string | null>) => void;
+      request.mockReturnValue(new Promise((r) => { answer = r; }));
+      initUserColors({ config: config(), request });
+      const a = el();
+      const b = el();
+      paintUserColor(a, "@a:x");
+      paintUserColor(b, "@b:x");
+      await flush();
+      push("@a:x", "#870909");
+      answer({ "@a:x": null, "@b:x": "#ffaa00" });
+      await flush();
+      expect(publishedUserColor("@a:x")).toBe("#870909");
+      expect(a.style.getPropertyValue("--user-color")).toBe("#870909");
+      // Nothing newer was pushed for @b, so the reply stands for them.
+      expect(publishedUserColor("@b:x")).toBe("#ffaa00");
+    });
+
+    it("a reply applies over a push that came before the request was sent", async () => {
+      initUserColors({ config: config(), request });
+      await flush();
+      push("@a:x", "#111111");
+      request.mockResolvedValue({ "@a:x": "#222222" });
+      refetchUserColor("@a:x");
+      await flush();
+      expect(publishedUserColor("@a:x")).toBe("#222222");
+    });
+
+    it("an answer you saved yourself isn't overwritten by an older reply", async () => {
+      let answer!: (v: Record<string, string | null>) => void;
+      request.mockReturnValue(new Promise((r) => { answer = r; }));
+      initUserColors({ config: config(), request });
+      paintUserColor(el(), "@me:x");
+      await flush();
+      receiveUserColor("@me:x", "#00ff41");
+      answer({ "@me:x": "#ff0000" });
+      await flush();
+      expect(publishedUserColor("@me:x")).toBe("#00ff41");
+    });
+
+    it("asks nothing until pushed answers are being listened for", async () => {
+      let attach!: () => void;
+      events.listening = new Promise((r) => { attach = r; });
+      initUserColors({ config: config(), request });
+      paintUserColor(el(), "@a:x");
+      await flush();
+      // Asking now could start a lookup whose answer is pushed to nobody.
+      expect(request).not.toHaveBeenCalled();
+      attach();
+      await flush();
+      await flush();
+      expect(request).toHaveBeenCalledWith(["@a:x"]);
+      push("@a:x", "#870909");
+      expect(publishedUserColor("@a:x")).toBe("#870909");
+    });
+  });
+
+  describe("refetching (profile opened)", () => {
+    it("asks again at once, even when the answer is fresh", async () => {
+      request.mockResolvedValue({ "@a:x": null });
+      initUserColors({ config: config(), request });
+      paintUserColor(el(), "@a:x");
+      await flush();
+      expect(request).toHaveBeenCalledTimes(1);
+      refetchUserColor("@a:x");
+      await flush();
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls[1]).toEqual([["@a:x"], { force: true }]);
+      // A paint right after doesn't ask a third time.
+      paintUserColor(el(), "@a:x");
+      await flush();
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it("asks nothing while every treatment is off, or before init", async () => {
+      refetchUserColor("@a:x");
+      await flush();
+      initUserColors({ config: config({ name: false }), request });
+      refetchUserColor("@a:x");
+      await flush();
+      expect(request).not.toHaveBeenCalled();
+    });
+  });
+
+  it("watchers hear changes to that user's published color until they stop", async () => {
+    initUserColors({ config: config(), request });
+    await flush();
+    const seen: (string | null | undefined)[] = [];
+    const stop = watchUserColor("@a:x", (c) => seen.push(c));
+    receiveUserColor("@b:x", "#ffaa00");
+    receiveUserColor("@a:x", "#FF4466");
+    receiveUserColor("@a:x", "#ff4466"); // unchanged: not repeated
+    push("@a:x", null);
+    stop();
+    receiveUserColor("@a:x", "#00ff41");
+    expect(seen).toEqual(["#ff4466", null]);
   });
 
   it("drops answers that arrive after a reset", async () => {

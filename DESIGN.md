@@ -1993,9 +1993,11 @@ neither route exists.
 (`GET /profile/{userId}`; custom fields ride along on servers that have them),
 lazily — only for senders actually rendered, batched per tick — and a sender is
 asked about again only when rendered five minutes on with no answer yet, or a
-day after their answer. The backend allows one request per user in flight and four at a time,
+day after their answer, or when you open their profile. The backend allows one request per user in flight and four at a time,
 caches every answer (including "no color") for 24 hours in `user_colors.json`
-in the app data dir (stale answers are shown while being refreshed), and clears
+in the app data dir (a stale answer is shown while it's refreshed, and the fresh
+one replaces it when it lands — the stale one can't arrive late and overwrite
+it), and clears
 the cache on logout. A file written for another account is ignored. Before the
 session's first lookup it checks that the homeserver has extended profiles —
 `/versions` listing v1.16 or later or MSC4133, else a `profile_fields`
@@ -2004,8 +2006,12 @@ capability — and when it clearly doesn't, nothing more is asked that session
 five minutes, and a 429 (for its `retry_after`) or a 5xx pauses every lookup,
 not just that one — the batch's queued lookups aren't sent. An answer that lands
 after logout is dropped rather than written into the next account's cache.
-Someone's change to their color shows up once their entry is a day old and
-they're rendered again; there is no push for profile fields. Your own color is cached the same way,
+Someone's change to their color shows up when you open their profile — they're
+asked about again unless their answer is under a minute old (so reopening it
+can't flood the server), still subject to a failure's backoff and a server's
+pause, and the popup's *their color* updates when the answer lands — or else
+once their entry is a day old and they're rendered again; there is no push for
+profile fields. With every treatment off, opening a profile asks nothing. Your own color is cached the same way,
 and updated the moment you save.
 
 ### Not in Scope (v1)
