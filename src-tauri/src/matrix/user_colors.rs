@@ -352,6 +352,9 @@ pub const MAX_CONCURRENT: usize = 4;
 pub const TTL_SECS: u64 = 24 * 60 * 60;
 /// How long a failed lookup waits before it's tried again.
 pub const RETRY_SECS: u64 = 5 * 60;
+/// How old an answer must be before opening the profile asks again, so
+/// opening and closing it can't become a stream of requests.
+pub const REFETCH_MIN_SECS: u64 = 60;
 /// Emitted with `{ user_id, color }` when a lookup changes what's known.
 pub const EVENT: &str = "quark://user-color";
 
@@ -455,6 +458,17 @@ impl UserColorCache {
     /// already being fetched and not backing off — marked as in flight. None,
     /// once the homeserver is known to have no extended profiles.
     pub fn take_due(&self, ids: &[String], now: u64) -> Vec<String> {
+        self.take_older_than(ids, now, TTL_SECS)
+    }
+
+    /// Like `take_due`, for a profile being opened: an answer counts as stale
+    /// once it's `REFETCH_MIN_SECS` old rather than a day. Backoff, a server's
+    /// pause and a server without extended profiles hold it just the same.
+    pub fn take_refetch(&self, ids: &[String], now: u64) -> Vec<String> {
+        self.take_older_than(ids, now, REFETCH_MIN_SECS)
+    }
+
+    fn take_older_than(&self, ids: &[String], now: u64, max_age: u64) -> Vec<String> {
         let mut inner = self.lock();
         if inner.supported == Some(false) || now < inner.paused_until {
             return Vec::new();
@@ -467,7 +481,7 @@ impl UserColorCache {
             if inner.retry_after.get(id).is_some_and(|&t| now < t) {
                 continue;
             }
-            if inner.entries.get(id).is_some_and(|e| now < e.fetched_at.saturating_add(TTL_SECS)) {
+            if inner.entries.get(id).is_some_and(|e| now < e.fetched_at.saturating_add(max_age)) {
                 continue;
             }
             inner.in_flight.insert(id.clone());
@@ -864,6 +878,24 @@ mod tests {
         assert!(cache.snapshot(&ids(&["@a:x.org"])).is_empty(), "nothing known yet");
         assert!(cache.take_due(&ids(&["@a:x.org"]), T + RETRY_SECS - 1).is_empty());
         assert_eq!(cache.take_due(&ids(&["@a:x.org"]), T + RETRY_SECS), ids(&["@a:x.org"]));
+    }
+
+    #[test]
+    fn a_refetch_skips_the_day_but_not_the_minute() {
+        let cache = cache_for(ME);
+        let a = ids(&["@a:x.org"]);
+        cache.take_due(&a, T);
+        cache.record(ME, "@a:x.org", Ok(None), T);
+        assert!(cache.take_refetch(&a, T + REFETCH_MIN_SECS - 1).is_empty(), "asked under a minute ago");
+        assert_eq!(cache.take_refetch(&a, T + REFETCH_MIN_SECS), a);
+        assert!(cache.take_refetch(&a, T + REFETCH_MIN_SECS).is_empty(), "already in flight");
+        // A failure's backoff and a server's pause hold refetches too.
+        cache.record(ME, "@a:x.org", Err(FetchError::Transient("boom".into())), T + REFETCH_MIN_SECS);
+        assert!(cache.take_refetch(&a, T + 2 * REFETCH_MIN_SECS).is_empty(), "backing off");
+        let b = ids(&["@b:x.org"]);
+        cache.take_due(&b, T);
+        cache.record(ME, "@b:x.org", Err(FetchError::Overloaded(Some(600))), T);
+        assert!(cache.take_refetch(&ids(&["@c:x.org"]), T + REFETCH_MIN_SECS).is_empty(), "paused");
     }
 
     #[test]

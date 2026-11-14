@@ -2249,13 +2249,16 @@ fn announce_own_color(
 /// What's known of `user_ids`' colors right now (stale answers included,
 /// unknown IDs absent), with lookups started in the background for the ones
 /// that are unknown or stale. Their answers arrive as `quark://user-color`.
-/// Rate-safety lives in the cache: see `matrix::user_colors`.
+/// `force` (a profile being opened) counts an answer as stale once it's a
+/// minute old rather than a day. Rate-safety lives in the cache: see
+/// `matrix::user_colors`.
 #[tauri::command]
 pub async fn request_user_colors(
     state: State<'_, MatrixState>,
     colors: State<'_, crate::matrix::user_colors::UserColorState>,
     app: AppHandle,
     user_ids: Vec<String>,
+    force: Option<bool>,
 ) -> Result<std::collections::HashMap<String, Option<String>>, String> {
     use crate::matrix::user_colors::{now_secs, refresh, UserColorUpdate, EVENT};
     use tauri::Emitter;
@@ -2268,7 +2271,11 @@ pub async fn request_user_colors(
     let cache = colors.0.clone();
     cache.ensure_account(&me);
     let known = cache.snapshot(&ids);
-    let due = cache.take_due(&ids, now_secs());
+    let due = if force.unwrap_or(false) {
+        cache.take_refetch(&ids, now_secs())
+    } else {
+        cache.take_due(&ids, now_secs())
+    };
     if !due.is_empty() {
         tokio::spawn(refresh(client, cache, due, move |user_id, color| {
             let _ = app.emit(EVENT, UserColorUpdate { user_id: user_id.to_string(), color });

@@ -43,6 +43,21 @@ describe("ProfileDialog — local color", () => {
     expect(q(".profile-dialog__published-color")!.textContent).toBe("their color: unknown");
   });
 
+  it("follows their color while open, and stops on hide or another user", () => {
+    let onChange!: (c: string | null | undefined) => void;
+    const stop = vi.fn();
+    const watch = vi.fn((cb: typeof onChange) => { onChange = cb; return stop; });
+    d.show(data({ color: { published: null, local: null, onSetLocal, watch } }));
+    expect(watch).toHaveBeenCalledTimes(1);
+    onChange("#870909");
+    expect(q(".profile-dialog__published-color")!.textContent).toBe("their color: #870909");
+    d.show(data({ userId: "@bob:x" }));
+    expect(stop).toHaveBeenCalledTimes(1);
+    d.show(data({ color: { published: null, local: null, onSetLocal, watch } }));
+    d.hide();
+    expect(stop).toHaveBeenCalledTimes(2);
+  });
+
   it("hides the row when no color data is passed", () => {
     d.show(data({ color: undefined }));
     expect(q(".profile-dialog__color-row")!.style.display).toBe("none");

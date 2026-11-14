@@ -12,6 +12,9 @@ export interface ProfileColorData {
   local: string | null;
   /** Set (or, with `null`, clear) the override. */
   onSetLocal: (hex: string | null) => Promise<void>;
+  /** Follow what they publish while the dialog shows them: `onChange` on each
+   *  change, until the returned function is called. */
+  watch?: (onChange: (published: string | null | undefined) => void) => () => void;
 }
 
 export interface ProfileData {
@@ -48,6 +51,7 @@ export class ProfileDialog extends DialogBase {
   private _publishedColorEl: HTMLElement;
   private _colorField: ColorField;
   private _onSetLocal: ((hex: string | null) => Promise<void>) | null = null;
+  private _stopWatching: (() => void) | null = null;
 
   constructor() {
     // Profile dialog's root is the box itself, and historically did NOT reset
@@ -241,11 +245,12 @@ export class ProfileDialog extends DialogBase {
       this._editBtn.style.display = "none";
     }
 
+    this._unwatch();
     if (data.color) {
-      const { published, local, onSetLocal } = data.color;
+      const { published, local, onSetLocal, watch } = data.color;
       this._onSetLocal = onSetLocal;
-      this._publishedColorEl.textContent =
-        `their color: ${published === undefined ? "unknown" : published ?? "none"}`;
+      this._showPublished(published);
+      if (watch) this._stopWatching = watch((p) => this._showPublished(p));
       this._colorField.value = local;
       this._colorField.setPreviewText(data.displayName ?? data.userId);
       this._colorRow.style.display = "";
@@ -273,6 +278,20 @@ export class ProfileDialog extends DialogBase {
     }
 
     this.reveal();
+  }
+
+  protected override onHide(): void {
+    this._unwatch();
+  }
+
+  private _unwatch(): void {
+    this._stopWatching?.();
+    this._stopWatching = null;
+  }
+
+  private _showPublished(published: string | null | undefined): void {
+    this._publishedColorEl.textContent =
+      `their color: ${published === undefined ? "unknown" : published ?? "none"}`;
   }
 
   // While typing a color, keys are text, not dialog shortcuts — only Escape

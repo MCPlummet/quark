@@ -44,9 +44,17 @@ export interface UserColorUpdate {
  * What's known of `userIds`' colors right now (stale answers included,
  * unknown IDs absent). Lookups for unknown or stale IDs run in the background
  * and report through `listenUserColors`; the backend dedupes and rate-limits.
+ * `force` (a profile being opened) counts an answer as stale once it's a
+ * minute old rather than a day.
  */
-export async function requestUserColors(userIds: string[]): Promise<Record<string, string | null>> {
-  return invoke<Record<string, string | null>>("request_user_colors", { userIds });
+export async function requestUserColors(
+  userIds: string[],
+  opts?: { force: boolean },
+): Promise<Record<string, string | null>> {
+  return invoke<Record<string, string | null>>("request_user_colors", {
+    userIds,
+    force: opts?.force ?? false,
+  });
 }
 
 /** Subscribe to color updates. Outside Tauri (mock dev) this is a no-op. */

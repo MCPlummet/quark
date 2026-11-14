@@ -16,7 +16,9 @@ import {
   localUserColor,
   publishedUserColor,
   receiveUserColor,
+  refetchUserColor,
   setLocalUserColor,
+  watchUserColor,
 } from "../user_colors.js";
 
 import { showError, showSuccess } from "../../ui/NotificationToast.js";
@@ -34,11 +36,14 @@ import { openOrCreateDm } from "./rooms.js";
 /**
  * Show a room member's profile: avatar (full media, so animated avatars stay
  * animated), presence status, a [message] button and — for anyone but
- * yourself — this device's local color override (#45). Throws on failure;
- * callers report it.
+ * yourself — their color, asked about again so a change shows, and this
+ * device's local override (#45). Throws on failure; callers report it.
  */
 export async function showOtherUserProfile(userId: string, displayName: string | null): Promise<void> {
   const { profileDialog } = getComponents();
+  const isOwn = userId === AppState.get("ownUserId");
+  // First, so the answer is on its way while the avatar loads.
+  if (!isOwn) refetchUserColor(userId);
   const mxcUrl = _memberAvatarMxc.get(userId);
   const cachedDataUrl = mxcUrl ? _avatarDataUrl.get(mxcUrl) : undefined;
   let avatarUrl: string | null = null;
@@ -51,7 +56,6 @@ export async function showOtherUserProfile(userId: string, displayName: string |
       _avatarDataUrl.set(mxcUrl, avatarUrl);
     } catch { /* non-critical */ }
   }
-  const isOwn = userId === AppState.get("ownUserId");
   const onMessage = isOwn ? undefined : () => { void openOrCreateDm(userId); };
   const statusMessage = await resolveUserStatus(userId);
   const color = isOwn
@@ -59,6 +63,7 @@ export async function showOtherUserProfile(userId: string, displayName: string |
     : {
         published: publishedUserColor(userId),
         local: localUserColor(userId),
+        watch: (onChange: (published: string | null | undefined) => void) => watchUserColor(userId, onChange),
         onSetLocal: async (hex: string | null) => {
           try {
             setLocalUserColor(userId, await setUserColorOverride(userId, hex));
