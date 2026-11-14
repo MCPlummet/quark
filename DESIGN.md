@@ -902,6 +902,23 @@ The room list has a two-column layout inspired by Cinny:
 - The space list ends in a `+` that creates a space (see *Creating rooms and spaces*)
 - `j/k` (or rebound keys) to navigate spaces, `Enter` to select
 - Selecting a space filters the room list to show only that space's children
+- Each icon carries an unread badge, drawn in a corner so nothing moves: a dot
+  (`roomlist.unread`) when any room its list shows is unread, or instead a
+  mention count (`roomlist.mention_badge`, capped at `99+`) when any of them
+  mentions you. A space's rooms are the ones its room list shows — its direct
+  rooms plus one level of subspace rooms — and Home, Direct Messages and Group
+  Rooms use their own filters, so a room counts toward every list it appears in.
+  The rules are the room list's: a muted room never lights the dot but its
+  mentions still count, and the open room is exempt. The icon's accessible name
+  carries the state ("Work, 3 mentions"). Membership is re-read on each
+  room-list refresh with the same reads that draw the open space's list
+  (`readSpaceListing`): direct rooms at once, subspace rooms when their
+  (possibly `/hierarchy`) reads land. Until then a space keeps the rooms it was
+  last shown with, so a badge lit by a subspace room never blinks off. Nothing
+  below a top-level space's own subspaces is read.
+- The strip hides its scrollbar (wheel, touch and `j/k` still scroll it): it is
+  barely wider than its items, and a classic scrollbar would clip the icons and
+  push the active-space bar off its edge.
 - Each space remembers its own last-active chat: switching to a space loads that
   chat into the timeline (or its first room on first visit), so the timeline
   never lingers on a room from the space you just left. Memory is session-only.

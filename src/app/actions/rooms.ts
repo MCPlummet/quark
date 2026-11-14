@@ -27,12 +27,13 @@ import {
 } from "../../ipc/index.js";
 
 import { getPseudoSpace, sortByRecency } from "../pseudo_spaces.js";
+import { buildSpaceMembership, publishSpaceMembers, readSpaceListing } from "../space_badges.js";
 import { clearRoomNotificationsIpc } from "../../ipc/notifications.js";
 import { muteRoom, unmuteRoom } from "../notifications.js";
 import { enterHomeView, exitHomeView } from "./home.js";
 import { refreshTypingIndicator } from "../typing.js";
 
-import type { RoomMember, TimelineEvent, EventContextPage } from "../../ipc/types.js";
+import type { RoomMember, SpaceChild, TimelineEvent, EventContextPage } from "../../ipc/types.js";
 import type { AppConfig } from "../../ipc/app_config.js";
 import type { RoomSection } from "../../ui/RoomList.js";
 import type { SpaceItem } from "../../ui/SpaceStrip.js";
@@ -1105,7 +1106,10 @@ export async function selectSpace(
  * Used both by `selectSpace` and by `refreshRooms`, so a room joined, left or
  * moved while a space is open shows up in that space without re-selecting it.
  */
-export async function renderSpaceView(spaceId: string): Promise<string[]> {
+export async function renderSpaceView(
+  spaceId: string,
+  getChildren: (spaceId: string) => Promise<SpaceChild[]> = getSpaceChildren,
+): Promise<string[]> {
   const { roomList } = getComponents();
   const pseudo = getPseudoSpace(spaceId);
   if (pseudo) {
@@ -1116,31 +1120,26 @@ export async function renderSpaceView(spaceId: string): Promise<string[]> {
     return filtered.map((r) => r.room_id);
   }
 
-  const children = await getSpaceChildren(spaceId);
   // The backend already sorts by m.space.child order field (then by name).
+  // `readSpaceListing` is also what the space's badge counts.
+  const { children, subspaces } = await readSpaceListing(spaceId, getChildren);
   const cacheById = new Map(AppState.get("roomListCache").map((r) => [r.room_id, r]));
-  const entriesFor = (list: typeof children) =>
+  const entriesFor = (list: SpaceChild[]) =>
     list.flatMap((c) => {
       const r = cacheById.get(c.room_id);
       return r && !c.is_space ? [roomInfoToEntry(r)] : [];
     });
 
-  const subspaces = children.filter((c) => c.is_space);
   const sections: RoomSection[] = [];
   const topEntries = entriesFor(children);
   if (topEntries.length > 0 || subspaces.length === 0) {
     sections.push({ label: "", rooms: topEntries, spaceId });
   }
-  // Each subspace becomes a labelled category, in the parent's order.
-  const subSections = await Promise.all(subspaces.map(async (sub): Promise<RoomSection | null> => {
-    try {
-      const subRooms = entriesFor(await getSpaceChildren(sub.room_id));
-      return { label: sub.name ?? sub.room_id, rooms: subRooms, spaceId: sub.room_id };
-    } catch {
-      return null; // Skip a subspace we cannot read
-    }
-  }));
-  for (const section of subSections) if (section) sections.push(section);
+  // Each subspace becomes a labelled category, in the parent's order; one
+  // that cannot be read is skipped.
+  for (const sub of subspaces) {
+    sections.push({ label: sub.space.name ?? sub.space.room_id, rooms: entriesFor(sub.children), spaceId: sub.space.room_id });
+  }
 
   // A refresh can land after the user has moved on to another space.
   if (AppState.get("currentSpaceId") !== spaceId) return sections.flatMap((s) => s.rooms.map((e) => e.id));
@@ -1153,7 +1152,9 @@ export async function renderSpaceView(spaceId: string): Promise<string[]> {
  * Re-render whichever room list is showing, keeping scroll position and — only
  * if it was already inside the list — keyboard focus.
  */
-async function rerenderCurrentView(): Promise<void> {
+async function rerenderCurrentView(
+  getChildren?: (spaceId: string) => Promise<SpaceChild[]>,
+): Promise<void> {
   if (AppState.get("homeViewActive")) return; // the Home canvas refreshes itself
   const { roomList } = getComponents();
   const spaceId = AppState.get("currentSpaceId") ?? "__home__";
@@ -1161,7 +1162,7 @@ async function rerenderCurrentView(): Promise<void> {
   const scrollEl = roomList.getScrollElement();
   const scrollTop = scrollEl.scrollTop;
   try {
-    await renderSpaceView(spaceId);
+    await renderSpaceView(spaceId, getChildren);
   } catch (err) {
     console.warn(`Failed to refresh space ${spaceId}:`, err);
     return;
@@ -1535,28 +1536,23 @@ async function _doRefreshRooms(): Promise<void> {
     ]);
     AppState.set("roomListCache", rooms);
 
-    // Build the set of rooms/subspaces that belong to any space, and collect
-    // subspace IDs so they can be excluded from the sidebar strip.
-    const spaceRoomIdSet = new Set<string>();
-    const subspaceIdSet = new Set<string>();
-    await Promise.all(
-      userSpaces.map(async (space) => {
-        try {
-          const children = await getSpaceChildren(space.room_id);
-          for (const c of children) {
-            // Add all children (rooms and subspaces) so they're hidden from the home list
-            spaceRoomIdSet.add(c.room_id);
-            if (c.is_space) subspaceIdSet.add(c.room_id);
-          }
-        } catch {
-          // Non-critical — worst case the home view shows extra rooms
-        }
-      })
+    // Build the set of rooms/subspaces that belong to any space (hidden from
+    // the home list), collect subspace IDs so they can be excluded from the
+    // sidebar strip, and record which rooms each space's list shows for its
+    // badge. A space whose children fail to load is skipped — worst case the
+    // home view shows extra rooms.
+    const membership = await buildSpaceMembership(
+      userSpaces.map((s) => s.room_id),
+      getSpaceChildren,
     );
-    AppState.set("spaceRoomIds", [...spaceRoomIdSet]);
+    const subspaceIdSet = membership.subspaceIds;
+    AppState.set("spaceRoomIds", [...membership.spaceRoomIds]);
 
     // Populate space strip — exclude subspaces (they appear nested inside their parent space)
     const topLevelSpaces = userSpaces.filter((s) => !subspaceIdSet.has(s.room_id));
+    // Direct rooms now, subspace rooms when their (possibly network) reads
+    // land — the strip and room list don't wait on them.
+    publishSpaceMembers(membership, topLevelSpaces.map((s) => s.room_id));
     const spaceItems: SpaceItem[] = topLevelSpaces.map((s) => ({
       id: s.room_id,
       name: s.name ?? s.room_id,
@@ -1603,7 +1599,7 @@ async function _doRefreshRooms(): Promise<void> {
 
     // Re-render the visible list — real spaces included, so a room joined or
     // moved while a space is open appears without re-selecting the space.
-    await rerenderCurrentView();
+    await rerenderCurrentView(membership.childrenOf);
   } catch (err) {
     showError(`Failed to load rooms: ${err instanceof Error ? err.message : String(err)}`);
   }

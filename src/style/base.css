@@ -161,9 +161,19 @@ body.quark-modal-open .input-bar__field {
   background-color: var(--bg);
   border-right: var(--frame-width) var(--frame-line) var(--border-color);
   isolation: isolate;
+  /* No scrollbar: the strip is barely wider than its 56px items, so a classic
+     one (WebView2, ~10px) would clip every icon and shift them off the
+     active-space bar's edge, which then clips too. Wheel, touch and j/k still
+     scroll it. WebKitGTK's overlay scrollbars take no room either way. */
+  scrollbar-width: none;
+}
+
+.space-strip::-webkit-scrollbar {
+  display: none;
 }
 
 .space-strip__item {
+  position: relative; /* anchors .space-strip__badge */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -178,6 +188,29 @@ body.quark-modal-open .input-bar__field {
   outline: none;
   transition: color var(--transition-speed), background-color var(--transition-speed),
     box-shadow var(--transition-speed);
+}
+
+/* Unread dot / mention count (#148): a corner overlay, so the icon and the
+   strip's layout never move when a badge comes or goes. */
+.space-strip__badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 1px 3px;
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 10px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.space-strip__badge--unread {
+  color: var(--roomlist-unread);
+}
+
+.space-strip__badge--mention {
+  color: var(--roomlist-mention-badge);
+  font-weight: bold;
 }
 
 .space-strip__item:hover {
@@ -199,7 +232,11 @@ body.quark-modal-open .input-bar__field {
 .space-strip__item--active::before {
   content: "";
   position: absolute;
-  left: 0;
+  /* Flush with the strip's left edge. The item is positioned (it anchors the
+     badge), so offset back out by the gutter between the 56px item and the
+     strip's content box (its width less the right border) it is centred in —
+     which holds because the strip never shows a scrollbar (above). */
+  left: calc((56px - var(--space-strip-width) + var(--frame-width)) / 2);
   width: 2px;
   height: 36px;
   background-color: var(--accent-primary);
