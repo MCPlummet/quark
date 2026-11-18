@@ -1090,6 +1090,9 @@ failed creation keeps the dialog open with the error inline.
 | Insert        | `Ctrl-g`      | Open GIF search               |
 | Insert        | `Ctrl-b/i/u`  | Bold / italic / underline     |
 | Insert        | `Ctrl-Shift-x`| Strikethrough                 |
+| Insert        | `Ctrl-z`      | Undo (see [Compose undo](#compose-undo)) |
+| Insert        | `Ctrl-Shift-z` / `Ctrl-y` | Redo              |
+| Compose Normal| `u` / `Ctrl-r`| Undo (with a count) / redo    |
 | Insert        | `Enter`       | Send (see send-key behaviour) |
 | Insert        | `:word:`      | Autocomplete :shortcode:      |
 | Picker        | `j/k/h/l`     | Navigate grid                 |
@@ -1123,6 +1126,31 @@ up key (`k`) on the draft's first line moves focus up into the timeline, and the
 down key (`j`) past the last message drops back into the draft (caret at the
 top). `i` resumes editing. An empty compose box is left untouched by `j` at the
 bottom of the timeline; press `i` to start composing.
+
+#### Compose undo
+
+The compose box keeps its own undo history (`src/ui/compose_history.ts`, owned
+by `Input`): `Ctrl-z` / `Ctrl-Shift-z` / `Ctrl-y` in Insert, `u` (with a count)
+/ `Ctrl-r` in compose Normal, and `:undo` / `:u`, `:redo` / `:red`. It records
+every change from the field's `input` event — whoever made it — plus
+`setValue`, so vim operators, autocomplete, quoting, the markdown wrappers and a
+select-all-delete all undo. Typing undoes a word at a time (whitespace closes a
+step; typing and deleting are separate steps; anything else is a step of its
+own), and the caret lands where the text changed. An IME-composed word is one
+step.
+
+The browser's own textarea undo is not used: Quark writes `value` directly for
+most edits, which that history either never sees or discards, depending on the
+engine. The bound chords are claimed before the webview sees them, and the
+platform's own undo (macOS Edit menu, iOS shake) arrives as a `beforeinput`
+`historyUndo`/`historyRedo`, which is cancelled and routed to the same history,
+so the two can never both apply.
+
+Sending, starting an edit and cancelling one start a fresh history
+(`Input.resetValue`) — undo must not step from a message being edited back into
+the draft it displaced and send that as the edit. Switching rooms hands the
+compose box the room (`Input.switchContext`), so each room's history comes back
+with its draft, provided the draft is unchanged.
 
 ### Keybinding Configuration (quarkrc)
 
@@ -1218,6 +1246,8 @@ handler is now a compile error, not a silent no-op.
 :emoji                                         Open the emoji / sticker picker
 :gif                                           Open the GIF picker
 :stickers                                      Browse sticker packs
+:undo / :u                                     Undo the last change to the draft
+:redo / :red                                   Redo it
 :profile                                       Open your profile
 :settings                                      Open settings
 :info                                          Open room info (Info tab)
