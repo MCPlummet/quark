@@ -171,12 +171,33 @@ Rules every write follows:
   where a pack comes from. A pack reachable two ways (e.g. the current space's
   pack is also favorited) is listed once, under its closest scope.
 - **Shortcode precedence** when two packs share one: room → nearer space →
-  farther space → personal → favorites (closest scope wins). This keeps today's
-  behaviour (room beats personal) and extends it.
+  farther space → personal → favorites (closest scope wins). Today the room
+  pack already beats everything, but a favorite beats the personal pack (the
+  frontend map is last-write-wins and favorites load after it); this flips that
+  so the user's own pack wins. Return packs in precedence order so the frontend
+  can apply first-wins.
 - New `get_room_packs(room_id)` for the management tabs: that room's own packs
   only (all state keys, including ones with no images yet), with `favorited`.
 
 ### Frontend
+
+**Shortcode collisions in the pickers and the formatter.** The compose picker
+inserts plain `:shortcode:` text and the outgoing formatter resolves it through
+`_shortcodeToMxc` (`actions/context.ts`), so a pick of a shadowed entry sends
+the *winning* pack's image, not the one clicked. Space packs and favorites make
+collisions common, so:
+
+- The emoji picker (both contexts), the sticker tab and `:shortcode`
+  autocomplete list **each shortcode once — the winner** under the precedence
+  above. Shadowed entries are hidden there (they stay visible and editable in
+  their own pack's editor). What you click is then what is sent, and typing the
+  shortcode gives the same image. Reactions already key by mxc and are
+  unaffected, but list the same deduplicated set.
+- `_shortcodeToMxc` is **scoped per room**: built from that room's resolved
+  packs, replaced (not merged) on each load, and looked up with the room being
+  sent to. Today it is one app-wide map that is never cleared, so a space pack's
+  shortcode loaded in one room still resolves in rooms outside that space,
+  against Goal 4.
 
 **One `PackEditor` component** (`src/ui/packs/PackEditor.ts`), mounted by all
 three tabs, given a `PackLocation`, the pack, and whether it may edit:
@@ -195,9 +216,13 @@ name  [Blobs________]   icon [▣]   default use [emoji+sticker ▾]
 
 - Pack fields and the selected image's fields are `commit_field` fields (save on
   Enter/blur/change, status line underneath, Esc reverts an edited field).
-- Grid: thumbnails through `resolveEmojiThumbnail`; arrows / `h j k l` move
-  (via `grid_nav`), `Enter` or click selects, `x` / `Delete` deletes after a
-  `ConfirmDialog`. `Tab` keeps cycling dialog tabs.
+- Grid: thumbnails through `resolveEmojiThumbnail`. Focus reaches the grid by
+  click/tap, as every settings field is reached today; once focused, arrows /
+  `h j k l` move (via `grid_nav`), `Enter` or click selects, `x` / `Delete`
+  deletes after a `ConfirmDialog`. `Tab` keeps cycling dialog tabs. Moving
+  focus within a tab from the keyboard (into the grid, between packs, to the
+  fields) is **out of scope** here: it is a gap in all three dialogs, tracked
+  in #156.
 - `[+ add images]`: a multi-select `<input type="file" accept="image/*">` (works
   on desktop and the Android/iOS webviews, as attachments do). The frontend reads
   each file's bytes, size, mimetype and pixel dimensions (`createImageBitmap`)
@@ -241,7 +266,7 @@ update the Settings → Emoji row.
 1. Space packs include **all** joined ancestor spaces, not only the immediate
    parent.
 2. Shortcode precedence: room → nearer space → farther space → personal →
-   favorites.
+   favorites. (A change from today, where favorites beat personal.)
 3. Usage is settable both per pack (default) and per image (override).
 4. Deleting a room/space pack writes `{}` and unfavorites it; the personal pack
    can't be deleted, only emptied.
@@ -250,6 +275,17 @@ update the Settings → Emoji row.
    read, shown read-only, and left untouched; edits go to the standard
    top-level `{ images, pack }`.
 7. Grid keys: arrows/`hjkl`, `Enter`, `x`/`Delete`; `Tab` stays tab-cycling.
+8. `_shortcodeToMxc` becomes per-room (fixes shortcodes leaking across rooms).
+
+## Decided with the user
+
+- Colliding shortcodes: pickers and autocomplete show only the winner, so a
+  pick and a typed shortcode always send the same image (rather than making a
+  pick carry its exact image through the plain-text compose box).
+- Keyboard: the pack editor matches today's dialogs (mouse/touch to focus,
+  keys inside the grid); within-tab keyboard movement is #156.
+- "Servers" in the issue = spaces; space packs apply to the space's rooms.
+- Approach A (per-edit backend operations).
 
 ## Left to the builder
 
