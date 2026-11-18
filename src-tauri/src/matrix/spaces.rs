@@ -170,6 +170,15 @@ struct ChildEvent {
 ///
 /// A child event whose `via` is missing or empty is how a child is *removed*
 /// (state events cannot be deleted), so those are skipped.
+/// The rooms a joined space lists as children (with a non-empty `via`), from
+/// the store. Used to find the spaces a room is in, for space packs (#12).
+pub(crate) async fn child_room_ids(space: &matrix_sdk::Room) -> Vec<String> {
+    read_child_events(space)
+        .await
+        .map(|events| events.into_iter().map(|e| e.room_id).collect())
+        .unwrap_or_default()
+}
+
 async fn read_child_events(space: &matrix_sdk::Room) -> Result<Vec<ChildEvent>, String> {
     let raw_events = space
         .get_state_events(StateEventType::from("m.space.child"))
