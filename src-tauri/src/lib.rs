@@ -225,6 +225,20 @@ pub fn run() {
             commands::get_reactions,
             // Emoji
             commands::get_emoji_packs,
+            // Pack management (#12)
+            commands::get_user_pack,
+            commands::get_room_packs,
+            commands::get_favorite_packs,
+            commands::upload_pack_media,
+            commands::add_pack_images,
+            commands::rename_pack_image,
+            commands::set_pack_image_usage,
+            commands::set_pack_image_body,
+            commands::remove_pack_image,
+            commands::set_pack_meta,
+            commands::create_room_pack,
+            commands::delete_room_pack,
+            commands::set_pack_favorite,
             // Stickers
             commands::get_sticker_packs,
             commands::send_sticker,
