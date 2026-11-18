@@ -4,6 +4,7 @@ import { Mode } from "../vim/mode.js";
 import { isMobile, onMobileChange, guardViewportPan } from "../app/mobile.js";
 import { AttachmentProgressList, type AttachmentProgressHandle } from "./AttachmentProgress.js";
 import { AttachmentTray, type StagedAttachment } from "./AttachmentTray.js";
+import { ComposeHistory, caretForRestore, type EditKind } from "./compose_history.js";
 
 export type { StagedAttachment };
 
@@ -139,6 +140,19 @@ export function looksLikeFileListText(text: string): boolean {
   return lines.length > 0 && lines.every((l) => /^file:/i.test(l) || l.startsWith("/"));
 }
 
+/**
+ * What kind of change an `input` event reports, for undo grouping: one typed
+ * character or one Backspace/Delete at a caret is typing, which joins its
+ * neighbours; anything else — a paste, a cut, a selection replaced or deleted,
+ * a programmatic write announced with a plain `Event` — is a change of its own.
+ */
+export function classifyInput(e: Event, collapsedBefore: boolean): EditKind {
+  if (!(e instanceof InputEvent) || !collapsedBefore) return "edit";
+  if (e.inputType === "insertText" && e.data !== null && [...e.data].length === 1) return "insert";
+  if (e.inputType === "deleteContentBackward" || e.inputType === "deleteContentForward") return "delete";
+  return "edit";
+}
+
 export class Input {
   private _el: HTMLElement;
   private _modeEl: HTMLElement;
@@ -162,6 +176,16 @@ export class Input {
   private _vimMode: boolean = true;
   /** A thread is open, so what is typed here is sent into it. */
   private _threadMode = false;
+  /** Undo history of the current draft (#117); see compose_history.ts. */
+  private _history = new ComposeHistory("");
+  /** Histories of the drafts of rooms not on screen, by room ID. */
+  private _histories = new Map<string, ComposeHistory>();
+  private _historyKey: string | null = null;
+  /** An undo/redo is writing the field; its input event is not a new change. */
+  private _applyingHistory = false;
+  /** Caret and selection state captured at `beforeinput`, for the `input` that follows. */
+  private _caretBefore: number | null = null;
+  private _collapsedBefore = true;
 
   constructor() {
     this._el = document.createElement("div");
@@ -236,7 +260,29 @@ export class Input {
 
     // Grow with content as the user adds lines (Shift+Enter); capped by the
     // CSS max-height, beyond which the textarea scrolls.
-    this._fieldEl.addEventListener("input", () => this._autoGrow());
+    this._fieldEl.addEventListener("input", (e) => {
+      this._autoGrow();
+      this._recordInput(e);
+    });
+
+    // Undo history (#117). Every change is recorded from its input event; the
+    // browser's own undo is kept out, including when the platform asks for it
+    // (macOS Edit menu, iOS shake), so the two can never both apply.
+    this._fieldEl.addEventListener("beforeinput", (e) => {
+      if (e.inputType === "historyUndo" || e.inputType === "historyRedo") {
+        e.preventDefault();
+        if (e.inputType === "historyUndo") this.undo();
+        else this.redo();
+        return;
+      }
+      this._caretBefore = this._fieldEl.selectionStart;
+      this._collapsedBefore = this._fieldEl.selectionStart === this._fieldEl.selectionEnd;
+    });
+    // An IME composes a word through many interim input events; the word is
+    // one change, recorded once it is committed.
+    this._fieldEl.addEventListener("compositionend", () => {
+      if (!this._applyingHistory) this._history.record(this._fieldEl.value, { kind: "edit" });
+    });
 
     // Attachment paste handler. clipboardData.items is standard; .files is an
     // alternative that some Linux clipboard managers populate instead.
@@ -548,6 +594,10 @@ export class Input {
     // …and only when what landed was the image's own stand-in, not text the
     // user meant to paste alongside it.
     if (!isStandIn(insertedText(undo.value, undo.pasted))) return;
+    // The paste and its removal are one gesture: fold them so undo doesn't
+    // bring the stand-in back.
+    this._syncHistory();
+    this._history.amend(undo.value);
     this._fieldEl.value = undo.value;
     if (undo.caret !== null) {
       this._fieldEl.selectionStart = this._fieldEl.selectionEnd = undo.caret;
@@ -648,9 +698,93 @@ export class Input {
     return this._fieldEl.value;
   }
 
+  /** Replace the draft as an edit the user can undo (autocomplete, quoting, …). */
   setValue(text: string): void {
+    this._syncHistory();
+    this._fieldEl.value = text;
+    this._history.record(text, { kind: "edit" });
+    this._autoGrow();
+  }
+
+  /**
+   * Replace the draft and start its undo history afresh — for a draft that is
+   * no longer the one being written: sent, or swapped for a message being edited.
+   */
+  resetValue(text: string): void {
+    this._fieldEl.value = text;
+    this._history = new ComposeHistory(text);
+    this._autoGrow();
+  }
+
+  /**
+   * Show another room's draft. The undo history of the draft being left is
+   * kept for when its room comes back — as long as it comes back with the same
+   * text, so undo can never step into a draft the history did not write.
+   */
+  switchContext(key: string | null, text: string): void {
+    this._syncHistory();
+    if (this._historyKey !== null) this._histories.set(this._historyKey, this._history);
+    this._historyKey = key;
+    const stored = key !== null ? this._histories.get(key) : undefined;
+    this._history = stored && stored.current === text ? stored : new ComposeHistory(text);
     this._fieldEl.value = text;
     this._autoGrow();
+  }
+
+  /** Step the draft back one change. False when there is nothing to undo. */
+  undo(): boolean {
+    this._syncHistory();
+    const value = this._history.undo();
+    if (value === null) return false;
+    this._applyHistoryValue(value);
+    return true;
+  }
+
+  /** Re-apply the change last undone. False when there is nothing to redo. */
+  redo(): boolean {
+    this._syncHistory();
+    const value = this._history.redo();
+    if (value === null) return false;
+    this._applyHistoryValue(value);
+    return true;
+  }
+
+  /** Record a change the history did not hear about, so undo steps back past it. */
+  private _syncHistory(): void {
+    this._history.record(this._fieldEl.value, { kind: "edit" });
+  }
+
+  /** Record the change an input event reports. */
+  private _recordInput(e: Event): void {
+    const caretBefore = this._caretBefore ?? undefined;
+    const collapsedBefore = this._collapsedBefore;
+    this._caretBefore = null;
+    this._collapsedBefore = true;
+    if (this._applyingHistory) return;
+    if (e instanceof InputEvent && e.isComposing) return; // recorded at compositionend
+    const kind = classifyInput(e, collapsedBefore);
+    const data = e instanceof InputEvent ? e.data ?? "" : "";
+    this._history.record(this._fieldEl.value, {
+      kind,
+      caretBefore,
+      boundary: kind === "insert" && /\s/.test(data),
+    });
+  }
+
+  /** Put an undone/redone value in the field, caret where the text changed. */
+  private _applyHistoryValue(value: string): void {
+    const from = this._fieldEl.value;
+    this._fieldEl.value = value;
+    const caret = caretForRestore(from, value);
+    this._fieldEl.setSelectionRange(caret, caret);
+    this._autoGrow();
+    // Listeners (autocomplete, typing notices) hear about it as about any edit.
+    this._applyingHistory = true;
+    try {
+      this._fieldEl.dispatchEvent(new Event("input", { bubbles: true }));
+    } finally {
+      this._applyingHistory = false;
+    }
   }
 
   /**
