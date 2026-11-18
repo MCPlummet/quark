@@ -87,6 +87,18 @@ describe("dispatchAction — chord-bound actions", () => {
   });
 });
 
+describe("dispatchAction — compose undo (#117)", () => {
+  it("undoes and redoes the compose box", () => {
+    const undo = vi.fn();
+    const redo = vi.fn();
+    const components = { input: { undo, redo } } as unknown as AppComponents;
+    dispatchAction("compose-undo", components);
+    expect(undo).toHaveBeenCalledOnce();
+    dispatchAction("compose-redo", components);
+    expect(redo).toHaveBeenCalledOnce();
+  });
+});
+
 describe("escapeRunsPanelClose", () => {
   it("leaving Insert or Visual in a close-from-Normal panel only changes mode", () => {
     // The thread panel: opening a thread lands in Insert; if that first Esc

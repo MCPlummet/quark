@@ -188,6 +188,10 @@ export interface ComposeKeyResult {
    *  line, where the caret can't rise any further. The compose box reads as the
    *  bottom-most "message", so this hands focus up to the timeline (#15). */
   exitUp?: boolean;
+  /** `u`: the caller should undo (#117) — `times` times, for a count. The
+   *  history belongs to the compose box, not to this editor. */
+  history?: "undo";
+  times?: number;
 }
 
 const NOT_CONSUMED: ComposeKeyResult = { consumed: false };
@@ -357,6 +361,9 @@ export class ComposeNormalEditor {
       case "p": this.paste(field, pos, true); return CONSUMED;
       case "P": this.paste(field, pos, false); return CONSUMED;
       case "r": this.pendingReplace = true; return CONSUMED;
+      case "u":
+        this.reset();
+        return { consumed: true, history: "undo", times: count };
       default:
         // Leave v / : / clipboard etc. to the existing text-select handler.
         return NOT_CONSUMED;

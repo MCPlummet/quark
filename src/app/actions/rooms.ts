@@ -197,7 +197,8 @@ export function swapComposeDraft(prevRoom: string | null, nextRoom: string): voi
     if (text) _composeDrafts.set(prevRoom, text);
     else _composeDrafts.delete(prevRoom);
   }
-  input.setValue(_composeDrafts.get(nextRoom) ?? "");
+  // The room's undo history (#117) comes back with its draft.
+  input.switchContext(nextRoom, _composeDrafts.get(nextRoom) ?? "");
 }
 
 /**

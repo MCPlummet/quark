@@ -43,7 +43,7 @@ const replyPreview = {
   showEdit: vi.fn(),
   showThread: vi.fn(),
 };
-const input = { setValue: vi.fn() };
+const input = { setValue: vi.fn(), resetValue: vi.fn() };
 const timeline = { removeMessage: vi.fn(), updateMessageBody: vi.fn(), uncountThreadReply: vi.fn() };
 
 beforeEach(() => {
@@ -124,21 +124,24 @@ describe("startEdit / cancelEdit", () => {
     startEdit("$e2", "original body");
     expect(AppState.get("editingEventId")).toBe("$e2");
     expect(replyPreview.showEdit).toHaveBeenCalledExactlyOnceWith("original body");
-    expect(input.setValue).toHaveBeenCalledExactlyOnceWith("original body");
+    // A fresh undo history (#117): undo must not step from the message being
+    // edited back into the draft it displaced.
+    expect(input.resetValue).toHaveBeenCalledExactlyOnceWith("original body");
+    expect(input.setValue).not.toHaveBeenCalled();
   });
 
   it("cancelEdit clears the target, empties the compose box and hides the banner", () => {
     AppState.set("editingEventId", "$e2");
     cancelEdit();
     expect(AppState.get("editingEventId")).toBeNull();
-    expect(input.setValue).toHaveBeenCalledExactlyOnceWith("");
+    expect(input.resetValue).toHaveBeenCalledExactlyOnceWith("");
     expect(replyPreview.hide).toHaveBeenCalledOnce();
   });
 
   it("cancelEdit is a no-op when nothing is being edited", () => {
     AppState.set("editingEventId", null);
     cancelEdit();
-    expect(input.setValue).not.toHaveBeenCalled();
+    expect(input.resetValue).not.toHaveBeenCalled();
     expect(replyPreview.hide).not.toHaveBeenCalled();
   });
 });

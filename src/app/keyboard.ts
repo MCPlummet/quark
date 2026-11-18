@@ -357,6 +357,14 @@ export function dispatchAction(action: string, components: AppComponents): void 
       input.wrapSelection("~~");
       break;
 
+    case "compose-undo":
+      input.undo();
+      break;
+
+    case "compose-redo":
+      input.redo();
+      break;
+
     case "open-room-info":
       void openRoomInfo();
       break;
@@ -605,19 +613,37 @@ function translateComposeKey(key: string): string {
  * fall through to {@link handleTextSelectKeydown}.
  */
 function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents): boolean {
-  // Modifier combos (clipboard, Ctrl+K palette, …) and bare modifier presses
-  // are not editor commands — let them reach their handlers.
+  const field = components.input.getFieldElement();
+
+  // Ctrl-r: vim's redo (#117) — the one chord the compose editor owns. It
+  // must be claimed here, ahead of the modifier pass-through below, or the
+  // webview takes it as "reload".
+  if (eventChord(e) === "Ctrl-r") {
+    e.preventDefault();
+    e.stopPropagation();
+    composeEditor.reset();
+    components.input.redo();
+    composeEditor.primeBlock(field);
+    return true;
+  }
+
+  // Other modifier combos (clipboard, Ctrl+K palette, …) and bare modifier
+  // presses are not editor commands — let them reach their handlers.
   if (e.ctrlKey || e.metaKey || e.altKey) return false;
   if (e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") return false;
 
-  const field = components.input.getFieldElement();
   const res = composeEditor.handleKey(translateComposeKey(e.key), field);
   if (!res.consumed) return false;
 
   e.preventDefault();
   e.stopPropagation();
 
-  if (res.exitUp) {
+  if (res.history === "undo") {
+    for (let i = 0; i < (res.times ?? 1); i++) {
+      if (!components.input.undo()) break;
+    }
+    composeEditor.primeBlock(field);
+  } else if (res.exitUp) {
     // `k` on the first line: leave the compose box upward into the timeline.
     // Falls back to staying put (and re-priming the block) when there's no
     // message to land on (#15).
@@ -800,14 +826,14 @@ function submitComposeBox(components: AppComponents): void {
     case "edit": {
       const editingId = AppState.get("editingEventId")!;
       finishEdit();
-      input.setValue("");
+      input.resetValue("");
       void editMessage(editingId, plan.body);
       return;
     }
     case "attachments": {
       const staged = input.takeStagedAttachments();
       if (staged.length === 0) return;
-      input.setValue("");
+      input.resetValue("");
       void sendStagedAttachments(staged, plan.caption ?? undefined);
       return;
     }
@@ -880,12 +906,8 @@ function handleInsertKeydown(e: KeyboardEvent, components: AppComponents): void 
   const field = input.getFieldElement();
   if (document.activeElement !== field && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
     e.preventDefault();
-    input.focus();
-    const start = field.selectionStart ?? field.value.length;
-    const end = field.selectionEnd ?? field.value.length;
-    field.value = field.value.slice(0, start) + e.key + field.value.slice(end);
-    field.selectionStart = field.selectionEnd = start + 1;
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+    // As typing, so it groups with the keystrokes around it for undo (#117).
+    input.insertText(e.key);
   }
 }
 
