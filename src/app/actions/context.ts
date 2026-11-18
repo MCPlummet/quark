@@ -272,11 +272,20 @@ export function _resetEmojiThumbnailsInFlight(): void {
 export const _seenReactionEventIds = new Set<string>();
 
 /**
- * Map of shortcode → mxc:// URL for all loaded custom emoji.
- * Used to build formatted bodies with data-mx-emoticon when sending messages.
- * Populated when emoji packs are loaded; never replaced with data: URLs.
+ * Shortcode → mxc:// URL of the custom emoji usable in each room, by room ID
+ * ("" for no room). Used to build formatted bodies with data-mx-emoticon when
+ * sending. Each room's map is the room's packs as last loaded (custom_emoji.ts
+ * replaces it wholesale; first pack wins a shared shortcode), so a shortcode
+ * only resolves where its pack applies. It used to be one app-wide map that
+ * was never cleared: a space pack's emoji loaded in one room still turned into
+ * an image in rooms outside the space (#12).
  */
-export const _shortcodeToMxc = new Map<string, string>();
+export const _shortcodeToMxcByRoom = new Map<string, Map<string, string>>();
+
+/** The mxc:// URL a custom `:shortcode:` resolves to in a room, if any. */
+export function customEmojiMxc(roomId: string | null, shortcode: string): string | undefined {
+  return _shortcodeToMxcByRoom.get(roomId ?? "")?.get(shortcode);
+}
 
 // ── Shared low-level helpers ───────────────────────────────────────────────────
 
@@ -663,8 +672,8 @@ export function roomMemberToEntry(m: RoomMember): MemberEntry {
  * Returns `undefined` if the body has no formatting and no resolvable custom
  * emoji, so the message is sent as plain text only.
  */
-export function _buildFormattedBodyWithEmoji(body: string): string | undefined {
-  return markdownToHtml(body, { resolveEmoji: (shortcode) => _shortcodeToMxc.get(shortcode) });
+export function _buildFormattedBodyWithEmoji(body: string, roomId: string | null): string | undefined {
+  return markdownToHtml(body, { resolveEmoji: (shortcode) => customEmojiMxc(roomId, shortcode) });
 }
 
 /** Lazily-built map of built-in Unicode emoji shortcode (and aliases) → glyph. */
@@ -689,9 +698,9 @@ const SHORTCODE_RE = /:([a-zA-Z0-9_+-]+):/g;
  * resolved separately into `<img data-mx-emoticon>` in the formatted body, so a
  * room's custom `:party:` wins over the Unicode 🎉.
  */
-export function replaceUnicodeEmojiShortcodes(text: string): string {
+export function replaceUnicodeEmojiShortcodes(text: string, roomId: string | null): string {
   return text.replace(SHORTCODE_RE, (full, shortcode: string) => {
-    if (_shortcodeToMxc.has(shortcode)) return full; // custom emoji wins
+    if (customEmojiMxc(roomId, shortcode)) return full; // custom emoji wins
     return shortcodeToGlyph().get(shortcode) ?? full;
   });
 }
@@ -702,9 +711,12 @@ export function replaceUnicodeEmojiShortcodes(text: string): string {
  * shortcodes to `<img data-mx-emoticon>` (plus inline markdown). `formattedBody`
  * is `undefined` when the result has no formatting and no custom emoji.
  */
-export function prepareOutgoingBody(raw: string): { body: string; formattedBody: string | undefined } {
-  const body = replaceUnicodeEmojiShortcodes(raw);
-  return { body, formattedBody: _buildFormattedBodyWithEmoji(body) };
+export function prepareOutgoingBody(
+  raw: string,
+  roomId: string | null,
+): { body: string; formattedBody: string | undefined } {
+  const body = replaceUnicodeEmojiShortcodes(raw, roomId);
+  return { body, formattedBody: _buildFormattedBodyWithEmoji(body, roomId) };
 }
 
 /**

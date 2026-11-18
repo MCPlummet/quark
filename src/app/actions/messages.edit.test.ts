@@ -41,7 +41,7 @@ vi.mock("../../ui/NotificationToast.js", () => ({ showError: vi.fn(), showSucces
 import { editMessage } from "./messages.js";
 import {
   setComponents,
-  _shortcodeToMxc,
+  _shortcodeToMxcByRoom,
   _emojiImageCache,
   _resetEmojiThumbnailsInFlight,
   _applyEdits,
@@ -106,11 +106,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   ipcEditMessage.mockResolvedValue("$edit1");
   getThumbnail.mockResolvedValue({ mime_type: "image/png", data_base64: "AAAA" });
-  _shortcodeToMxc.clear();
+  _shortcodeToMxcByRoom.clear();
   _emojiImageCache.clear();
   // A download a previous test held open would otherwise be shared with this one.
   _resetEmojiThumbnailsInFlight();
-  _shortcodeToMxc.set("party", "mxc://emoji/party");
+  _shortcodeToMxcByRoom.set(ROOM, new Map([["party", "mxc://emoji/party"]]));
 
   timeline = new Timeline();
   document.body.appendChild(timeline.getElement());

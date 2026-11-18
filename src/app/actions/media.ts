@@ -428,7 +428,7 @@ export async function sendStagedAttachments(
 
   const prepared: PreparedCaption = {};
   if (raw) {
-    const { body, formattedBody } = prepareOutgoingBody(raw);
+    const { body, formattedBody } = prepareOutgoingBody(raw, target.roomId);
     prepared.caption = body;
     prepared.formattedCaption = formattedBody;
   }
