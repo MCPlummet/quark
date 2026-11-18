@@ -9,7 +9,3 @@ import { permissionsTab } from "./tabs/permissions.js";
 import { packsTab } from "../packs/packs_tab.js";
 
 export const ROOM_TABS: RoomTab[] = [infoTab, settingsTab, packsTab, membersTab, permissionsTab];
-
-export function visibleRoomTabs(tabs: RoomTab[], isMobile: boolean): RoomTab[] {
-  return tabs.filter((t) => !(t.mobileHidden && isMobile));
-}

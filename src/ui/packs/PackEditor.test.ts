@@ -119,6 +119,80 @@ describe("PackEditor", () => {
     expect(onChange).toHaveBeenCalledWith(renamed);
   });
 
+  // Review fix: the open image's fields read an editor-wide selection, which a
+  // rename landing late moved back to the renamed image — so the *next* image's
+  // edits went to the renamed one.
+  it("keeps a late rename from redirecting the edits of the image opened since", async () => {
+    let finishRename!: (p: EditablePack) => void;
+    ipc.renamePackImage.mockReturnValue(new Promise((r) => { finishRename = r; }));
+    ipc.setPackImageBody.mockResolvedValue(pack());
+    const el = mount();
+    cell(el, "blobwave").click();
+    const field = detailInput(el, "Shortcode");
+    field.value = "wave";
+    field.dispatchEvent(new Event("input"));
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    cell(el, "blobcat").click();
+    finishRename(pack({ images: [pack().images[0], { ...pack().images[1], shortcode: "wave" }] }));
+    await flush();
+    const desc = detailInput(el, "Description");
+    desc.value = "a cat";
+    desc.dispatchEvent(new Event("input"));
+    desc.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(ipc.setPackImageBody).toHaveBeenCalledWith(ROOM_LOC, "blobcat", "a cat");
+  });
+
+  it("sends an edit after a rename to the image's new shortcode", async () => {
+    const renamed = pack({ images: [pack().images[0], { ...pack().images[1], shortcode: "wave" }] });
+    ipc.renamePackImage.mockResolvedValue(renamed);
+    ipc.setPackImageUsage.mockResolvedValue(renamed);
+    const el = mount();
+    cell(el, "blobwave").click();
+    const field = detailInput(el, "Shortcode");
+    field.value = "wave";
+    field.dispatchEvent(new Event("input"));
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    const use = el.querySelector<HTMLSelectElement>('.pack-editor__detail select[aria-label="Use"]')!;
+    use.value = "sticker";
+    use.dispatchEvent(new Event("change"));
+    await flush();
+    expect(ipc.setPackImageUsage).toHaveBeenCalledWith(ROOM_LOC, "wave", ["sticker"]);
+  });
+
+  // Review fix: on a phone the details render below a long grid, out of view.
+  it("brings an opened image's details into view", () => {
+    const scroll = vi.fn();
+    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: unknown };
+    const before = proto.scrollIntoView;
+    proto.scrollIntoView = scroll;
+    try {
+      const el = mount();
+      cell(el, "blobwave").click();
+      expect(scroll).toHaveBeenCalledWith({ block: "nearest" });
+    } finally {
+      proto.scrollIntoView = before;
+    }
+  });
+
+  it("words the confirmations for whose pack it is, and counts right", async () => {
+    askConfirm.mockResolvedValue(false);
+    const el = mount({ location: { kind: "user" }, favoritable: false, p: pack({ room_id: null, state_key: null }) });
+    cell(el, "blobwave").dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    await flush();
+    const lastConfirm = () => (askConfirm.mock.calls[askConfirm.mock.calls.length - 1] as unknown as [{ message: string }])[0].message;
+    const personal = lastConfirm();
+    expect(personal).not.toMatch(/Everyone/);
+    expect(personal).toMatch(/your pack/);
+
+    const room = mount({ p: pack({ images: [pack().images[0]] }) });
+    room.querySelector<HTMLButtonElement>(".pack-editor__delete-pack")!.click();
+    await flush();
+    const whole = lastConfirm();
+    expect(whole).toMatch(/its 1 image\?/);
+  });
+
   it("shows a failed rename under the field and leaves the grid alone", async () => {
     ipc.renamePackImage.mockRejectedValue(new Error(":blobcat: is already in this pack"));
     const el = mount();

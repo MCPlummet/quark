@@ -26,6 +26,22 @@ async function userPackSection(section: HTMLElement): Promise<void> {
       canEdit: true,
       favoritable: false,
     }).getElement());
+    // Images another client stored in the non-standard multi-pack form: still
+    // offered in the pickers, shown here read-only, never rewritten (#12).
+    const legacy = pack.legacy_images ?? [];
+    if (legacy.length > 0) {
+      const note = document.createElement("div");
+      note.className = "settings-dialog__hint";
+      note.textContent =
+        "Also in your account, in an older format another client wrote. Quark uses these but leaves them as they are:";
+      section.appendChild(note);
+      section.appendChild(new PackEditor({
+        location: { kind: "user" },
+        pack: { ...pack, display_name: "Older format", avatar_url: null, images: legacy, legacy_images: [], read_only: true },
+        canEdit: false,
+        favoritable: false,
+      }).getElement());
+    }
   } catch (err) {
     const msg = document.createElement("div");
     msg.className = "settings-dialog__row";

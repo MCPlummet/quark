@@ -281,6 +281,21 @@ pub fn is_deleted_pack(content: &Value) -> bool {
     content.as_object().is_some_and(Map::is_empty)
 }
 
+/// The content of a new pack named `name`, to write where `current` is — only
+/// if nothing is there (missing, or a deleted pack's `{}`). Any other content
+/// is someone's pack, with or without an `images` key, and is not overwritten.
+pub fn new_pack(current: &Value, name: &str) -> Result<Value, String> {
+    if !(current.is_null() || is_deleted_pack(current)) {
+        return Err("A pack with that name already exists here".into());
+    }
+    let mut pack = Map::new();
+    let name = name.trim();
+    if !name.is_empty() {
+        pack.insert("display_name".into(), Value::String(name.to_owned()));
+    }
+    Ok(serde_json::json!({ "pack": pack, "images": {} }))
+}
+
 // ─── Locations and the editable view ─────────────────────────────────────────
 
 /// Where a pack lives. A space is a room, so space packs are `Room` too.
@@ -326,9 +341,13 @@ pub struct EditablePack {
     /// Sorted by shortcode.
     pub images: Vec<EditableImage>,
     pub favorited: bool,
-    /// The personal pack exists only in the non-standard `{ packs: {…} }` form,
-    /// which Quark shows but does not edit.
+    /// Not editable here. Set by the frontend for the legacy images it shows
+    /// apart; the backend's packs are always editable (power permitting).
     pub read_only: bool,
+    /// The personal pack only: images in the non-standard `{ packs: {…} }` form
+    /// of `im.ponies.user_emotes`, which Quark shows read-only and never writes
+    /// (edits go to the standard top-level `{ images, pack }` — spec decision 6).
+    pub legacy_images: Vec<EditableImage>,
 }
 
 fn string_list(v: Option<&Value>) -> Option<Vec<String>> {
@@ -357,21 +376,21 @@ fn images_of(images: Option<&Value>) -> Vec<EditableImage> {
 /// The editable view of pack content.
 pub fn to_editable(content: &Value, room_id: Option<&str>, state_key: Option<&str>, favorited: bool) -> EditablePack {
     let meta = content.get("pack");
-    let mut images = images_of(content.get("images"));
-    let mut read_only = false;
-    if images.is_empty() && room_id.is_none() {
-        // The legacy multi-pack form of im.ponies.user_emotes: shown, not edited.
+    let images = images_of(content.get("images"));
+    let mut legacy_images = Vec::new();
+    if room_id.is_none() {
+        // The legacy multi-pack form of im.ponies.user_emotes: shown apart,
+        // read-only, never written; the standard pack stays editable.
         if let Some(packs) = content.get("packs").and_then(Value::as_object) {
             let mut seen = HashSet::new();
             for legacy in packs.values() {
                 for image in images_of(legacy.get("images")) {
                     if seen.insert(image.shortcode.clone()) {
-                        images.push(image);
+                        legacy_images.push(image);
                     }
                 }
             }
-            images.sort_by(|a, b| a.shortcode.cmp(&b.shortcode));
-            read_only = !images.is_empty();
+            legacy_images.sort_by(|a, b| a.shortcode.cmp(&b.shortcode));
         }
     }
     EditablePack {
@@ -382,7 +401,8 @@ pub fn to_editable(content: &Value, room_id: Option<&str>, state_key: Option<&st
         usage: string_list(meta.and_then(|m| m.get("usage"))),
         images,
         favorited,
-        read_only,
+        read_only: false,
+        legacy_images,
     }
 }
 
@@ -781,18 +801,7 @@ pub async fn create_room_pack(client: &Client, room_id: &str, display_name: &str
     let taken: HashSet<String> = room_packs_from_store(&room).await.into_iter().map(|(k, _)| k).collect();
     let state_key = state_key_for_name(display_name, &taken);
     let location = PackLocation::Room { room_id: room_id.to_owned(), state_key: state_key.clone() };
-    let name = display_name.trim().to_owned();
-    let content = edit_pack(client, &location, |current| {
-        if !is_deleted_pack(current) && current.get("images").is_some() {
-            return Err("A pack with that name already exists here".into());
-        }
-        let mut pack = Map::new();
-        if !name.is_empty() {
-            pack.insert("display_name".into(), Value::String(name.clone()));
-        }
-        Ok(serde_json::json!({ "pack": pack, "images": {} }))
-    })
-    .await?;
+    let content = edit_pack(client, &location, |current| new_pack(current, display_name)).await?;
     Ok(to_editable(&content, Some(room_id), Some(&state_key), false))
 }
 
@@ -1058,13 +1067,29 @@ mod tests {
         assert_eq!(p.state_key.as_deref(), Some("k"));
     }
 
+    // Review fix (spec decision 6): the legacy `{ packs: {…} }` form is shown,
+    // read-only, beside the standard pack — which stays editable. It used to be
+    // folded into the pack and lock the whole thing.
     #[test]
-    fn editable_user_pack_in_legacy_form_is_read_only() {
+    fn editable_user_pack_keeps_legacy_images_apart_and_stays_editable() {
         let content = json!({ "packs": { "p": { "images": { "x": { "url": "mxc://a/x" } } } } });
         let p = to_editable(&content, None, None, false);
-        assert!(p.read_only);
-        assert_eq!(p.images.len(), 1);
-        assert_eq!(p.images[0].shortcode, "x");
+        assert!(!p.read_only);
+        assert!(p.images.is_empty());
+        assert_eq!(p.legacy_images.len(), 1);
+        assert_eq!(p.legacy_images[0].shortcode, "x");
+    }
+
+    #[test]
+    fn new_pack_refuses_to_overwrite_one_without_images() {
+        assert!(new_pack(&json!({ "pack": { "display_name": "Theirs" } }), "Mine").is_err());
+        assert!(new_pack(&json!({ "images": { "a": { "url": "mxc://a/a" } } }), "Mine").is_err());
+    }
+
+    #[test]
+    fn new_pack_over_nothing_or_a_deleted_pack() {
+        assert_eq!(new_pack(&json!({}), "Blobs").unwrap(), json!({ "pack": { "display_name": "Blobs" }, "images": {} }));
+        assert_eq!(new_pack(&Value::Null, " ").unwrap(), json!({ "pack": {}, "images": {} }));
     }
 
     #[test]
@@ -1088,5 +1113,164 @@ mod tests {
         assert_eq!(state_key_for_name("Blob Pack!", &set(&[])), "blob_pack");
         assert_eq!(state_key_for_name("Blob Pack!", &set(&["blob_pack"])), "blob_pack_2");
         assert_eq!(state_key_for_name("", &set(&[])), "pack");
+    }
+
+    // ── Against a homeserver (review fix): the I/O the pure tests can't see ──
+    //
+    // OVERLAY and LOCKS are process-wide, so every test has its own room IDs.
+
+    mod io {
+        use super::*;
+        use crate::matrix::test_support::{joined_rooms, own_join, state_event, TestHomeserver, ME};
+        use wiremock::matchers::method;
+        use wiremock::{Mock, ResponseTemplate};
+
+        const NOT_FOUND: &str = r#"{"errcode":"M_NOT_FOUND","error":"Not found"}"#;
+
+        /// The state-event URL path of `room`'s pack at `key`, as matched by suffix
+        /// (the room ID's `!` may arrive percent-encoded).
+        fn pack_path(room_local: &str, key: &str) -> impl Fn(&wiremock::Request) -> bool + Send + Sync + 'static {
+            let room_local = room_local.to_string();
+            let tail = format!("/state/{ROOM_PACK_EVENT}/{key}");
+            move |req: &wiremock::Request| {
+                let p = req.url.path();
+                p.contains(&room_local) && p.ends_with(&tail)
+            }
+        }
+
+        async fn mount_state(hs: &TestHomeserver, verb: &str, room_local: &str, key: &str, status: u16, body: Value) {
+            Mock::given(method(verb))
+                .and(pack_path(room_local, key))
+                .respond_with(ResponseTemplate::new(status).set_body_json(body))
+                .mount(&hs.server)
+                .await;
+        }
+
+        async fn mount_no_account_data(hs: &TestHomeserver) {
+            Mock::given(method("GET"))
+                .and(|req: &wiremock::Request| req.url.path().contains("/account_data/"))
+                .respond_with(ResponseTemplate::new(404).set_body_raw(NOT_FOUND, "application/json"))
+                .mount(&hs.server)
+                .await;
+        }
+
+        /// The JSON body of the one PUT to `room`'s pack at `key`.
+        async fn put_body(hs: &TestHomeserver, room_local: &str, key: &str) -> Value {
+            let matches = pack_path(room_local, key);
+            let puts: Vec<Value> = hs
+                .server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .filter(|r| r.method.as_str() == "PUT" && matches(r))
+                .map(|r| serde_json::from_slice(&r.body).expect("JSON body"))
+                .collect();
+            assert_eq!(puts.len(), 1, "one PUT to the pack");
+            puts.into_iter().next().unwrap()
+        }
+
+        fn room(local: &str) -> String {
+            format!("!{local}:example.org")
+        }
+
+        fn pack_state(key: &str, content: Value) -> Value {
+            state_event(ROOM_PACK_EVENT, key, ME, content)
+        }
+
+        #[tokio::test]
+        async fn an_edit_keeps_another_clients_change_to_a_different_image() {
+            let hs = TestHomeserver::new().await;
+            let rid = room("pk-other-client");
+            let stored = json!({ "images": { "a": { "url": "mxc://x/a" }, "b": { "url": "mxc://x/b" } } });
+            hs.sync(joined_rooms(&[(&rid, vec![own_join(), pack_state("", stored)])])).await;
+            // Since the sync, another client changed b.
+            let server_now = json!({ "images": { "a": { "url": "mxc://x/a" }, "b": { "url": "mxc://x/b2" } } });
+            mount_state(&hs, "GET", "pk-other-client", "", 200, server_now).await;
+            mount_state(&hs, "PUT", "pk-other-client", "", 200, json!({ "event_id": "$w" })).await;
+            mount_no_account_data(&hs).await;
+
+            let loc = PackLocation::Room { room_id: rid.clone(), state_key: String::new() };
+            rename_pack_image(&hs.client, &loc, "a", "c").await.expect("rename");
+
+            let body = put_body(&hs, "pk-other-client", "").await;
+            assert_eq!(body["images"]["c"], json!({ "url": "mxc://x/a" }));
+            assert_eq!(body["images"]["b"], json!({ "url": "mxc://x/b2" }), "the other client's change survives");
+            assert!(body["images"].get("a").is_none());
+        }
+
+        #[tokio::test]
+        async fn adding_to_a_pack_the_server_does_not_have_writes_only_the_new_images() {
+            let hs = TestHomeserver::new().await;
+            let rid = room("pk-missing");
+            hs.sync(joined_rooms(&[(&rid, vec![own_join()])])).await;
+            Mock::given(method("GET"))
+                .and(pack_path("pk-missing", "fresh"))
+                .respond_with(ResponseTemplate::new(404).set_body_raw(NOT_FOUND, "application/json"))
+                .mount(&hs.server)
+                .await;
+            mount_state(&hs, "PUT", "pk-missing", "fresh", 200, json!({ "event_id": "$w" })).await;
+            mount_no_account_data(&hs).await;
+
+            let loc = PackLocation::Room { room_id: rid.clone(), state_key: "fresh".into() };
+            let res = add_pack_images(
+                &hs.client,
+                &loc,
+                vec![NewImageArg { url: "mxc://x/n".into(), body: None, info: None, filename: "New One.png".into() }],
+            )
+            .await
+            .expect("add");
+            assert_eq!(res.added, vec!["new_one"]);
+            assert_eq!(put_body(&hs, "pk-missing", "fresh").await, json!({ "images": { "new_one": { "url": "mxc://x/n" } } }));
+        }
+
+        #[tokio::test]
+        async fn a_write_shows_before_sync_echoes_it() {
+            let hs = TestHomeserver::new().await;
+            let rid = room("pk-overlay");
+            let stored = json!({ "images": { "a": { "url": "mxc://x/a" } } });
+            hs.sync(joined_rooms(&[(&rid, vec![own_join(), pack_state("", stored.clone())])])).await;
+            mount_state(&hs, "GET", "pk-overlay", "", 200, stored).await;
+            mount_state(&hs, "PUT", "pk-overlay", "", 200, json!({ "event_id": "$w" })).await;
+            mount_no_account_data(&hs).await;
+
+            let loc = PackLocation::Room { room_id: rid.clone(), state_key: String::new() };
+            rename_pack_image(&hs.client, &loc, "a", "renamed").await.expect("rename");
+
+            // The store still holds `a`; the listing shows what was written.
+            let packs = get_room_packs(&hs.client, &rid).await.expect("room packs");
+            let codes: Vec<&str> = packs.packs[0].images.iter().map(|i| i.shortcode.as_str()).collect();
+            assert_eq!(codes, vec!["renamed"]);
+        }
+
+        fn power_levels(my_level: i64) -> Value {
+            state_event(
+                "m.room.power_levels",
+                "",
+                ME,
+                json!({
+                    "users": { ME: my_level },
+                    "users_default": 0,
+                    "events": { ROOM_PACK_EVENT: 50 },
+                    "state_default": 50,
+                    "events_default": 0
+                }),
+            )
+        }
+
+        #[tokio::test]
+        async fn without_power_for_packs_the_room_is_read_only() {
+            let hs = TestHomeserver::new().await;
+            let low = room("pk-low-power");
+            let high = room("pk-high-power");
+            hs.sync(joined_rooms(&[
+                (&low, vec![own_join(), power_levels(0)]),
+                (&high, vec![own_join(), power_levels(50)]),
+            ]))
+            .await;
+            mount_no_account_data(&hs).await;
+            assert!(!get_room_packs(&hs.client, &low).await.expect("low").can_edit);
+            assert!(get_room_packs(&hs.client, &high).await.expect("high").can_edit);
+        }
     }
 }

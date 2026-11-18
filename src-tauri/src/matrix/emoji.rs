@@ -558,4 +558,39 @@ mod tests {
             Some("mxc://example.com/cry".to_string())
         );
     }
+
+    // Review fix: the space walk against a homeserver's synced state.
+    mod io {
+        use super::*;
+        use crate::matrix::test_support::{joined_rooms, own_join, space_child, space_create, state_event, TestHomeserver, ME};
+        use serde_json::json;
+
+        #[tokio::test]
+        async fn a_space_pack_is_offered_in_the_space_rooms_only() {
+            let hs = TestHomeserver::new().await;
+            let space = "!emoji-space:example.org";
+            let inside = "!emoji-inside:example.org";
+            let outside = "!emoji-outside:example.org";
+            let pack = state_event(
+                "im.ponies.room_emotes",
+                "",
+                ME,
+                json!({ "pack": { "display_name": "Work" }, "images": { "workblob": { "url": "mxc://x/w" } } }),
+            );
+            hs.sync(joined_rooms(&[
+                (space, vec![own_join(), space_create(), space_child(inside), pack]),
+                (inside, vec![own_join()]),
+                (outside, vec![own_join()]),
+            ]))
+            .await;
+
+            let in_room = get_emoji_packs(&hs.client, Some(inside)).await.expect("inside");
+            let space_pack = in_room.iter().find(|p| p.room_id.as_deref() == Some(space)).expect("space pack offered");
+            assert_eq!(space_pack.scope, "space");
+            assert_eq!(space_pack.emojis[0].shortcode, "workblob");
+
+            let elsewhere = get_emoji_packs(&hs.client, Some(outside)).await.expect("outside");
+            assert!(elsewhere.iter().all(|p| p.room_id.as_deref() != Some(space)));
+        }
+    }
 }

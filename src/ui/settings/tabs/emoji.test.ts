@@ -63,6 +63,23 @@ describe("Settings → Emoji", () => {
     expect(el.querySelector(".emoji-settings__user-pack .pack-editor__favorite")).toBeNull();
   });
 
+  // Review fix (spec decision 6): images in the legacy { packs } form are
+  // shown apart and read-only; the personal pack itself stays editable.
+  it("shows legacy-format images apart, read-only, and keeps your pack editable", async () => {
+    ipc.getUserPack.mockResolvedValue({
+      ...USER_PACK,
+      images: [],
+      legacy_images: [{ shortcode: "oldblob", url: "data:image/png;base64,AA", body: null, usage: null }],
+    });
+    const el = await render();
+    const editors = [...el.querySelectorAll(".emoji-settings__user-pack .pack-editor")];
+    expect(editors).toHaveLength(2);
+    expect(editors[0].querySelector(".pack-editor__add")).not.toBeNull();
+    expect(editors[1].querySelector(".pack-editor__cell[data-shortcode='oldblob']")).not.toBeNull();
+    expect(editors[1].querySelector(".pack-editor__add")).toBeNull();
+    expect(el.querySelector(".emoji-settings__user-pack")!.textContent).toMatch(/older format/i);
+  });
+
   it("lists a favorite from a room you left as not joined", async () => {
     ipc.getFavoritePacks.mockResolvedValue([favorite({ joined: false, room_name: null, room_id: "!gone:x", display_name: null, image_count: 0 })]);
     const el = await render();

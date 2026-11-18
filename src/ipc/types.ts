@@ -306,8 +306,13 @@ export interface EditablePack {
   /** Sorted by shortcode. */
   images: EditableImage[];
   favorited: boolean;
-  /** The personal pack exists only in a non-standard form Quark shows but does not edit. */
+  /** Not editable here (set for the legacy images shown apart). */
   read_only: boolean;
+  /**
+   * The personal pack only: images in the non-standard `{ packs: {…} }` form,
+   * shown read-only and never written (edits go to the standard pack).
+   */
+  legacy_images?: EditableImage[];
 }
 
 export interface RoomPacks {

@@ -85,6 +85,23 @@ describe("loadCustomEmoji", () => {
     expect(customEmojiMxc("!r:x", "blob")).toBeUndefined();
   });
 
+  // Review fix: every edit reloads; a slower, older load used to land last and
+  // put back the packs as they were before the edit.
+  it("keeps a slower, older load from overwriting a newer one", async () => {
+    let finishOld!: (p: EmojiPack[]) => void;
+    getEmojiPacks.mockReturnValueOnce(new Promise((r) => { finishOld = r; }));
+    const oldLoad = loadCustomEmoji("!r:x", { onPacks: () => {} });
+    getEmojiPacks.mockResolvedValueOnce([{ ...PACK, emojis: [{ shortcode: "new", url: "mxc://x/new", body: null, usage: ["emoticon"] }] }]);
+    await loadCustomEmoji("!r:x", { onPacks: () => {} });
+    const heard: string[][] = [];
+    finishOld([{ ...PACK, emojis: [{ shortcode: "old", url: "mxc://x/old", body: null, usage: ["emoticon"] }] }]);
+    await oldLoad;
+    expect(customEmojiMxc("!r:x", "new")).toBe("mxc://x/new");
+    expect(customEmojiMxc("!r:x", "old")).toBeUndefined();
+    expect(cachedCustomEmoji("!r:x").flatMap((p) => p.emojis.map((e) => e.shortcode))).toEqual(["new"]);
+    expect(heard).toEqual([]);
+  });
+
   it("invalidateCustomEmoji drops cached packs and bumps the version", async () => {
     await loadCustomEmoji("!r:x", { onPacks: () => {} });
     const before = customEmojiVersion();

@@ -320,7 +320,9 @@ export class PackEditor {
   private async _confirmRemove(shortcode: string): Promise<void> {
     const ok = await askConfirm({
       title: "Delete emoji",
-      message: `Delete :${shortcode}: from this pack? Everyone using the pack loses it.`,
+      message: this._opts.location.kind === "user"
+        ? `Delete :${shortcode}: from your pack?`
+        : `Delete :${shortcode}: from this pack? Everyone using the pack loses it.`,
       confirmLabel: "Delete",
       danger: true,
     });
@@ -339,7 +341,7 @@ export class PackEditor {
     const name = this._pack.display_name ?? "this pack";
     const ok = await askConfirm({
       title: "Delete pack",
-      message: `Delete ${name} and its ${this._pack.images.length} images? Every room using it loses them.`,
+      message: `Delete ${name} and its ${this._pack.images.length} image${this._pack.images.length === 1 ? "" : "s"}? Every room using it loses them.`,
       confirmLabel: "Delete pack",
       danger: true,
     });
@@ -456,6 +458,8 @@ export class PackEditor {
       cell.setAttribute("aria-selected", String(on));
     }
     this._renderDetail();
+    // Below a long grid — on a phone above all — the details would open out of view.
+    this._detailEl.scrollIntoView?.({ block: "nearest" });
   }
 
   private _renderDetail(): void {
@@ -490,9 +494,11 @@ export class PackEditor {
     }
 
     const loc = this._opts.location;
-    // The fields read the selection when they save, not when they were built:
-    // a rename changes which shortcode the next edit is about.
-    const current = (): string => this._selected ?? image.shortcode;
+    // The shortcode this panel's fields act on: theirs, not the editor's
+    // selection. A rename changes it; a slow rename that lands after another
+    // image was opened must not move that image's edits onto the renamed one.
+    let code = image.shortcode;
+    const current = (): string => code;
 
     this._detailEl.appendChild(commitTextRow({
       label: "shortcode",
@@ -500,10 +506,12 @@ export class PackEditor {
       placeholder: "shortcode",
       ariaLabel: "Shortcode",
       save: async (v) => {
+        const from = code;
         const to = v.trim();
-        const next = await renamePackImage(loc, current(), to);
-        this._selected = to;
+        const next = await renamePackImage(loc, from, to);
+        code = to;
         title.textContent = `:${to}:`;
+        if (this._selected === from) this._selected = to;
         this._applyPack(next);
       },
     }).row);
