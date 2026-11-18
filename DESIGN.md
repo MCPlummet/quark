@@ -1141,10 +1141,13 @@ step.
 
 The browser's own textarea undo is not used: Quark writes `value` directly for
 most edits, which that history either never sees or discards, depending on the
-engine. The bound chords are claimed before the webview sees them, and the
-platform's own undo (macOS Edit menu, iOS shake) arrives as a `beforeinput`
-`historyUndo`/`historyRedo`, which is cancelled and routed to the same history,
-so the two can never both apply.
+engine. The chords are claimed before the webview sees them — in Insert and in
+compose Normal alike — and where the platform has an undo command of its own
+(macOS Edit menu, iOS shake) it arrives as a `beforeinput` `historyUndo`, which
+is cancelled and routed to the same history, so the two can never both apply.
+Because no native undo ever runs, the platform's own redo never has anything to
+redo; redo is the chords and `:redo`. Android has no platform undo at all. None
+of this has an on-screen control (the parity exemption says so).
 
 Sending, starting an edit and cancelling one start a fresh history
 (`Input.resetValue`) — undo must not step from a message being edited back into

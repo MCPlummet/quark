@@ -504,7 +504,7 @@ const ACTION_LITERALS = [
     command: { name: "undo", aliases: ["u"] },
     bindings: [{ sequence: "Ctrl-z", context: "insert" }],
     parityExempt:
-      "Editing history of the text field itself; on touch, the platform's own undo (iOS shake / Edit menu) reaches the same history through beforeinput.",
+      "Editing history of the text field itself, reached by keyboard and by :undo (palette). No on-screen control: where the platform has an undo command (macOS Edit menu, iOS shake) it reaches the same history through beforeinput; Android has none.",
   },
   {
     id: "compose-redo",
@@ -516,7 +516,7 @@ const ACTION_LITERALS = [
       { sequence: "Ctrl-y", context: "insert" },
     ],
     parityExempt:
-      "Editing history of the text field itself; on touch, the platform's own redo reaches the same history through beforeinput.",
+      "Editing history of the text field itself, reached by keyboard and by :redo (palette). The platform's own redo never has anything to redo (no native undo runs), so there is no touch route.",
   },
 
   // ── Panels and dialogs ─────────────────────────────────────────────────

@@ -111,6 +111,25 @@ describe("ComposeHistory", () => {
     expect(h.undo()).toBe("");
   });
 
+  // Review fix: the step an undo lands on was left open, so the next keystroke
+  // joined it and the following undo took the earlier typing with it.
+  it("typing after an undo starts a step of its own", () => {
+    const h = new ComposeHistory("");
+    typeAtEnd(h, "hello");
+    h.record("hell", { kind: "delete", caretBefore: 5 });
+    expect(h.undo()).toBe("hello");
+    h.record("hello!", { kind: "insert", caretBefore: 5 });
+    expect(h.undo()).toBe("hello");
+  });
+
+  it("seal closes the current step against the next keystroke", () => {
+    const h = new ComposeHistory("");
+    typeAtEnd(h, "ab");
+    h.seal();
+    h.record("abc", { kind: "insert", caretBefore: 2 });
+    expect(h.undo()).toBe("ab");
+  });
+
   it("an undo seals the step it leaves, so typing after redo starts fresh", () => {
     const h = new ComposeHistory("");
     typeAtEnd(h, "ab");

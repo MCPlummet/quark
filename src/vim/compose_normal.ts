@@ -226,6 +226,17 @@ export class ComposeNormalEditor {
     else field.setSelectionRange(pos, pos);
   }
 
+  /**
+   * Bring the caret back onto a character and re-show the block cursor — for
+   * when the text changed under it (an undo/redo restored or removed the end
+   * of a line), where `x` and the block would otherwise find nothing.
+   */
+  settle(field: HTMLTextAreaElement): void {
+    const pos = this.clampToLine(field.value, field.selectionStart ?? 0);
+    field.setSelectionRange(pos, pos);
+    this.primeBlock(field);
+  }
+
   /** Clear any pending operator/count state (e.g. on leaving the field). */
   reset(): void {
     this.count = "";

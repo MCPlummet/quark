@@ -123,6 +123,36 @@ describe("Input", () => {
       expect(input.getValue()).toBe("bold");
     });
 
+    // Review fix: the first character typed over a selection was its own step,
+    // so select-all + "new" + Ctrl-Z left "n".
+    it("undoes typing over a selection in one step", () => {
+      typeChars("hello world");
+      input.getFieldElement().setSelectionRange(0, 11);
+      typeChars("new");
+      input.undo();
+      expect(input.getValue()).toBe("hello world");
+    });
+
+    it("keeps typing after a room's history comes back apart from its old steps", () => {
+      input.switchContext("!a", "");
+      typeChars("abc");
+      input.switchContext("!b", "");
+      input.switchContext("!a", "abc");
+      input.getFieldElement().setSelectionRange(3, 3);
+      typeChars("d");
+      input.undo();
+      expect(input.getValue()).toBe("abc");
+    });
+
+    it("routes the platform's own redo into this history", () => {
+      typeChars("abc");
+      input.undo();
+      const evt = new InputEvent("beforeinput", { inputType: "historyRedo", bubbles: true, cancelable: true });
+      input.getFieldElement().dispatchEvent(evt);
+      expect(evt.defaultPrevented).toBe(true);
+      expect(input.getValue()).toBe("abc");
+    });
+
     it("covers a change no event reported", () => {
       input.getFieldElement().value = "written behind its back";
       expect(input.undo()).toBe(true);

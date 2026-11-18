@@ -147,8 +147,12 @@ export function looksLikeFileListText(text: string): boolean {
  * a programmatic write announced with a plain `Event` — is a change of its own.
  */
 export function classifyInput(e: Event, collapsedBefore: boolean): EditKind {
-  if (!(e instanceof InputEvent) || !collapsedBefore) return "edit";
+  if (!(e instanceof InputEvent)) return "edit";
+  // A character typed over a selection is typing too: it starts a step (the
+  // caret is not where the last one left it) that the rest of the word joins,
+  // so select-all + "new" undoes in one go rather than leaving the "n".
   if (e.inputType === "insertText" && e.data !== null && [...e.data].length === 1) return "insert";
+  if (!collapsedBefore) return "edit";
   if (e.inputType === "deleteContentBackward" || e.inputType === "deleteContentForward") return "delete";
   return "edit";
 }
@@ -726,7 +730,13 @@ export class Input {
     if (this._historyKey !== null) this._histories.set(this._historyKey, this._history);
     this._historyKey = key;
     const stored = key !== null ? this._histories.get(key) : undefined;
-    this._history = stored && stored.current === text ? stored : new ComposeHistory(text);
+    if (stored && stored.current === text) {
+      // Typing on return starts afresh rather than joining the step it left off in.
+      stored.seal();
+      this._history = stored;
+    } else {
+      this._history = new ComposeHistory(text);
+    }
     this._fieldEl.value = text;
     this._autoGrow();
   }

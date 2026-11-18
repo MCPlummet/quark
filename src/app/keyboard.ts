@@ -607,6 +607,29 @@ function translateComposeKey(key: string): string {
 }
 
 /**
+ * The undo/redo a chord asks for in compose Normal mode (#117), or null.
+ * Ctrl and Cmd are one modifier here, as in every other chord.
+ */
+export function composeHistoryChord(e: {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}): "undo" | "redo" | null {
+  switch (eventChord(e)) {
+    case "Ctrl-z":
+      return "undo";
+    case "Ctrl-Shift-z":
+    case "Ctrl-y":
+    case "Ctrl-r":
+      return "redo";
+    default:
+      return null;
+  }
+}
+
+/**
  * Routes keys for compose-box Normal mode (#45) through the vim editor:
  * motions, operators, counts, x/D/C/Y, insert-entry, p/P, r. Returns true if
  * the key was handled. Keys the editor doesn't own (v, :, copy/quote/paste)
@@ -615,15 +638,18 @@ function translateComposeKey(key: string): string {
 function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents): boolean {
   const field = components.input.getFieldElement();
 
-  // Ctrl-r: vim's redo (#117) — the one chord the compose editor owns. It
-  // must be claimed here, ahead of the modifier pass-through below, or the
-  // webview takes it as "reload".
-  if (eventChord(e) === "Ctrl-r") {
+  // Undo/redo chords (#117): vim's Ctrl-r, and the Ctrl-Z / Ctrl-Shift-Z /
+  // Ctrl-Y every editor has. Claimed here, ahead of the modifier pass-through
+  // below, or the webview takes Ctrl-r as "reload" and the others as its own
+  // undo — outside the compose box's history.
+  const chord = composeHistoryChord(e);
+  if (chord) {
     e.preventDefault();
     e.stopPropagation();
     composeEditor.reset();
-    components.input.redo();
-    composeEditor.primeBlock(field);
+    if (chord === "undo") components.input.undo();
+    else components.input.redo();
+    composeEditor.settle(field);
     return true;
   }
 
@@ -642,7 +668,7 @@ function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents)
     for (let i = 0; i < (res.times ?? 1); i++) {
       if (!components.input.undo()) break;
     }
-    composeEditor.primeBlock(field);
+    composeEditor.settle(field);
   } else if (res.exitUp) {
     // `k` on the first line: leave the compose box upward into the timeline.
     // Falls back to staying put (and re-priming the block) when there's no

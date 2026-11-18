@@ -91,6 +91,9 @@ export class ComposeHistory {
     if (this.pos === 0) return null;
     this.steps[this.pos].sealed = true;
     this.pos--;
+    // Sealed too: typing after an undo must not join the step it landed on, or
+    // the next undo would take that earlier typing with it.
+    this.steps[this.pos].sealed = true;
     return this.current;
   }
 
