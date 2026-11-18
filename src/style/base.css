@@ -5275,6 +5275,26 @@ body.quark-mobile .settings-dialog__field-status {
   margin-top: 0;
 }
 
+/* Settings → Emoji → Favorite packs (#12) — src/ui/packs/favorites.ts */
+.favorite-packs__row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.favorite-packs__icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.favorite-packs__where {
+  font-size: calc(var(--font-size) - 2px);
+}
+
+.favorite-packs__remove {
+  margin-left: auto;
+}
+
 .settings-dialog__theme-btn {
   background: transparent;
   border: none;
