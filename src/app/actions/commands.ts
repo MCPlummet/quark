@@ -238,6 +238,16 @@ export async function executeCommand(parsed: ParsedCommand): Promise<void> {
       break;
     }
 
+    case "compose-undo": {
+      getComponents().input.undo();
+      break;
+    }
+
+    case "compose-redo": {
+      getComponents().input.redo();
+      break;
+    }
+
     case "open-directory": {
       openRoomDirectory();
       break;

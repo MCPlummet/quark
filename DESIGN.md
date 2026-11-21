@@ -1090,6 +1090,9 @@ failed creation keeps the dialog open with the error inline.
 | Insert        | `Ctrl-g`      | Open GIF search               |
 | Insert        | `Ctrl-b/i/u`  | Bold / italic / underline     |
 | Insert        | `Ctrl-Shift-x`| Strikethrough                 |
+| Insert        | `Ctrl-z`      | Undo (see [Compose undo](#compose-undo)) |
+| Insert        | `Ctrl-Shift-z` / `Ctrl-y` | Redo              |
+| Compose Normal| `u` / `Ctrl-r`| Undo / redo, with a count (the Insert chords work too) |
 | Insert        | `Enter`       | Send (see send-key behaviour) |
 | Insert        | `:word:`      | Autocomplete :shortcode:      |
 | Picker        | `j/k/h/l`     | Navigate grid                 |
@@ -1121,8 +1124,50 @@ Normal-mode editing of the draft (vim motions/operators on the text). The
 compose box then behaves like the message just below the timeline — pressing the
 up key (`k`) on the draft's first line moves focus up into the timeline, and the
 down key (`j`) past the last message drops back into the draft (caret at the
-top). `i` resumes editing. An empty compose box is left untouched by `j` at the
-bottom of the timeline; press `i` to start composing.
+top). `i` resumes editing. A draft deleted by hand still counts while undo can
+bring it back: `Esc` stays in the emptied box, where `u` restores it, and `j`
+comes back down to it. An empty compose box with nothing to undo (a fresh one,
+or one just sent) is left untouched by `Esc` and by `j` at the bottom of the
+timeline; press `i` to start composing.
+
+#### Compose undo
+
+The compose box keeps its own undo history (`src/ui/compose_history.ts`, owned
+by `Input`): `Ctrl-z` / `Ctrl-Shift-z` / `Ctrl-y` in Insert and compose Normal,
+`u` / `Ctrl-r` (with a count) in compose Normal, and `:undo` / `:u`, `:redo` /
+`:red`. The chords are the `compose-undo` / `compose-redo` bindings of the
+insert context; compose Normal resolves them there too — they belong to the
+box, not to the mode — so an `imap` or `iunmap` moves them in both. `u` and
+`Ctrl-r` are compose Normal's own vim grammar, like `x` and `d`, not bindings.
+
+The history records every change from the field's `input` event — whoever made
+it — plus `setValue`, so vim operators, autocomplete, quoting, the markdown
+wrappers and a select-all-delete all undo. Typing undoes a word at a time (whitespace closes a
+step; typing and deleting are separate steps, and typing over a selection
+starts one; anything else is a step of its own), and the caret lands where the
+text changed, never inside a surrogate pair. An IME composition that only
+inserts text at the caret, with no whitespace — a dead key, an accent popup, a
+word from a phone keyboard — counts as typing, so "café " undoes in one step;
+one that rewrites text or commits whitespace is a step of its own.
+
+The browser's own textarea undo is not used: Quark writes `value` directly for
+most edits, which that history either never sees or discards, depending on the
+engine. The chords are claimed before the webview sees them — in Insert and in
+compose Normal alike — and where the platform has an undo command of its own
+(macOS Edit menu, iOS shake) it arrives as a `beforeinput` `historyUndo`, which
+is cancelled and routed to the same history, so the two can never both apply.
+Because no native undo ever runs, the platform's own redo never has anything to
+redo; redo is the chords and `:redo`. Android has no platform undo at all. None
+of this has an on-screen control (the parity exemption says so).
+
+Sending starts a fresh history (`Input.resetValue`). Starting an edit sets the
+draft in the box aside, undo history and all (`Input.setDraftAside`), and gives
+the message being edited a history of its own — undo must not step from it back
+into the draft and send that as the edit. When the edit ends, sent or cancelled
+(a room switch cancels one), the draft comes back with its history
+(`Input.restoreDraft`). Switching rooms hands the compose box the room
+(`Input.switchContext`), so each room's history comes back with its draft,
+provided the draft is unchanged.
 
 ### Keybinding Configuration (quarkrc)
 
@@ -1218,6 +1263,8 @@ handler is now a compile error, not a silent no-op.
 :emoji                                         Open the emoji / sticker picker
 :gif                                           Open the GIF picker
 :stickers                                      Browse sticker packs
+:undo / :u                                     Undo the last change to the draft
+:redo / :red                                   Redo it
 :profile                                       Open your profile
 :settings                                      Open settings
 :info                                          Open room info (Info tab)

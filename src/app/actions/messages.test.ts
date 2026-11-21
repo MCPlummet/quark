@@ -43,7 +43,7 @@ const replyPreview = {
   showEdit: vi.fn(),
   showThread: vi.fn(),
 };
-const input = { setValue: vi.fn() };
+const input = { setValue: vi.fn(), resetValue: vi.fn(), setDraftAside: vi.fn(), restoreDraft: vi.fn() };
 const timeline = { removeMessage: vi.fn(), updateMessageBody: vi.fn(), uncountThreadReply: vi.fn() };
 
 beforeEach(() => {
@@ -124,21 +124,32 @@ describe("startEdit / cancelEdit", () => {
     startEdit("$e2", "original body");
     expect(AppState.get("editingEventId")).toBe("$e2");
     expect(replyPreview.showEdit).toHaveBeenCalledExactlyOnceWith("original body");
-    expect(input.setValue).toHaveBeenCalledExactlyOnceWith("original body");
+    // Review fix (#117): the draft in the box is set aside, undo history and
+    // all, rather than thrown away; the edit gets a history of its own.
+    expect(input.setDraftAside).toHaveBeenCalledExactlyOnceWith("original body");
+    expect(input.setValue).not.toHaveBeenCalled();
   });
 
-  it("cancelEdit clears the target, empties the compose box and hides the banner", () => {
+  it("editing another message straight after one leaves the set-aside draft alone", () => {
+    startEdit("$e1", "first");
+    startEdit("$e2", "second");
+    expect(input.setDraftAside).toHaveBeenCalledExactlyOnceWith("first");
+    expect(input.resetValue).toHaveBeenCalledExactlyOnceWith("second");
+    expect(AppState.get("editingEventId")).toBe("$e2");
+  });
+
+  it("cancelEdit clears the target, brings the displaced draft back and hides the banner", () => {
     AppState.set("editingEventId", "$e2");
     cancelEdit();
     expect(AppState.get("editingEventId")).toBeNull();
-    expect(input.setValue).toHaveBeenCalledExactlyOnceWith("");
+    expect(input.restoreDraft).toHaveBeenCalledOnce();
     expect(replyPreview.hide).toHaveBeenCalledOnce();
   });
 
   it("cancelEdit is a no-op when nothing is being edited", () => {
     AppState.set("editingEventId", null);
     cancelEdit();
-    expect(input.setValue).not.toHaveBeenCalled();
+    expect(input.restoreDraft).not.toHaveBeenCalled();
     expect(replyPreview.hide).not.toHaveBeenCalled();
   });
 });

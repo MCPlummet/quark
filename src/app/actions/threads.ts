@@ -303,7 +303,7 @@ export async function sendThreadReply(
   const fieldStyle = getComputedStyle(fieldEl);
   const targetRect = threadView.getMessageEl(optimisticId)?.getBoundingClientRect() ?? null;
 
-  input.setValue("");
+  input.resetValue("");
 
   // Fly a text clone from the compose field to the new row in the panel.
   const textClone = document.createElement("div");

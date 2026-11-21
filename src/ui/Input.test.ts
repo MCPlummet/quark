@@ -1,6 +1,23 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { Input, isFileUriList, looksLikeFileListText } from "./Input.js";
+import { Input, isFileUriList, looksLikeFileListText, compositionRecord } from "./Input.js";
 import { Mode } from "../vim/mode.js";
+
+describe("compositionRecord", () => {
+  const at = (value: string, caret: number, collapsed = true) => ({ value, caret, collapsed });
+
+  it("records a pure insertion at the caret as typing that continues from there", () => {
+    expect(compositionRecord(at("caf", 3), "café")).toEqual({ kind: "insert", caretBefore: 3 });
+    expect(compositionRecord(at("ab", 1), "a日本b")).toEqual({ kind: "insert", caretBefore: 1 });
+  });
+
+  it("records anything else as a change of its own", () => {
+    expect(compositionRecord(null, "x")).toEqual({ kind: "edit" });
+    expect(compositionRecord(at("cafe", 3, false), "café")).toEqual({ kind: "edit" });
+    expect(compositionRecord(at("cafe", 4), "café")).toEqual({ kind: "edit" });
+    expect(compositionRecord(at("ab", 2), "ab c")).toEqual({ kind: "edit" });
+    expect(compositionRecord(at("abc", 3), "abc")).toEqual({ kind: "edit" });
+  });
+});
 
 describe("Input", () => {
   let input: Input;
@@ -63,6 +80,277 @@ describe("Input", () => {
       if (field) field.value = "typed text";
 
       expect(input.getValue()).toBe("typed text");
+    });
+  });
+
+  // #117: Ctrl-Z / `u` / `:undo` had nothing to call. Most of the field's edits
+  // write `value` directly, which the browser's own undo never sees.
+  describe("undo history", () => {
+    /** Mutate the field the way the browser does for one InputEvent, firing beforeinput + input. */
+    function browserEdit(inputType: string, data: string | null, next: string, caret: number) {
+      const f = input.getFieldElement();
+      f.dispatchEvent(new InputEvent("beforeinput", { inputType, data, bubbles: true, cancelable: true }));
+      f.value = next;
+      f.setSelectionRange(caret, caret);
+      f.dispatchEvent(new InputEvent("input", { inputType, data, bubbles: true }));
+    }
+
+    function typeChars(text: string) {
+      const f = input.getFieldElement();
+      for (const ch of text) {
+        const at = f.selectionStart ?? f.value.length;
+        browserEdit("insertText", ch, f.value.slice(0, at) + ch + f.value.slice(f.selectionEnd ?? at), at + 1);
+      }
+    }
+
+    it("brings a message back after select-all and delete", () => {
+      typeChars("hello world");
+      const f = input.getFieldElement();
+      f.setSelectionRange(0, f.value.length);
+      browserEdit("deleteContentBackward", null, "", 0);
+
+      expect(input.undo()).toBe(true);
+      expect(input.getValue()).toBe("hello world");
+      expect(f.selectionStart).toBe(11);
+    });
+
+    it("undoes typing a word at a time and redoes it", () => {
+      typeChars("hello world");
+      input.undo();
+      expect(input.getValue()).toBe("hello ");
+      input.undo();
+      expect(input.getValue()).toBe("");
+      expect(input.undo()).toBe(false);
+      input.redo();
+      expect(input.getValue()).toBe("hello ");
+    });
+
+    // Review fix: the caret landed between the halves of the 😀, and compose
+    // Normal's `x` then deleted one of them.
+    it("leaves the caret on a character boundary after undoing an emoji", () => {
+      const f = input.getFieldElement();
+      input.resetValue("😀");
+      f.setSelectionRange(0, 0);
+      browserEdit("insertText", "😂", "😂😀", 2);
+      input.undo();
+      expect(input.getValue()).toBe("😀");
+      expect(f.selectionStart).toBe(0);
+    });
+
+    it("undoes a programmatic setValue (autocomplete, quoting)", () => {
+      typeChars("hi :jo");
+      input.setValue("hi 😂 ");
+      input.undo();
+      expect(input.getValue()).toBe("hi :jo");
+    });
+
+    it("undoes a write that fired a plain input event (vim operators, wrapSelection)", () => {
+      typeChars("bold");
+      input.getFieldElement().setSelectionRange(0, 4);
+      input.wrapSelection("**");
+      input.undo();
+      expect(input.getValue()).toBe("bold");
+    });
+
+    // Review fix: the first character typed over a selection was its own step,
+    // so select-all + "new" + Ctrl-Z left "n".
+    it("undoes typing over a selection in one step", () => {
+      typeChars("hello world");
+      input.getFieldElement().setSelectionRange(0, 11);
+      typeChars("new");
+      input.undo();
+      expect(input.getValue()).toBe("hello world");
+    });
+
+    // Review fix: the replacement joined the typing before it because the
+    // selection began where that typing ended, so one undo took both.
+    it("keeps typing over a selection apart from the typing it follows", () => {
+      const f = input.getFieldElement();
+      input.resetValue("abc XYZ");
+      f.setSelectionRange(4, 4);
+      typeChars("hi");
+      f.setSelectionRange(6, 9); // Shift+End over "XYZ"
+      typeChars("Q");
+      input.undo();
+      expect(input.getValue()).toBe("abc hiXYZ");
+      input.undo();
+      expect(input.getValue()).toBe("abc XYZ");
+    });
+
+    describe("IME compositions", () => {
+      /** Commit `text` at the caret through an IME, as the browser reports one. */
+      function compose(text: string) {
+        const f = input.getFieldElement();
+        const start = f.selectionStart ?? f.value.length;
+        const end = f.selectionEnd ?? start;
+        const head = f.value.slice(0, start);
+        const tail = f.value.slice(end);
+        f.dispatchEvent(new CompositionEvent("compositionstart", { data: "", bubbles: true }));
+        // Interim states, as the IME shows them; none is a change of its own.
+        for (let i = 1; i <= text.length; i++) {
+          const shown = text.slice(0, i);
+          f.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertCompositionText", data: shown, isComposing: true, bubbles: true }));
+          f.value = head + shown + tail;
+          f.setSelectionRange(start + i, start + i);
+          f.dispatchEvent(new InputEvent("input", { inputType: "insertCompositionText", data: shown, isComposing: true, bubbles: true }));
+        }
+        f.dispatchEvent(new CompositionEvent("compositionend", { data: text, bubbles: true }));
+      }
+
+      // Review fix: every composition was a sealed step of its own, so "café "
+      // through a dead key took three undos.
+      it("groups a dead-key accent with the typing around it", () => {
+        typeChars("caf");
+        compose("é");
+        typeChars(" ");
+        input.undo();
+        expect(input.getValue()).toBe("");
+      });
+
+      it("undoes a phone keyboard's composed words a word at a time", () => {
+        compose("hello");
+        typeChars(" ");
+        compose("world");
+        input.undo();
+        expect(input.getValue()).toBe("hello ");
+        input.undo();
+        expect(input.getValue()).toBe("");
+      });
+
+      it("keeps a composition that replaced text as a step of its own", () => {
+        typeChars("cafe");
+        input.getFieldElement().setSelectionRange(3, 4);
+        compose("é");
+        input.undo();
+        expect(input.getValue()).toBe("cafe");
+      });
+
+      it("keeps a composition that committed whitespace as a step of its own", () => {
+        typeChars("ab");
+        compose("c d");
+        input.undo();
+        expect(input.getValue()).toBe("ab");
+      });
+    });
+
+    it("keeps typing after a room's history comes back apart from its old steps", () => {
+      input.switchContext("!a", "");
+      typeChars("abc");
+      input.switchContext("!b", "");
+      input.switchContext("!a", "abc");
+      input.getFieldElement().setSelectionRange(3, 3);
+      typeChars("d");
+      input.undo();
+      expect(input.getValue()).toBe("abc");
+    });
+
+    it("routes the platform's own redo into this history", () => {
+      typeChars("abc");
+      input.undo();
+      const evt = new InputEvent("beforeinput", { inputType: "historyRedo", bubbles: true, cancelable: true });
+      input.getFieldElement().dispatchEvent(evt);
+      expect(evt.defaultPrevented).toBe(true);
+      expect(input.getValue()).toBe("abc");
+    });
+
+    it("covers a change no event reported", () => {
+      input.getFieldElement().value = "written behind its back";
+      expect(input.undo()).toBe(true);
+      expect(input.getValue()).toBe("");
+    });
+
+    it("canUndo says whether undo has a change to take back", () => {
+      expect(input.canUndo()).toBe(false);
+      typeChars("abc");
+      expect(input.canUndo()).toBe(true);
+      input.undo();
+      expect(input.canUndo()).toBe(false);
+      input.getFieldElement().value = "written behind its back";
+      expect(input.canUndo()).toBe(true);
+    });
+
+    // Review fix: starting an edit threw the draft away, so cancelling the
+    // edit left an empty box.
+    it("sets a draft aside for an edit and brings it back, undo history and all", () => {
+      typeChars("hello world");
+      input.setDraftAside("the message being edited");
+      expect(input.getValue()).toBe("the message being edited");
+      expect(input.undo()).toBe(false); // the edit can't undo into the draft
+
+      input.restoreDraft();
+      const f = input.getFieldElement();
+      expect(input.getValue()).toBe("hello world");
+      expect(f.selectionStart).toBe(11);
+      input.undo();
+      expect(input.getValue()).toBe("hello ");
+    });
+
+    it("restoreDraft with nothing set aside empties the box with a fresh history", () => {
+      typeChars("abc");
+      input.restoreDraft();
+      expect(input.getValue()).toBe("");
+      expect(input.undo()).toBe(false);
+    });
+
+    it("resetValue starts a fresh history", () => {
+      typeChars("abc");
+      input.resetValue("");
+      expect(input.undo()).toBe(false);
+      expect(input.getValue()).toBe("");
+    });
+
+    it("keeps each room's history across a room switch", () => {
+      input.switchContext("!a", "");
+      typeChars("draft in a");
+      input.switchContext("!b", "");
+      expect(input.getValue()).toBe("");
+      expect(input.undo()).toBe(false);
+      input.switchContext("!a", "draft in a");
+      input.undo();
+      expect(input.getValue()).toBe("draft in ");
+    });
+
+    it("drops a room's history if the draft it returns to is not the one it left", () => {
+      input.switchContext("!a", "");
+      typeChars("abc");
+      input.switchContext("!b", "");
+      input.switchContext("!a", "something else");
+      expect(input.undo()).toBe(false);
+      expect(input.getValue()).toBe("something else");
+    });
+
+    it("routes the platform's own undo (Edit menu, shake) into this history", () => {
+      typeChars("abc");
+      const evt = new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true });
+      input.getFieldElement().dispatchEvent(evt);
+      expect(evt.defaultPrevented).toBe(true);
+      expect(input.getValue()).toBe("");
+    });
+
+    it("reports every undo and redo, by whatever route, to onHistoryApplied", () => {
+      const applied = vi.fn();
+      input.onHistoryApplied(applied);
+      typeChars("ab cd");
+      input.undo();
+      input.redo();
+      input.getFieldElement().dispatchEvent(
+        new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true }),
+      );
+      expect(applied).toHaveBeenCalledTimes(3);
+      // Nothing applied, nothing reported.
+      input.undo();
+      expect(input.undo()).toBe(false);
+      expect(applied).toHaveBeenCalledTimes(4);
+    });
+
+    it("tells input listeners about an undo without recording it as a new change", () => {
+      typeChars("abc");
+      const seen: string[] = [];
+      input.onInput((v) => seen.push(v));
+      input.undo();
+      expect(seen).toEqual([""]);
+      expect(input.redo()).toBe(true);
+      expect(input.getValue()).toBe("abc");
     });
   });
 
@@ -425,6 +713,23 @@ describe("Input", () => {
 
         expect(f.value).toBe("hello");
         expect(input.hasStagedAttachments()).toBe(true);
+      });
+
+      // The stand-in text came and went in one gesture; undo must not resurrect it.
+      it("leaves no undo step behind for the stand-in text it removed", async () => {
+        const f = field()!;
+        f.value = "hello";
+        f.selectionStart = f.selectionEnd = 5;
+
+        const { deliverImage } = pasteWithClipboardImage();
+        f.value = "hello https://example.org/img.png";
+        await settle();
+        await deliverImage();
+
+        input.undo();
+        expect(f.value).toBe("");
+        input.redo();
+        expect(f.value).toBe("hello");
       });
 
       // `clipboard.read()` can sit behind a permission prompt, so the window is

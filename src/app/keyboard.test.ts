@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { dispatchAction, resolveModeRoute, escapeRunsPanelClose } from "./keyboard.js";
+import { dispatchAction, resolveModeRoute, escapeRunsPanelClose, composeHistoryChord } from "./keyboard.js";
 import { Mode } from "../vim/mode.js";
 import { confirmAndLeaveRoom, redactMessage, startEdit } from "./actions.js";
 import { AppState } from "./state.js";
 import type { AppComponents } from "../ui/App.js";
+import { registerDefaultBindings } from "./registry.js";
+import { keymapManager } from "../vim/keybindings.js";
 
 // dispatchAction routes resolved action names to handlers. Two invariants from
 // #22: an unknown action must be dropped (the old default case re-dispatched
@@ -83,6 +85,50 @@ describe("dispatchAction — chord-bound actions", () => {
     ] as const) {
       dispatchAction(action, components);
       expect(wrapSelection).toHaveBeenLastCalledWith(marker);
+    }
+  });
+});
+
+describe("dispatchAction — compose undo (#117)", () => {
+  it("undoes and redoes the compose box", () => {
+    const undo = vi.fn();
+    const redo = vi.fn();
+    const components = { input: { undo, redo } } as unknown as AppComponents;
+    dispatchAction("compose-undo", components);
+    expect(undo).toHaveBeenCalledOnce();
+    dispatchAction("compose-redo", components);
+    expect(redo).toHaveBeenCalledOnce();
+  });
+});
+
+// The compose box's undo/redo chords resolve through the keymap's insert
+// context — in compose Normal too — so a quarkrc moves them everywhere at once.
+describe("composeHistoryChord", () => {
+  beforeEach(() => registerDefaultBindings());
+
+  it("maps the default undo and redo chords", () => {
+    expect(composeHistoryChord("Ctrl-z")).toBe("undo");
+    expect(composeHistoryChord("Ctrl-Shift-z")).toBe("redo");
+    expect(composeHistoryChord("Ctrl-y")).toBe("redo");
+  });
+
+  it("ignores everything else, including vim's Ctrl-r (compose Normal grammar)", () => {
+    expect(composeHistoryChord(null)).toBeNull();
+    expect(composeHistoryChord("Ctrl-r")).toBeNull();
+    expect(composeHistoryChord("Ctrl-c")).toBeNull();
+    expect(composeHistoryChord("Ctrl-e")).toBeNull(); // bound, but not to the history
+  });
+
+  // Review fix: compose Normal hardcoded the chords, so a quarkrc remap applied
+  // in Insert and not there.
+  it("follows a quarkrc's imap / iunmap", () => {
+    keymapManager.unmap("insert", "Ctrl-y");
+    keymapManager.map("insert", "Ctrl-Alt-z", "compose-undo");
+    try {
+      expect(composeHistoryChord("Ctrl-y")).toBeNull();
+      expect(composeHistoryChord("Ctrl-Alt-z")).toBe("undo");
+    } finally {
+      keymapManager.unmap("insert", "Ctrl-Alt-z");
     }
   });
 });

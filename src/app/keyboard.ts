@@ -357,6 +357,14 @@ export function dispatchAction(action: string, components: AppComponents): void 
       input.wrapSelection("~~");
       break;
 
+    case "compose-undo":
+      input.undo();
+      break;
+
+    case "compose-redo":
+      input.redo();
+      break;
+
     case "open-room-info":
       void openRoomInfo();
       break;
@@ -599,25 +607,70 @@ function translateComposeKey(key: string): string {
 }
 
 /**
+ * The undo/redo a chord asks of the compose box (#117), or null: whatever the
+ * keymap binds to compose-undo / compose-redo. Those bindings live in the
+ * insert context (`imap`) and apply in compose Normal too — they belong to the
+ * box, not to the mode — so a quarkrc that moves or unmaps one does so in both.
+ * Vim's own `u` and Ctrl-r are not bindings but compose Normal grammar, with
+ * counts (see ComposeNormalEditor).
+ */
+export function composeHistoryChord(chord: string | null): "undo" | "redo" | null {
+  if (!chord) return null;
+  switch (keymapManager.actionForKey(chord, "insert")) {
+    case "compose-undo":
+      return "undo";
+    case "compose-redo":
+      return "redo";
+    default:
+      return null;
+  }
+}
+
+/**
  * Routes keys for compose-box Normal mode (#45) through the vim editor:
- * motions, operators, counts, x/D/C/Y, insert-entry, p/P, r. Returns true if
- * the key was handled. Keys the editor doesn't own (v, :, copy/quote/paste)
- * fall through to {@link handleTextSelectKeydown}.
+ * motions, operators, counts, x/D/C/Y, insert-entry, p/P, r, u / Ctrl-r.
+ * Returns true if the key was handled. Keys the editor doesn't own (v, :,
+ * copy/quote/paste) fall through to {@link handleTextSelectKeydown}.
  */
 function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents): boolean {
-  // Modifier combos (clipboard, Ctrl+K palette, …) and bare modifier presses
-  // are not editor commands — let them reach their handlers.
-  if (e.ctrlKey || e.metaKey || e.altKey) return false;
-  if (e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") return false;
-
   const field = components.input.getFieldElement();
-  const res = composeEditor.handleKey(translateComposeKey(e.key), field);
+  const chord = eventChord(e);
+
+  // The compose box's undo/redo chords (#117), as the keymap has them. Claimed
+  // here, ahead of the modifier pass-through below, or the webview takes them
+  // as its own undo — outside the compose box's history.
+  const chordOp = composeHistoryChord(chord);
+  if (chordOp) {
+    e.preventDefault();
+    e.stopPropagation();
+    composeEditor.reset();
+    if (chordOp === "undo") components.input.undo();
+    else components.input.redo();
+    return true; // the block cursor is re-settled by onHistoryApplied
+  }
+
+  // Other modifier combos (clipboard, Ctrl+K palette, …) and bare modifier
+  // presses are not editor commands — let them reach their handlers. The one
+  // chord vim's grammar has is Ctrl-r, redo; claiming it also keeps the
+  // webview from taking it as "reload".
+  let key: string;
+  if (chord === "Ctrl-r") key = chord;
+  else if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  else if (e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") return false;
+  else key = translateComposeKey(e.key);
+
+  const res = composeEditor.handleKey(key, field);
   if (!res.consumed) return false;
 
   e.preventDefault();
   e.stopPropagation();
 
-  if (res.exitUp) {
+  if (res.history) {
+    const step = res.history === "undo" ? () => components.input.undo() : () => components.input.redo();
+    for (let i = 0; i < (res.times ?? 1); i++) {
+      if (!step()) break;
+    }
+  } else if (res.exitUp) {
     // `k` on the first line: leave the compose box upward into the timeline.
     // Falls back to staying put (and re-priming the block) when there's no
     // message to land on (#15).
@@ -654,16 +707,27 @@ function exitComposeToTimeline(components: AppComponents): boolean {
 }
 
 /**
+ * Whether the compose box holds a draft to come back to in compose Normal:
+ * text, or a draft emptied by hand that undo can bring back (#117). An empty
+ * box with nothing to undo has nothing to edit, so Esc and `j` leave it to the
+ * panels.
+ */
+function composeHoldsDraft(input: AppComponents["input"]): boolean {
+  return input.getValue().length > 0 || input.canUndo();
+}
+
+/**
  * Enter the compose box from the timeline's bottom edge (#15). Triggered when
  * `nav-down` can't move the timeline selection any further and the compose box
  * holds a draft: focus the field in compose-Normal mode with the caret at the
- * top so a subsequent `k` returns to the timeline. No-op on an empty draft, so
- * plain timeline navigation in an empty room is unaffected — `i` still composes.
+ * top so a subsequent `k` returns to the timeline. No-op when it holds none
+ * (see {@link composeHoldsDraft}), so plain timeline navigation in an empty
+ * room is unaffected — `i` still composes.
  */
 function enterComposeFromTimeline(components: AppComponents): void {
   const { input, timeline, threadView } = components;
   if (modeManager.current !== Mode.Normal) return;
-  if (input.getValue().length === 0) return;
+  if (!composeHoldsDraft(input)) return;
   timeline.clearSelection();
   threadView.clearSelection();
   input.focus();
@@ -800,14 +864,14 @@ function submitComposeBox(components: AppComponents): void {
     case "edit": {
       const editingId = AppState.get("editingEventId")!;
       finishEdit();
-      input.setValue("");
+      input.restoreDraft(); // the draft the edit displaced comes back
       void editMessage(editingId, plan.body);
       return;
     }
     case "attachments": {
       const staged = input.takeStagedAttachments();
       if (staged.length === 0) return;
-      input.setValue("");
+      input.resetValue("");
       void sendStagedAttachments(staged, plan.caption ?? undefined);
       return;
     }
@@ -880,12 +944,8 @@ function handleInsertKeydown(e: KeyboardEvent, components: AppComponents): void 
   const field = input.getFieldElement();
   if (document.activeElement !== field && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
     e.preventDefault();
-    input.focus();
-    const start = field.selectionStart ?? field.value.length;
-    const end = field.selectionEnd ?? field.value.length;
-    field.value = field.value.slice(0, start) + e.key + field.value.slice(end);
-    field.selectionStart = field.selectionEnd = start + 1;
-    field.dispatchEvent(new Event("input", { bubbles: true }));
+    // As typing, so it groups with the keystrokes around it for undo (#117).
+    input.insertText(e.key);
   }
 }
 
@@ -1301,6 +1361,16 @@ export function setupKeyboard(components: AppComponents): void {
     AppState.set("activePanel", "spaces");
   });
 
+  // However an undo or redo reached the compose box (#117) — chord, `u`,
+  // `:undo`, or the platform's own undo command — in compose Normal the text
+  // may have changed under the block cursor: bring it back onto a character,
+  // and drop any half-typed operator, as vim does.
+  input.onHistoryApplied(() => {
+    if (AppState.get("textSelectMode") !== "compose" || modeManager.current !== Mode.Normal) return;
+    composeEditor.reset();
+    composeEditor.settle(input.getFieldElement());
+  });
+
   // Clicking the input field while not in Insert mode switches to Insert mode
   input.onFocusEnterInsert(() => {
     if (AppState.get("vimMode") && modeManager.current !== Mode.Insert) {
@@ -1359,14 +1429,14 @@ export function setupKeyboard(components: AppComponents): void {
       shortcodePreview.hide();
       mentionPreview.hide();
 
-      // Insert → Normal with content in the compose box: keep the caret in
+      // Insert → Normal with a draft in the compose box: keep the caret in
       // the field so the user can navigate/select text and `p` to paste at the
       // cursor position. The keyboard handler routes keys through text-select
       // instead of the normal panel keymap while textSelectMode is "compose".
+      // A draft just deleted counts, so that `u` is there to bring it back.
       const enteringFromInsert = from === Mode.Insert;
-      const hasContent = input.getValue().length > 0;
       const alreadyInTextSelect = AppState.get("textSelectMode") !== null;
-      if (enteringFromInsert && hasContent && AppState.get("vimMode")) {
+      if (enteringFromInsert && AppState.get("vimMode") && composeHoldsDraft(input)) {
         enterComposeTextSelect(input.getFieldElement());
         composeEditor.reset(); // fresh sequence state for this editing session
         // Don't blur — the input field stays focused for caret-driven editing.
@@ -1527,10 +1597,6 @@ export function setupKeyboard(components: AppComponents): void {
   document.addEventListener("keydown", (e) => {
     const mode = modeManager.current;
 
-    // Inline autocomplete popups are not modals — they own their keys while
-    // visible (handled inside Insert-mode routing) but must block global nav.
-    if (mentionPreview.isVisible()) return;
-
     // Any open modal overlay (dialog / picker / context menu / lightbox) owns
     // its own keys; each stopPropagation's on its own keydown listener, so this
     // document-level guard only fires when focus has escaped the overlay. In
@@ -1542,6 +1608,16 @@ export function setupKeyboard(components: AppComponents): void {
         e.preventDefault();
         modalManager.closeTopMost();
       }
+      return;
+    }
+
+    // The mention popup is not a modal: while it is up it owns its keys, and
+    // global nav and Escape-to-Normal must not run. Insert routing gives it
+    // them first, then the Insert chords — undo and redo among them (#117).
+    // This used to return here outright, which left the popup's Enter / Tab /
+    // arrows / Esc dead along with the chords.
+    if (mentionPreview.isVisible()) {
+      if (resolveModeRoute(mode, AppState.get("vimMode")) === "insert") handleInsertKeydown(e, components);
       return;
     }
 
