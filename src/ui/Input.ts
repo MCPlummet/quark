@@ -204,6 +204,8 @@ export class Input {
   private _history = new ComposeHistory("");
   /** Histories of the drafts of rooms not on screen, by room ID. */
   private _histories = new Map<string, ComposeHistory>();
+  /** The draft a message being edited displaced, undo history and all. */
+  private _draftAside: { text: string; history: ComposeHistory } | null = null;
   private _historyKey: string | null = null;
   /** An undo/redo is writing the field; its input event is not a new change. */
   private _applyingHistory = false;
@@ -752,6 +754,38 @@ export class Input {
   resetValue(text: string): void {
     this._fieldEl.value = text;
     this._history = new ComposeHistory(text);
+    this._autoGrow();
+  }
+
+  /**
+   * Set the draft aside — text and undo history — and show `text` in its place
+   * with a fresh history: for a message being edited, which must not undo back
+   * into the draft it displaced (and send that as the edit). The draft comes
+   * back with {@link restoreDraft}.
+   */
+  setDraftAside(text: string): void {
+    this._syncHistory();
+    this._draftAside = { text: this._fieldEl.value, history: this._history };
+    this.resetValue(text);
+  }
+
+  /**
+   * Bring back the draft {@link setDraftAside} put away, with its undo history
+   * and the caret at its end — or, with none put away, empty the box with a
+   * fresh history.
+   */
+  restoreDraft(): void {
+    const aside = this._draftAside;
+    this._draftAside = null;
+    if (!aside) {
+      this.resetValue("");
+      return;
+    }
+    // Typing on return starts a step of its own rather than joining the last.
+    aside.history.seal();
+    this._history = aside.history;
+    this._fieldEl.value = aside.text;
+    this._fieldEl.setSelectionRange(aside.text.length, aside.text.length);
     this._autoGrow();
   }
 

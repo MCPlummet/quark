@@ -375,30 +375,35 @@ export function startEdit(eventId: string, body: string): void {
   if (AppState.get("threadRootEventId") && !isInOpenThread(eventId)) closeThread();
   // An edit replaces a message; it cannot also be a reply.
   if (AppState.get("replyToEventId")) disarmReply();
+  // The draft being written is set aside, undo history and all, until the edit
+  // ends — sent or cancelled. Editing another message straight after one leaves
+  // that draft where it is rather than setting the first edit's text aside as one.
+  // Either way the edit gets a history of its own (#117).
+  const draftInBox = AppState.get("editingEventId") === null;
   setEditSnippet(body);
   AppState.set("editingEventId", eventId);
   refreshComposeBanner();
-  // A fresh history: undo must not step from the message being edited back
-  // into the draft it displaced (and so send that as the edit).
-  input.resetValue(body);
+  if (draftInBox) input.setDraftAside(body);
+  else input.resetValue(body);
 }
 
 /**
- * Cancel an in-progress inline edit — clears the compose box and the banner.
+ * Cancel an in-progress inline edit: the draft it displaced comes back into
+ * the compose box, and the banner goes.
  */
 export function cancelEdit(): void {
   const { input } = getComponents();
   if (AppState.get("editingEventId") === null) return;
   AppState.set("editingEventId", null);
-  input.resetValue("");
+  input.restoreDraft();
   refreshComposeBanner();
 }
 
 /**
  * The edit is being committed: drop the edit target but leave the compose box
- * to the caller (which clears it as it sends). The banner falls back to
- * whatever else is armed — an open thread keeps its banner, where this used to
- * hide it outright and leave the thread open behind no banner at all.
+ * to the caller (which brings the displaced draft back as it sends). The banner
+ * falls back to whatever else is armed — an open thread keeps its banner, where
+ * this used to hide it outright and leave the thread open behind no banner at all.
  */
 export function finishEdit(): void {
   AppState.set("editingEventId", null);

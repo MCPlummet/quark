@@ -864,7 +864,7 @@ function submitComposeBox(components: AppComponents): void {
     case "edit": {
       const editingId = AppState.get("editingEventId")!;
       finishEdit();
-      input.resetValue("");
+      input.restoreDraft(); // the draft the edit displaced comes back
       void editMessage(editingId, plan.body);
       return;
     }

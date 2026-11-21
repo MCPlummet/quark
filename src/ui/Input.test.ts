@@ -269,6 +269,29 @@ describe("Input", () => {
       expect(input.canUndo()).toBe(true);
     });
 
+    // Review fix: starting an edit threw the draft away, so cancelling the
+    // edit left an empty box.
+    it("sets a draft aside for an edit and brings it back, undo history and all", () => {
+      typeChars("hello world");
+      input.setDraftAside("the message being edited");
+      expect(input.getValue()).toBe("the message being edited");
+      expect(input.undo()).toBe(false); // the edit can't undo into the draft
+
+      input.restoreDraft();
+      const f = input.getFieldElement();
+      expect(input.getValue()).toBe("hello world");
+      expect(f.selectionStart).toBe(11);
+      input.undo();
+      expect(input.getValue()).toBe("hello ");
+    });
+
+    it("restoreDraft with nothing set aside empties the box with a fresh history", () => {
+      typeChars("abc");
+      input.restoreDraft();
+      expect(input.getValue()).toBe("");
+      expect(input.undo()).toBe(false);
+    });
+
     it("resetValue starts a fresh history", () => {
       typeChars("abc");
       input.resetValue("");

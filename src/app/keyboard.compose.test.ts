@@ -24,6 +24,7 @@ vi.mock("./actions.js", async (importOriginal) => ({
 
 import { setupKeyboard } from "./keyboard.js";
 import { setComponents } from "./actions/context.js";
+import { startEdit, cancelEdit } from "./actions/messages.js";
 import { AppState } from "./state.js";
 import { modeManager, Mode } from "../vim/mode.js";
 import { keymapManager } from "../vim/keybindings.js";
@@ -268,5 +269,31 @@ describe("an emptied draft", () => {
     expect(inComposeNormal()).toBe(false);
     press("j");
     expect(inComposeNormal()).toBe(false);
+  });
+});
+
+describe("editing a message with a draft in the box", () => {
+  // Review fix: startEdit threw the draft away, so cancelling the edit — or
+  // sending it — left an empty box.
+  it("brings the draft back when the edit is cancelled", () => {
+    enterInsert();
+    typeChars("my draft");
+    startEdit("$mine:x", "old message");
+    expect(input.getValue()).toBe("old message");
+    cancelEdit();
+    expect(input.getValue()).toBe("my draft");
+    input.undo();
+    expect(input.getValue()).toBe("my ");
+  });
+
+  it("brings the draft back once the edit is sent", () => {
+    enterInsert();
+    typeChars("my draft");
+    startEdit("$mine:x", "old message");
+    enterInsert();
+    typeChars(" fixed");
+    press("Enter", { ctrlKey: true });
+    expect(AppState.get("editingEventId")).toBeNull();
+    expect(input.getValue()).toBe("my draft");
   });
 });

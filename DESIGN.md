@@ -1160,11 +1160,14 @@ Because no native undo ever runs, the platform's own redo never has anything to
 redo; redo is the chords and `:redo`. Android has no platform undo at all. None
 of this has an on-screen control (the parity exemption says so).
 
-Sending, starting an edit and cancelling one start a fresh history
-(`Input.resetValue`) — undo must not step from a message being edited back into
-the draft it displaced and send that as the edit. Switching rooms hands the
-compose box the room (`Input.switchContext`), so each room's history comes back
-with its draft, provided the draft is unchanged.
+Sending starts a fresh history (`Input.resetValue`). Starting an edit sets the
+draft in the box aside, undo history and all (`Input.setDraftAside`), and gives
+the message being edited a history of its own — undo must not step from it back
+into the draft and send that as the edit. When the edit ends, sent or cancelled
+(a room switch cancels one), the draft comes back with its history
+(`Input.restoreDraft`). Switching rooms hands the compose box the room
+(`Input.switchContext`), so each room's history comes back with its draft,
+provided the draft is unchanged.
 
 ### Keybinding Configuration (quarkrc)
 
