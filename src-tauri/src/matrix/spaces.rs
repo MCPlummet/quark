@@ -166,6 +166,15 @@ struct ChildEvent {
     content: serde_json::Map<String, serde_json::Value>,
 }
 
+/// The rooms a joined space lists as children (with a non-empty `via`), from
+/// the store. Used to find the spaces a room is in, for space packs (#12).
+pub(crate) async fn child_room_ids(space: &matrix_sdk::Room) -> Vec<String> {
+    read_child_events(space)
+        .await
+        .map(|events| events.into_iter().map(|e| e.room_id).collect())
+        .unwrap_or_default()
+}
+
 /// The live `m.space.child` events of a joined space.
 ///
 /// A child event whose `via` is missing or empty is how a child is *removed*

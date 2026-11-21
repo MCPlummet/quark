@@ -5,6 +5,7 @@ pub mod emoji;
 pub mod html;
 pub mod invites;
 pub mod media;
+pub mod packs;
 pub mod reactions;
 pub mod relations;
 pub mod room_list_watch;

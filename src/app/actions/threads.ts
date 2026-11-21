@@ -269,7 +269,7 @@ export async function sendThreadReply(
   // Resolve emoji before composing the optimistic reply (see sendMessage): Unicode
   // shortcodes become glyphs in the plain body, custom emoji become inline images
   // in the formatted body.
-  const prepared = prepareOutgoingBody(body);
+  const prepared = prepareOutgoingBody(body, roomId);
   body = prepared.body;
 
   const optimisticId = `local-thread-${Date.now()}-${++_sendSeq}`;

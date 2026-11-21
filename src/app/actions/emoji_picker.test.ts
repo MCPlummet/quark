@@ -22,7 +22,7 @@ vi.mock("../mobile.js", async (importActual) => ({
 vi.mock("../../ui/NotificationToast.js", () => ({ showError: vi.fn(), showSuccess: vi.fn(), showToast: vi.fn() }));
 
 import { openEmojiPicker, openReactionPicker } from "./emoji_picker.js";
-import { setComponents, _shortcodeToMxc } from "./context.js";
+import { setComponents, customEmojiMxc } from "./context.js";
 import { _resetCustomEmojiCache } from "./custom_emoji.js";
 import { AppState } from "../state.js";
 import { EmojiPicker, type EmojiPickerContext } from "../../ui/EmojiPicker.js";
@@ -153,7 +153,7 @@ describe("compose", () => {
     type("partyblob");
     press("Enter");
     expect(input.getValue()).toBe(":partyblob: ");
-    expect(_shortcodeToMxc.get("partyblob")).toBe("mxc://x/partyblob");
+    expect(customEmojiMxc(ROOM, "partyblob")).toBe("mxc://x/partyblob");
   });
 
   it("does not take free text", () => {

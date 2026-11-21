@@ -26,6 +26,8 @@ export interface RoomTabContext {
   dispatch(action: string): void;
   /** Re-run the active tab's builder, e.g. after a change it cannot patch. */
   refresh(): void;
+  /** What the dialog is about, for wording — a space is a room. Defaults to "room". */
+  subject?: "room" | "space";
 }
 
 export interface RoomTab {

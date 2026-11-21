@@ -12,6 +12,15 @@ export type {
   ReactionGroup,
   EmojiEntry,
   EmojiPack,
+  PackUsage,
+  PackLocation,
+  EditableImage,
+  EditablePack,
+  RoomPacks,
+  FavoritePack,
+  NewPackImage,
+  MetaPatch,
+  AddImagesResult,
   MediaDownload,
   VerificationStatus,
   CrossSigningInfo,
@@ -76,6 +85,23 @@ export {
   getRoomEmoji,
   sendSticker,
 } from "./emoji.js";
+
+// ─── Pack management (#12) ────────────────────────────────────────────────────
+export {
+  getUserPack,
+  getRoomPacks,
+  getFavoritePacks,
+  uploadPackMedia,
+  addPackImages,
+  renamePackImage,
+  setPackImageUsage,
+  setPackImageBody,
+  removePackImage,
+  setPackMeta,
+  createRoomPack,
+  deleteRoomPack,
+  setPackFavorite,
+} from "./packs.js";
 
 // ─── Media ────────────────────────────────────────────────────────────────────
 export type { MessageTarget } from "./types.js";
