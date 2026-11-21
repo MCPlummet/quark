@@ -639,12 +639,12 @@ function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents)
   // The compose box's undo/redo chords (#117), as the keymap has them. Claimed
   // here, ahead of the modifier pass-through below, or the webview takes them
   // as its own undo — outside the compose box's history.
-  const history = composeHistoryChord(chord);
-  if (history) {
+  const chordOp = composeHistoryChord(chord);
+  if (chordOp) {
     e.preventDefault();
     e.stopPropagation();
     composeEditor.reset();
-    if (history === "undo") components.input.undo();
+    if (chordOp === "undo") components.input.undo();
     else components.input.redo();
     return true; // the block cursor is re-settled by onHistoryApplied
   }
