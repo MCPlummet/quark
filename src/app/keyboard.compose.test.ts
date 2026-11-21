@@ -72,12 +72,15 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  exitTextSelect();
-  modeManager.transition(Mode.Normal);
   AppState.patch({ loggedIn: true, vimMode: true, activePanel: "timeline", editingEventId: null });
-  keymapManager.resetSequence();
   mentionPreview.hide();
+  // An empty box with nothing to undo first, so leaving Insert below can't
+  // land in compose Normal.
+  input.restoreDraft();
   input.resetValue("");
+  modeManager.transition(Mode.Normal);
+  exitTextSelect();
+  keymapManager.resetSequence();
 });
 
 /** Press a key, as the browser delivers it to whatever has focus. */
