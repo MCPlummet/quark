@@ -88,6 +88,22 @@ describe("packsTab", () => {
     expect(ipc.createRoomPack).toHaveBeenCalledWith("!r:x", "Blobs");
   });
 
+  // Review fix: the field committed on blur, and closing the dialog blurs it —
+  // so a name typed and abandoned created a pack every member could see.
+  it("creates nothing from a name left in the field when focus leaves it", async () => {
+    ipc.getRoomPacks.mockResolvedValue({ can_edit: true, packs: [] });
+    const el = await build();
+    const field = el.querySelector<HTMLInputElement>(".packs-tab__new input")!;
+    field.focus();
+    field.value = "Blobs";
+    field.dispatchEvent(new Event("input"));
+    field.blur();
+    field.dispatchEvent(new Event("blur"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ipc.createRoomPack).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("reports a failure to load the packs", async () => {
     ipc.getRoomPacks.mockRejectedValue(new Error("You are not in this room"));
     const el = await build();

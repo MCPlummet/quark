@@ -1603,7 +1603,9 @@ images by plain `mxc://` URL), then all go into the pack in one write, each
 under a shortcode derived from its filename and unique in the pack; failures
 are listed. A room's Emoji tab has a **new pack** field (Enter creates it,
 under a state key slugged from the name). Fields save themselves, as elsewhere
-in the settings dialogs. Once a grid cell has focus, arrows / `hjkl` move and
+in the settings dialogs — except that one: a new pack is a state event every
+member sees, so it is created on Enter only, never from a name left in the
+field when focus moves or the dialog closes (`commitOnBlur: false`). Once a grid cell has focus, arrows / `hjkl` move and
 `x` / `Delete` delete after a confirmation; reaching the grid is by click/tap,
 as for every settings field (in-tab keyboard movement is #156).
 

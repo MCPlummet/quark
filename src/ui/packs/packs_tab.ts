@@ -63,6 +63,10 @@ export const packsTab: RoomTab = {
         value: "",
         placeholder: "Name, then Enter",
         ariaLabel: "New pack name",
+        // Creating a pack is a state event every member sees: only on Enter,
+        // never from a name left in the field when focus moves or the dialog
+        // closes.
+        commitOnBlur: false,
         save: async (name) => {
           if (!name.trim()) throw new Error("Give the pack a name");
           await createRoomPack(roomId, name.trim());

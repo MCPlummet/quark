@@ -23,6 +23,13 @@ export interface CommitFieldSpec {
 
 export interface CommitTextSpec extends CommitFieldSpec {
   placeholder: string;
+  /**
+   * Also commit when focus leaves the field (the default). Off for a field
+   * whose commit is an action rather than a setting — creating something
+   * others see — so a value typed and abandoned, or left behind when the
+   * dialog closes (which blurs it), is not sent.
+   */
+  commitOnBlur?: boolean;
 }
 
 export interface CommitSelectSpec extends CommitFieldSpec {
@@ -92,7 +99,7 @@ function makeShell(label: string): { row: HTMLElement; line: HTMLElement; status
 /** An error as a status line shows it. */
 export const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-/** A text field that saves on Enter or when focus leaves it. */
+/** A text field that saves on Enter or (unless `commitOnBlur` is false) when focus leaves it. */
 export function commitTextRow(spec: CommitTextSpec): CommitField<HTMLInputElement> {
   const { row, line, status } = makeShell(spec.label);
   const input = document.createElement("input");
@@ -154,7 +161,7 @@ export function commitTextRow(spec: CommitTextSpec): CommitField<HTMLInputElemen
       status(null);
     }
   });
-  input.addEventListener("blur", () => void commit(true));
+  if (spec.commitOnBlur !== false) input.addEventListener("blur", () => void commit(true));
 
   return {
     row,
