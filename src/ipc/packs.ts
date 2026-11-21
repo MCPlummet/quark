@@ -68,7 +68,11 @@ export async function createRoomPack(roomId: string, displayName: string): Promi
   return invoke<EditablePack>("create_room_pack", { roomId, displayName });
 }
 
-/** Empties the pack (state can't be removed) and drops it from favorites. */
+/**
+ * Empties the pack (state can't be removed) and drops it from favorites.
+ * Resolves once the pack is emptied, even if dropping the favorite failed
+ * (the backend logs that; the favorite stays listed in Settings → Emoji).
+ */
 export async function deleteRoomPack(roomId: string, stateKey: string): Promise<void> {
   return invoke<void>("delete_room_pack", { roomId, stateKey });
 }

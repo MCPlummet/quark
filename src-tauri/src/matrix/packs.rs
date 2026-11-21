@@ -25,6 +25,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
+use tracing::warn;
 
 /// Room state event holding a room's (or space's) packs, one per state key.
 pub const ROOM_PACK_EVENT: &str = "im.ponies.room_emotes";
@@ -852,10 +853,20 @@ pub async fn set_pack_favorite(client: &Client, room_id: &str, state_key: &str, 
     Ok(())
 }
 
+/// Empty the pack, then drop it from favorites.
+///
+/// Once the pack is emptied it is gone, and that is what the caller hears: a
+/// favorite left behind can't be resolved to anything (an emptied pack loads
+/// no images) and shows in Settings → Emoji, where it can be removed. Failing
+/// the command over it used to tell the UI the delete had failed, so the
+/// deleted pack stayed in the tab and the pickers kept their cached copy.
 pub async fn delete_room_pack(client: &Client, room_id: &str, state_key: &str) -> Result<(), String> {
     let location = PackLocation::Room { room_id: room_id.to_owned(), state_key: state_key.to_owned() };
     edit_pack(client, &location, |_| Ok(Value::Object(Map::new()))).await?;
-    set_pack_favorite(client, room_id, state_key, false).await
+    if let Err(e) = set_pack_favorite(client, room_id, state_key, false).await {
+        warn!("Deleted pack {room_id}/{state_key:?} but couldn't drop it from favorites: {e}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1329,6 +1340,29 @@ mod tests {
             assert!(pack.favorited);
             assert_eq!(pack.images[0].shortcode, "b");
             assert_eq!(hs.requests_to(&format!("/account_data/{FAVORITES_EVENT}")).await, 0);
+        }
+
+        // Review fix: deleting writes `{}` and then drops the favorite; a
+        // failure in the second step failed the command although the pack was
+        // already gone, so the UI kept showing it.
+        #[tokio::test]
+        async fn a_delete_succeeds_once_the_pack_is_gone_even_if_the_favorite_stays() {
+            let hs = TestHomeserver::new().await;
+            let rid = room("pk-delete-fav");
+            let stored = json!({ "images": { "a": { "url": "mxc://x/a" } } });
+            hs.sync(joined_rooms(&[(&rid, vec![own_join(), pack_state("gone", stored.clone())])])).await;
+            mount_state(&hs, "GET", "pk-delete-fav", "gone", 200, stored).await;
+            mount_state(&hs, "PUT", "pk-delete-fav", "gone", 200, json!({ "event_id": "$w" })).await;
+            mount_favorites(&hs, json!({ "rooms": { &rid: { "gone": {} } } })).await;
+            // A 4xx: the SDK retries a 5xx with backoff, which would stall the test.
+            Mock::given(method("PUT"))
+                .and(|req: &wiremock::Request| req.url.path().ends_with(&format!("/account_data/{FAVORITES_EVENT}")))
+                .respond_with(ResponseTemplate::new(403).set_body_json(json!({ "errcode": "M_FORBIDDEN", "error": "no" })))
+                .mount(&hs.server)
+                .await;
+
+            delete_room_pack(&hs.client, &rid, "gone").await.expect("the pack is deleted");
+            assert_eq!(put_body(&hs, "pk-delete-fav", "gone").await, json!({}));
         }
 
         /// Answer `GET` of the favorites account data with `content`.
