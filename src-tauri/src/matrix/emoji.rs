@@ -1,5 +1,5 @@
 use crate::matrix::packs::{self, FAVORITES_EVENT, USER_PACK_EVENT};
-use matrix_sdk::{ruma::RoomId, Client, RoomState};
+use matrix_sdk::{ruma::RoomId, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -251,14 +251,13 @@ pub async fn get_emoji_packs(
     }
 
     // Favorites: { "rooms": { "!room:server": { "": {}, "pack-key": {} } } }.
+    // A favorite keeps working after its room is left: its packs are read from
+    // the state the store kept, as they always were. Settings lists such a
+    // favorite as "not joined".
     let mut favorite_packs = Vec::new();
     if let Some(rooms) = favorites.get("rooms").and_then(|r| r.as_object()) {
         for (fav_rid, keys) in rooms {
-            let Some(room) = RoomId::parse(fav_rid.as_str())
-                .ok()
-                .and_then(|id| client.get_room(&id))
-                .filter(|r| r.state() == RoomState::Joined)
-            else {
+            let Some(room) = RoomId::parse(fav_rid.as_str()).ok().and_then(|id| client.get_room(&id)) else {
                 continue;
             };
             let wanted: Vec<String> = keys
@@ -615,6 +614,48 @@ mod tests {
 
             let elsewhere = get_emoji_packs(&hs.client, Some(outside)).await.expect("outside");
             assert!(elsewhere.iter().all(|p| p.room_id.as_deref() != Some(space)));
+        }
+
+        // Review fix: favorites were filtered to joined rooms, so a pack
+        // favorited in a room since left stopped working while Settings still
+        // listed it. The store keeps a left room's state; the pack is read
+        // from there, as it was before.
+        #[tokio::test]
+        async fn a_favorite_from_a_room_since_left_is_still_offered() {
+            use wiremock::matchers::method;
+            use wiremock::{Mock, ResponseTemplate};
+
+            let hs = TestHomeserver::new().await;
+            let left = "!emoji-left:example.org";
+            let here = "!emoji-here:example.org";
+            let pack = state_event(
+                "im.ponies.room_emotes",
+                "",
+                ME,
+                json!({ "pack": { "display_name": "Old" }, "images": { "oldblob": { "url": "mxc://x/old" } } }),
+            );
+            hs.sync(joined_rooms(&[(left, vec![own_join(), pack]), (here, vec![own_join()])])).await;
+            let leave = state_event("m.room.member", ME, ME, json!({ "membership": "leave" }));
+            hs.sync(json!({
+                "next_batch": "emoji-left-batch",
+                "rooms": { "leave": { left: { "state": { "events": [] }, "timeline": { "events": [leave] } } } }
+            }))
+            .await;
+            assert_eq!(
+                hs.client.get_room(&RoomId::parse(left).unwrap()).map(|r| r.state()),
+                Some(matrix_sdk::RoomState::Left)
+            );
+            Mock::given(method("GET"))
+                .and(|req: &wiremock::Request| req.url.path().ends_with("/account_data/im.ponies.emote_rooms"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "rooms": { left: { "": {} } } })))
+                .mount(&hs.server)
+                .await;
+
+            let packs = get_emoji_packs(&hs.client, Some(here)).await.expect("packs");
+            let fav = packs.iter().find(|p| p.room_id.as_deref() == Some(left)).expect("left room's favorite offered");
+            assert_eq!(fav.scope, "favorite");
+            assert!(fav.favorited);
+            assert_eq!(fav.emojis[0].shortcode, "oldblob");
         }
     }
 }

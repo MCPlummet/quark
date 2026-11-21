@@ -1589,7 +1589,7 @@ Packs are managed in three places, all with one editor (`src/ui/packs/PackEditor
 
 | Where | What |
 |---|---|
-| Settings → Emoji | **Your pack** (the personal pack) and **Favorite packs** (each with where it lives — "not joined" for a room since left — and `[remove]`) |
+| Settings → Emoji | **Your pack** (the personal pack) and **Favorite packs** (each with where it lives — "not joined" for a room since left, whose pack keeps working from the state the store kept — and `[remove]`) |
 | Room dialog → Emoji | The room's packs |
 | Space settings → Emoji | The space's packs — usable in every room of the space |
 

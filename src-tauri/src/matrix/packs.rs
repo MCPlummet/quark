@@ -689,10 +689,11 @@ pub async fn get_favorite_packs(client: &Client) -> Result<Vec<FavoritePack>, St
     let mut out = Vec::new();
     let Some(rooms) = favorites.get("rooms").and_then(Value::as_object) else { return Ok(out) };
     for (room_id, keys) in rooms {
-        let room = RoomId::parse(room_id.as_str())
-            .ok()
-            .and_then(|id| client.get_room(&id))
-            .filter(|r| r.state() == RoomState::Joined);
+        // A room since left is still in the store, with the state it had: its
+        // packs keep working as favorites (emoji.rs reads them from there), so
+        // they are listed by name here too, marked not joined.
+        let room = RoomId::parse(room_id.as_str()).ok().and_then(|id| client.get_room(&id));
+        let joined = room.as_ref().is_some_and(|r| r.state() == RoomState::Joined);
         let stored: Vec<(String, Value)> = match &room {
             Some(room) => room_packs_from_store(room).await,
             None => Vec::new(),
@@ -709,7 +710,7 @@ pub async fn get_favorite_packs(client: &Client) -> Result<Vec<FavoritePack>, St
                 room_id: room_id.clone(),
                 state_key: state_key.clone(),
                 room_name: room_name.clone(),
-                joined: room.is_some(),
+                joined,
                 display_name: view.as_ref().and_then(|v| v.display_name.clone()),
                 avatar_url: view.as_ref().and_then(|v| v.avatar_url.clone()),
                 image_count: view.as_ref().map_or(0, |v| v.images.len()),
@@ -1241,6 +1242,39 @@ mod tests {
             let packs = get_room_packs(&hs.client, &rid).await.expect("room packs");
             let codes: Vec<&str> = packs.packs[0].images.iter().map(|i| i.shortcode.as_str()).collect();
             assert_eq!(codes, vec!["renamed"]);
+        }
+
+        /// Answer `GET` of the favorites account data with `content`.
+        async fn mount_favorites(hs: &TestHomeserver, content: Value) {
+            Mock::given(method("GET"))
+                .and(|req: &wiremock::Request| req.url.path().ends_with(&format!("/account_data/{FAVORITES_EVENT}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(content))
+                .mount(&hs.server)
+                .await;
+        }
+
+        // Review fix: a favorite from a room since left still works (emoji.rs
+        // reads its pack from the stored state), so Settings lists it by name,
+        // marked not joined, rather than as a nameless "pack".
+        #[tokio::test]
+        async fn a_favorite_from_a_room_since_left_is_listed_by_name() {
+            let hs = TestHomeserver::new().await;
+            let rid = room("pk-fav-left");
+            let pack = pack_state("", json!({ "pack": { "display_name": "Old" }, "images": { "o": { "url": "mxc://x/o" } } }));
+            hs.sync(joined_rooms(&[(&rid, vec![own_join(), pack])])).await;
+            let leave = state_event("m.room.member", ME, ME, json!({ "membership": "leave" }));
+            hs.sync(json!({
+                "next_batch": "pk-fav-left-batch",
+                "rooms": { "leave": { &rid: { "state": { "events": [] }, "timeline": { "events": [leave] } } } }
+            }))
+            .await;
+            mount_favorites(&hs, json!({ "rooms": { &rid: { "": {} } } })).await;
+
+            let favs = get_favorite_packs(&hs.client).await.expect("favorites");
+            assert_eq!(favs.len(), 1);
+            assert!(!favs[0].joined);
+            assert_eq!(favs[0].display_name.as_deref(), Some("Old"));
+            assert_eq!(favs[0].image_count, 1);
         }
 
         fn power_levels(my_level: i64) -> Value {
