@@ -1135,9 +1135,12 @@ by `Input`): `Ctrl-z` / `Ctrl-Shift-z` / `Ctrl-y` in Insert, `u` (with a count)
 every change from the field's `input` event — whoever made it — plus
 `setValue`, so vim operators, autocomplete, quoting, the markdown wrappers and a
 select-all-delete all undo. Typing undoes a word at a time (whitespace closes a
-step; typing and deleting are separate steps; anything else is a step of its
-own), and the caret lands where the text changed. An IME-composed word is one
-step.
+step; typing and deleting are separate steps, and typing over a selection
+starts one; anything else is a step of its own), and the caret lands where the
+text changed, never inside a surrogate pair. An IME composition that only
+inserts text at the caret, with no whitespace — a dead key, an accent popup, a
+word from a phone keyboard — counts as typing, so "café " undoes in one step;
+one that rewrites text or commits whitespace is a step of its own.
 
 The browser's own textarea undo is not used: Quark writes `value` directly for
 most edits, which that history either never sees or discards, depending on the

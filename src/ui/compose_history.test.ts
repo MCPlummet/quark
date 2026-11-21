@@ -52,6 +52,15 @@ describe("ComposeHistory", () => {
     expect(h.undo()).toBe("");
   });
 
+  it("starts a step for a change marked startsStep, even where it continues the last", () => {
+    const h = new ComposeHistory("");
+    typeAtEnd(h, "abc");
+    h.record("abcd", { kind: "insert", caretBefore: 3, startsStep: true });
+    h.record("abcde", { kind: "insert", caretBefore: 4 });
+    expect(h.undo()).toBe("abc");
+    expect(h.undo()).toBe("");
+  });
+
   it("makes a programmatic edit its own step, sealed against following typing", () => {
     const h = new ComposeHistory("");
     typeAtEnd(h, "hi");

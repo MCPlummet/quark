@@ -4,7 +4,7 @@ import { Mode } from "../vim/mode.js";
 import { isMobile, onMobileChange, guardViewportPan } from "../app/mobile.js";
 import { AttachmentProgressList, type AttachmentProgressHandle } from "./AttachmentProgress.js";
 import { AttachmentTray, type StagedAttachment } from "./AttachmentTray.js";
-import { ComposeHistory, caretForRestore, type EditKind } from "./compose_history.js";
+import { ComposeHistory, caretForRestore, type EditKind, type RecordOpts } from "./compose_history.js";
 import { changedRange } from "./text_change.js";
 
 export type { StagedAttachment };
@@ -142,13 +142,39 @@ export function looksLikeFileListText(text: string): boolean {
  */
 export function classifyInput(e: Event, collapsedBefore: boolean): EditKind {
   if (!(e instanceof InputEvent)) return "edit";
-  // A character typed over a selection is typing too: it starts a step (the
-  // caret is not where the last one left it) that the rest of the word joins,
-  // so select-all + "new" undoes in one go rather than leaving the "n".
+  // A character typed over a selection is typing too, so the rest of the word
+  // joins it: select-all + "new" undoes in one go rather than leaving the "n".
+  // It does start a step of its own (`startsStep`, in _recordInput).
   if (e.inputType === "insertText" && e.data !== null && [...e.data].length === 1) return "insert";
   if (!collapsedBefore) return "edit";
   if (e.inputType === "deleteContentBackward" || e.inputType === "deleteContentForward") return "delete";
   return "edit";
+}
+
+/** The field as a composition found it, at `compositionstart`. */
+export interface CompositionStart {
+  value: string;
+  caret: number;
+  collapsed: boolean;
+}
+
+/**
+ * How to record a committed IME composition. One that only inserted text at
+ * the caret, with no whitespace in it — a dead key, an accent picked from a
+ * popup, a word from a phone keyboard — is typing, and groups with the typing
+ * around it, so "café " undoes in one step like "cafe " does. One that replaced
+ * text, or committed whitespace, is a change of its own.
+ */
+export function compositionRecord(start: CompositionStart | null, after: string): RecordOpts {
+  const own: RecordOpts = { kind: "edit" };
+  if (!start || !start.collapsed) return own;
+  const { value: before, caret } = start;
+  const added = after.length - before.length;
+  if (added <= 0) return own;
+  const inserted = after.slice(caret, caret + added);
+  if (before.slice(0, caret) + inserted + before.slice(caret) !== after) return own;
+  if (/\s/.test(inserted)) return own;
+  return { kind: "insert", caretBefore: caret };
 }
 
 export class Input {
@@ -184,6 +210,8 @@ export class Input {
   /** Caret and selection state captured at `beforeinput`, for the `input` that follows. */
   private _caretBefore: number | null = null;
   private _collapsedBefore = true;
+  /** Where the IME composition in progress started, if one is. */
+  private _compositionStart: CompositionStart | null = null;
 
   constructor() {
     this._el = document.createElement("div");
@@ -276,10 +304,22 @@ export class Input {
       this._caretBefore = this._fieldEl.selectionStart;
       this._collapsedBefore = this._fieldEl.selectionStart === this._fieldEl.selectionEnd;
     });
-    // An IME composes a word through many interim input events; the word is
-    // one change, recorded once it is committed.
+    // An IME composes text through many interim input events; what it commits
+    // is one change, recorded at compositionend (see compositionRecord).
+    this._fieldEl.addEventListener("compositionstart", () => {
+      this._syncHistory();
+      const f = this._fieldEl;
+      this._compositionStart = {
+        value: f.value,
+        caret: f.selectionStart ?? f.value.length,
+        collapsed: f.selectionStart === f.selectionEnd,
+      };
+    });
     this._fieldEl.addEventListener("compositionend", () => {
-      if (!this._applyingHistory) this._history.record(this._fieldEl.value, { kind: "edit" });
+      const start = this._compositionStart;
+      this._compositionStart = null;
+      if (this._applyingHistory) return;
+      this._history.record(this._fieldEl.value, compositionRecord(start, this._fieldEl.value));
     });
 
     // Attachment paste handler. clipboardData.items is standard; .files is an
@@ -771,6 +811,7 @@ export class Input {
     this._history.record(this._fieldEl.value, {
       kind,
       caretBefore,
+      startsStep: !collapsedBefore,
       boundary: kind === "insert" && /\s/.test(data),
     });
   }

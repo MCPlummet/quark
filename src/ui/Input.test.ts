@@ -1,6 +1,23 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { Input, isFileUriList, looksLikeFileListText } from "./Input.js";
+import { Input, isFileUriList, looksLikeFileListText, compositionRecord } from "./Input.js";
 import { Mode } from "../vim/mode.js";
+
+describe("compositionRecord", () => {
+  const at = (value: string, caret: number, collapsed = true) => ({ value, caret, collapsed });
+
+  it("records a pure insertion at the caret as typing that continues from there", () => {
+    expect(compositionRecord(at("caf", 3), "café")).toEqual({ kind: "insert", caretBefore: 3 });
+    expect(compositionRecord(at("ab", 1), "a日本b")).toEqual({ kind: "insert", caretBefore: 1 });
+  });
+
+  it("records anything else as a change of its own", () => {
+    expect(compositionRecord(null, "x")).toEqual({ kind: "edit" });
+    expect(compositionRecord(at("cafe", 3, false), "café")).toEqual({ kind: "edit" });
+    expect(compositionRecord(at("cafe", 4), "café")).toEqual({ kind: "edit" });
+    expect(compositionRecord(at("ab", 2), "ab c")).toEqual({ kind: "edit" });
+    expect(compositionRecord(at("abc", 3), "abc")).toEqual({ kind: "edit" });
+  });
+});
 
 describe("Input", () => {
   let input: Input;
@@ -143,6 +160,77 @@ describe("Input", () => {
       typeChars("new");
       input.undo();
       expect(input.getValue()).toBe("hello world");
+    });
+
+    // Review fix: the replacement joined the typing before it because the
+    // selection began where that typing ended, so one undo took both.
+    it("keeps typing over a selection apart from the typing it follows", () => {
+      const f = input.getFieldElement();
+      input.resetValue("abc XYZ");
+      f.setSelectionRange(4, 4);
+      typeChars("hi");
+      f.setSelectionRange(6, 9); // Shift+End over "XYZ"
+      typeChars("Q");
+      input.undo();
+      expect(input.getValue()).toBe("abc hiXYZ");
+      input.undo();
+      expect(input.getValue()).toBe("abc XYZ");
+    });
+
+    describe("IME compositions", () => {
+      /** Commit `text` at the caret through an IME, as the browser reports one. */
+      function compose(text: string) {
+        const f = input.getFieldElement();
+        const start = f.selectionStart ?? f.value.length;
+        const end = f.selectionEnd ?? start;
+        const head = f.value.slice(0, start);
+        const tail = f.value.slice(end);
+        f.dispatchEvent(new CompositionEvent("compositionstart", { data: "", bubbles: true }));
+        // Interim states, as the IME shows them; none is a change of its own.
+        for (let i = 1; i <= text.length; i++) {
+          const shown = text.slice(0, i);
+          f.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertCompositionText", data: shown, isComposing: true, bubbles: true }));
+          f.value = head + shown + tail;
+          f.setSelectionRange(start + i, start + i);
+          f.dispatchEvent(new InputEvent("input", { inputType: "insertCompositionText", data: shown, isComposing: true, bubbles: true }));
+        }
+        f.dispatchEvent(new CompositionEvent("compositionend", { data: text, bubbles: true }));
+      }
+
+      // Review fix: every composition was a sealed step of its own, so "café "
+      // through a dead key took three undos.
+      it("groups a dead-key accent with the typing around it", () => {
+        typeChars("caf");
+        compose("é");
+        typeChars(" ");
+        input.undo();
+        expect(input.getValue()).toBe("");
+      });
+
+      it("undoes a phone keyboard's composed words a word at a time", () => {
+        compose("hello");
+        typeChars(" ");
+        compose("world");
+        input.undo();
+        expect(input.getValue()).toBe("hello ");
+        input.undo();
+        expect(input.getValue()).toBe("");
+      });
+
+      it("keeps a composition that replaced text as a step of its own", () => {
+        typeChars("cafe");
+        input.getFieldElement().setSelectionRange(3, 4);
+        compose("é");
+        input.undo();
+        expect(input.getValue()).toBe("cafe");
+      });
+
+      it("keeps a composition that committed whitespace as a step of its own", () => {
+        typeChars("ab");
+        compose("c d");
+        input.undo();
+        expect(input.getValue()).toBe("ab");
+      });
     });
 
     it("keeps typing after a room's history comes back apart from its old steps", () => {

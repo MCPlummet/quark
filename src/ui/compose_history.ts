@@ -28,6 +28,12 @@ export interface RecordOpts {
   kind: EditKind;
   /** Caret position just before the change; typing only joins a step it continues. */
   caretBefore?: number;
+  /**
+   * Start a step even where the change would continue the current one: typing
+   * over a selection replaces text, which the typing before it did not, so it
+   * must not join that typing just because the selection began where it ended.
+   */
+  startsStep?: boolean;
   /** Close the step after this change (whitespace was typed: a word ended). */
   boundary?: boolean;
 }
@@ -114,7 +120,7 @@ export class ComposeHistory {
 
   /** Whether a typed change continues the current step. */
   private joins(top: Step, opts: RecordOpts): boolean {
-    if (opts.kind === "edit" || this.pos === 0) return false;
+    if (opts.kind === "edit" || opts.startsStep || this.pos === 0) return false;
     if (top.sealed || top.kind !== opts.kind) return false;
     const below = this.steps[this.pos - 1].value;
     return opts.caretBefore === caretForRestore(below, top.value);
