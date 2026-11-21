@@ -532,6 +532,18 @@ async fn read_account_data(client: &Client, event_type: &str) -> Result<Value, S
         .unwrap_or_else(|| Value::Object(Map::new())))
 }
 
+/// Account data as the store holds it from sync — no request; `Null` if absent.
+async fn stored_account_data(client: &Client, event_type: &str) -> Value {
+    client
+        .account()
+        .account_data_raw(GlobalAccountDataEventType::from(event_type))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|raw| raw.deserialize_as::<Value>().ok())
+        .unwrap_or(Value::Null)
+}
+
 async fn write_account_data(client: &Client, event_type: &str, content: &Value) -> Result<(), String> {
     let raw: Raw<AnyGlobalAccountDataEventContent> = Raw::new(content)
         .map_err(|e| format!("Couldn't encode {event_type}: {e}"))?
@@ -586,12 +598,20 @@ async fn write_pack(client: &Client, location: &PackLocation, content: &Value) -
     }
 }
 
-/// Read the pack fresh, apply `patch`, write the result — under the pack's lock.
+/// Read the pack fresh, apply `patch`, write the result, and return the pack
+/// as written — all under the pack's lock.
+///
+/// The returned view is built before the lock is released. It used to be
+/// built after, around a request for the favorites list: an edit could then
+/// wait on that request while the next edit to the pack read, wrote and
+/// returned, so the first edit's older pack reached the editor last and was
+/// drawn over the second's (a rename undone on screen, and the edits after it
+/// refused as ":x: is not in this pack").
 async fn edit_pack(
     client: &Client,
     location: &PackLocation,
     patch: impl FnOnce(&Value) -> Result<Value, String>,
-) -> Result<Value, String> {
+) -> Result<EditablePack, String> {
     let lock = lock_for(&location_key(location));
     let _turn = lock.lock().await;
     let current = read_pack(client, location).await?;
@@ -599,15 +619,20 @@ async fn edit_pack(
     if next != current {
         write_pack(client, location, &next).await?;
     }
-    Ok(next)
+    Ok(editable_at(client, location, &next).await)
 }
 
 /// The editable view of `content` at `location`, with its favorite flag.
+///
+/// The flag comes from the favorites list as the store has it: an edit never
+/// changes it, so it is not worth a request, and the editor showing the pack
+/// already knows it (a favorite toggled moments ago reaches the store only when
+/// sync echoes it, and the editor keeps its own flag over this one).
 async fn editable_at(client: &Client, location: &PackLocation, content: &Value) -> EditablePack {
     match location {
         PackLocation::User => to_editable(content, None, None, false),
         PackLocation::Room { room_id, state_key } => {
-            let favorites = read_account_data(client, FAVORITES_EVENT).await.unwrap_or(Value::Null);
+            let favorites = stored_account_data(client, FAVORITES_EVENT).await;
             to_editable(content, Some(room_id), Some(state_key), is_favorite(&favorites, room_id, state_key))
         }
     }
@@ -749,18 +774,17 @@ pub async fn add_pack_images(
         .map(|i| NewImage { url: i.url, body: i.body, info: i.info.unwrap_or(Value::Null), filename: i.filename })
         .collect();
     let mut added = Vec::new();
-    let content = edit_pack(client, location, |pack| {
+    let pack = edit_pack(client, location, |pack| {
         let (next, codes) = add_images(pack, &new);
         added = codes;
         Ok(next)
     })
     .await?;
-    Ok(AddImagesResult { pack: editable_at(client, location, &content).await, added })
+    Ok(AddImagesResult { pack, added })
 }
 
 pub async fn rename_pack_image(client: &Client, location: &PackLocation, from: &str, to: &str) -> Result<EditablePack, String> {
-    let content = edit_pack(client, location, |p| rename_image(p, from, to)).await?;
-    Ok(editable_at(client, location, &content).await)
+    edit_pack(client, location, |p| rename_image(p, from, to)).await
 }
 
 pub async fn set_pack_image_usage(
@@ -769,8 +793,7 @@ pub async fn set_pack_image_usage(
     shortcode: &str,
     usage: Option<Vec<String>>,
 ) -> Result<EditablePack, String> {
-    let content = edit_pack(client, location, |p| set_image_usage(p, shortcode, usage.as_deref())).await?;
-    Ok(editable_at(client, location, &content).await)
+    edit_pack(client, location, |p| set_image_usage(p, shortcode, usage.as_deref())).await
 }
 
 pub async fn set_pack_image_body(
@@ -779,13 +802,11 @@ pub async fn set_pack_image_body(
     shortcode: &str,
     body: Option<String>,
 ) -> Result<EditablePack, String> {
-    let content = edit_pack(client, location, |p| set_image_body(p, shortcode, body.as_deref())).await?;
-    Ok(editable_at(client, location, &content).await)
+    edit_pack(client, location, |p| set_image_body(p, shortcode, body.as_deref())).await
 }
 
 pub async fn remove_pack_image(client: &Client, location: &PackLocation, shortcode: &str) -> Result<EditablePack, String> {
-    let content = edit_pack(client, location, |p| remove_image(p, shortcode)).await?;
-    Ok(editable_at(client, location, &content).await)
+    edit_pack(client, location, |p| remove_image(p, shortcode)).await
 }
 
 pub async fn set_pack_meta(client: &Client, location: &PackLocation, patch: MetaPatchArg) -> Result<EditablePack, String> {
@@ -793,17 +814,15 @@ pub async fn set_pack_meta(client: &Client, location: &PackLocation, patch: Meta
         return Err(format!("Unknown usage \"{bad}\""));
     }
     let patch = MetaPatch { display_name: patch.display_name, avatar_url: patch.avatar_url, usage: patch.usage };
-    let content = edit_pack(client, location, |p| Ok(set_meta(p, &patch))).await?;
-    Ok(editable_at(client, location, &content).await)
+    edit_pack(client, location, |p| Ok(set_meta(p, &patch))).await
 }
 
 pub async fn create_room_pack(client: &Client, room_id: &str, display_name: &str) -> Result<EditablePack, String> {
     let room = joined_room(client, room_id)?;
     let taken: HashSet<String> = room_packs_from_store(&room).await.into_iter().map(|(k, _)| k).collect();
     let state_key = state_key_for_name(display_name, &taken);
-    let location = PackLocation::Room { room_id: room_id.to_owned(), state_key: state_key.clone() };
-    let content = edit_pack(client, &location, |current| new_pack(current, display_name)).await?;
-    Ok(to_editable(&content, Some(room_id), Some(&state_key), false))
+    let location = PackLocation::Room { room_id: room_id.to_owned(), state_key };
+    edit_pack(client, &location, |current| new_pack(current, display_name)).await
 }
 
 pub async fn set_pack_favorite(client: &Client, room_id: &str, state_key: &str, favorite: bool) -> Result<(), String> {
@@ -1242,6 +1261,30 @@ mod tests {
             let packs = get_room_packs(&hs.client, &rid).await.expect("room packs");
             let codes: Vec<&str> = packs.packs[0].images.iter().map(|i| i.shortcode.as_str()).collect();
             assert_eq!(codes, vec!["renamed"]);
+        }
+
+        // Review fix: each edit asked the server for the favorites list after
+        // releasing the pack's lock, so a slow answer let the next edit to the
+        // pack finish first and this edit's older pack reached the editor
+        // last. The view is now built under the lock, from the store.
+        #[tokio::test]
+        async fn an_edit_takes_the_favorite_flag_from_the_store_without_a_request() {
+            let hs = TestHomeserver::new().await;
+            let rid = room("pk-edit-fav");
+            let stored = json!({ "images": { "a": { "url": "mxc://x/a" } } });
+            let mut body = joined_rooms(&[(&rid, vec![own_join(), pack_state("", stored.clone())])]);
+            body["account_data"] =
+                json!({ "events": [{ "type": FAVORITES_EVENT, "content": { "rooms": { &rid: { "": {} } } } }] });
+            hs.sync(body).await;
+            mount_state(&hs, "GET", "pk-edit-fav", "", 200, stored).await;
+            mount_state(&hs, "PUT", "pk-edit-fav", "", 200, json!({ "event_id": "$w" })).await;
+            mount_no_account_data(&hs).await;
+
+            let loc = PackLocation::Room { room_id: rid.clone(), state_key: String::new() };
+            let pack = rename_pack_image(&hs.client, &loc, "a", "b").await.expect("rename");
+            assert!(pack.favorited);
+            assert_eq!(pack.images[0].shortcode, "b");
+            assert_eq!(hs.requests_to(&format!("/account_data/{FAVORITES_EVENT}")).await, 0);
         }
 
         /// Answer `GET` of the favorites account data with `content`.

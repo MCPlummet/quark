@@ -1622,7 +1622,12 @@ clients may hold others, which are shown but can't be typed.
 thirteen commands): read the pack **from the server** (not the local store),
 apply that one change to the raw JSON with a pure function, write it back —
 under a per-pack lock, so two quick edits can't both start from the state
-before either. Patching raw JSON keeps every field Quark doesn't model
+before either. The pack an edit returns is built before that lock is released,
+its favorite flag taken from the store rather than asked for (an edit never
+changes it, and the editor keeps its own); the editor draws an edit's answer
+only if no later edit's answer has been drawn. An edit used to fetch the
+favorites after releasing the lock, so a slow answer could land after the next
+edit's and draw the pack as it was between the two — a rename undone on screen. Patching raw JSON keeps every field Quark doesn't model
 (`info`, `attribution`, other clients' extensions); the fresh read keeps an
 edit from overwriting a change another client, or another room admin, made
 while the dialog was open. A room-pack write reaches the store only when sync

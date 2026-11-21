@@ -143,6 +143,50 @@ describe("PackEditor", () => {
     expect(ipc.setPackImageBody).toHaveBeenCalledWith(ROOM_LOC, "blobcat", "a cat");
   });
 
+  // Review fix: an edit answered slowly drew its pack over a later edit's,
+  // undoing that edit on screen (here the rename, after which the image's
+  // edits went to a shortcode the pack no longer has).
+  it("draws a slow edit's answer under a later edit's, not over it", async () => {
+    let finishIcon!: (p: EditablePack) => void;
+    ipc.setPackMeta.mockReturnValue(new Promise((r) => { finishIcon = r; }));
+    const renamed = pack({ images: [pack().images[0], { ...pack().images[1], shortcode: "wave" }] });
+    ipc.renamePackImage.mockResolvedValue({ ...renamed, avatar_url: "data:image/png;base64,BB" });
+    const el = mount();
+    cell(el, "blobwave").click();
+    el.querySelector<HTMLButtonElement>(".pack-editor__make-icon")!.click();
+    const field = detailInput(el, "Shortcode");
+    field.value = "wave";
+    field.dispatchEvent(new Event("input"));
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(cells(el).map((c) => c.dataset.shortcode)).toEqual(["blobcat", "wave"]);
+
+    finishIcon(pack({ avatar_url: "data:image/png;base64,BB" })); // as it was before the rename
+    await flush();
+    expect(cells(el).map((c) => c.dataset.shortcode)).toEqual(["blobcat", "wave"]);
+    expect(detailInput(el, "Shortcode").value).toBe("wave");
+    const headerStatus = [...el.querySelectorAll(".pack-editor__header > .settings-dialog__field-status")].at(-1);
+    expect(headerStatus?.textContent).toBe("icon set");
+  });
+
+  it("keeps a favorite just toggled over an edit's answer that predates it", async () => {
+    ipc.setPackFavorite.mockResolvedValue(undefined);
+    ipc.setPackImageBody.mockResolvedValue(pack({ favorited: false }));
+    const el = mount();
+    const box = el.querySelector<HTMLInputElement>(".pack-editor__favorite")!;
+    box.checked = true;
+    box.dispatchEvent(new Event("change"));
+    await flush();
+    cell(el, "blobwave").click();
+    const desc = detailInput(el, "Description");
+    desc.value = "a wave";
+    desc.dispatchEvent(new Event("input"));
+    desc.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flush();
+    expect(ipc.setPackImageBody).toHaveBeenCalled();
+    expect(onChange.mock.lastCall?.[0]).toMatchObject({ favorited: true });
+  });
+
   it("sends an edit after a rename to the image's new shortcode", async () => {
     const renamed = pack({ images: [pack().images[0], { ...pack().images[1], shortcode: "wave" }] });
     ipc.renamePackImage.mockResolvedValue(renamed);

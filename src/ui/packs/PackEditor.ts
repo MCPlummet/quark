@@ -122,6 +122,9 @@ export class PackEditor {
   private readonly _detailEl: HTMLElement;
   private readonly _status: StatusLine;
   private readonly _uploadStatus: StatusLine;
+  /** Edits issued, and the newest whose answer has been drawn (see `_write`). */
+  private _issued = 0;
+  private _drawn = 0;
 
   constructor(opts: PackEditorOpts) {
     this._opts = opts;
@@ -192,14 +195,14 @@ export class PackEditor {
         value: this._pack.display_name ?? "",
         placeholder: "Pack name",
         ariaLabel: "Pack name",
-        save: (v) => this._write(() => setPackMeta(location, { display_name: v.trim() })),
+        save: (v) => this._edit(() => setPackMeta(location, { display_name: v.trim() })),
       }).row);
       header.appendChild(commitSelectRow({
         label: "default use",
         value: usageKey(this._pack.usage, "both"),
         options: PACK_USE,
         ariaLabel: "Default use",
-        save: (v) => this._write(() => setPackMeta(location, { usage: v === "both" ? [] : (usageFromKey(v) ?? []) })),
+        save: (v) => this._edit(() => setPackMeta(location, { usage: v === "both" ? [] : (usageFromKey(v) ?? []) })),
       }).row);
     }
 
@@ -249,15 +252,42 @@ export class PackEditor {
 
   // ── Writes ────────────────────────────────────────────────────────────────
 
-  /** Run an edit; on success redraw from the pack it returns. Throws on failure. */
-  private async _write(op: () => Promise<EditablePack>): Promise<void> {
-    this._applyPack(await op());
+  /**
+   * Run an edit; on success redraw from the pack it returns, unless the answer
+   * of an edit issued after it has been drawn already. The backend applies a
+   * pack's edits one at a time, in the order they were sent, so a later edit's
+   * pack includes this one's change — drawing this one's last would put the
+   * pack back as it was between the two (a rename undone on screen, and edits
+   * to the new shortcode refused). `beforeDraw` runs on success either way,
+   * before any redraw. Throws on failure.
+   */
+  private async _write<T>(
+    op: () => Promise<T>,
+    packOf: (result: T) => EditablePack,
+    beforeDraw?: (result: T) => void,
+  ): Promise<T> {
+    const seq = ++this._issued;
+    const result = await op();
+    beforeDraw?.(result);
+    if (seq > this._drawn) {
+      this._drawn = seq;
+      this._applyPack(packOf(result));
+    }
+    return result;
+  }
+
+  /** `_write` for the edits that answer with the pack alone. */
+  private async _edit(op: () => Promise<EditablePack>): Promise<void> {
+    await this._write(op, (p) => p);
   }
 
   private _applyPack(next: EditablePack): void {
-    this._pack = next;
+    // An edit never changes whether the pack is a favorite, and the toggle here
+    // is where that changes: keep what it says over the edit's answer, which
+    // may predate a toggle made moments ago.
+    this._pack = { ...next, favorited: this._pack.favorited };
     invalidateCustomEmoji();
-    this._opts.onChange?.(next);
+    this._opts.onChange?.(this._pack);
     this._renderIcon();
     this._renderGrid();
     if (this._selected !== null && !next.images.some((i) => i.shortcode === this._selected)) {
@@ -271,7 +301,7 @@ export class PackEditor {
     try {
       const img = await readImageFile(file);
       const url = await uploadPackMedia(img.dataBase64, img.mimetype);
-      await this._write(() => setPackMeta(this._opts.location, { avatar_url: url }));
+      await this._edit(() => setPackMeta(this._opts.location, { avatar_url: url }));
       this._status.set("saved", "icon set");
     } catch (err) {
       this._status.set("error", errorText(err));
@@ -304,9 +334,8 @@ export class PackEditor {
     let added = 0;
     if (images.length > 0) {
       try {
-        const res = await addPackImages(this._opts.location, images);
+        const res = await this._write(() => addPackImages(this._opts.location, images), (r) => r.pack);
         added = res.added.length;
-        this._applyPack(res.pack);
       } catch (err) {
         failed.push(`adding to the pack failed: ${errorText(err)}`);
       }
@@ -328,7 +357,7 @@ export class PackEditor {
     });
     if (!ok) return;
     try {
-      await this._write(() => removePackImage(this._opts.location, shortcode));
+      await this._edit(() => removePackImage(this._opts.location, shortcode));
       this._uploadStatus.set("saved", `deleted :${shortcode}:`);
     } catch (err) {
       this._uploadStatus.set("error", errorText(err));
@@ -508,11 +537,11 @@ export class PackEditor {
       save: async (v) => {
         const from = code;
         const to = v.trim();
-        const next = await renamePackImage(loc, from, to);
-        code = to;
-        title.textContent = `:${to}:`;
-        if (this._selected === from) this._selected = to;
-        this._applyPack(next);
+        await this._write(() => renamePackImage(loc, from, to), (p) => p, () => {
+          code = to;
+          title.textContent = `:${to}:`;
+          if (this._selected === from) this._selected = to;
+        });
       },
     }).row);
     this._detailEl.appendChild(commitSelectRow({
@@ -520,14 +549,14 @@ export class PackEditor {
       value: usageKey(image.usage, "inherit"),
       options: IMAGE_USE,
       ariaLabel: "Use",
-      save: (v) => this._write(() => setPackImageUsage(loc, current(), usageFromKey(v))),
+      save: (v) => this._edit(() => setPackImageUsage(loc, current(), usageFromKey(v))),
     }).row);
     this._detailEl.appendChild(commitTextRow({
       label: "description",
       value: image.body ?? "",
       placeholder: "What it shows (alt text)",
       ariaLabel: "Description",
-      save: (v) => this._write(() => setPackImageBody(loc, current(), v.trim() || null)),
+      save: (v) => this._edit(() => setPackImageBody(loc, current(), v.trim() || null)),
     }).row);
 
     const actions = document.createElement("div");
@@ -535,7 +564,7 @@ export class PackEditor {
     actions.appendChild(button("[use as pack icon]", "pack-editor__make-icon", () => {
       const url = this._pack.images.find((i) => i.shortcode === current())?.url;
       if (!url) return;
-      this._write(() => setPackMeta(loc, { avatar_url: url }))
+      this._edit(() => setPackMeta(loc, { avatar_url: url }))
         .then(() => this._status.set("saved", "icon set"))
         .catch((err) => this._status.set("error", errorText(err)));
     }));
