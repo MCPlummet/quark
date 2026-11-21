@@ -177,10 +177,13 @@ export class SettingsDialog extends DialogBase {
       return;
     }
 
+    // Tab moves to the next section, Shift+Tab back to the previous one, as in
+    // the room dialog and space settings.
     if (e.key === "Tab") {
       e.preventDefault();
+      const n = this._tabs.length;
       const idx = this._tabs.findIndex((t) => t.id === this._activeId);
-      this._switchTab(this._tabs[(idx + 1) % this._tabs.length].id);
+      this._switchTab(this._tabs[(idx + (e.shiftKey ? n - 1 : 1)) % n].id);
       return;
     }
 

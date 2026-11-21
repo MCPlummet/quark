@@ -11,8 +11,15 @@ vi.mock("../../ipc/index.js", () => ({
   getThumbnail: (...a: unknown[]) => getThumbnail(...(a as [])),
 }));
 
-import { loadCustomEmoji, customEmojiImage, cachedCustomEmoji, _resetCustomEmojiCache } from "./custom_emoji.js";
-import { _emojiImageCache, _shortcodeToMxc, _downloadInlineEmoji } from "./context.js";
+import {
+  loadCustomEmoji,
+  customEmojiImage,
+  cachedCustomEmoji,
+  _resetCustomEmojiCache,
+  invalidateCustomEmoji,
+  customEmojiVersion,
+} from "./custom_emoji.js";
+import { _emojiImageCache, _shortcodeToMxcByRoom, customEmojiMxc, _downloadInlineEmoji } from "./context.js";
 
 const PACK: EmojiPack = {
   pack_id: "blobs",
@@ -33,7 +40,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 beforeEach(() => {
   _resetCustomEmojiCache();
   _emojiImageCache.clear();
-  _shortcodeToMxc.clear();
+  _shortcodeToMxcByRoom.clear();
   getEmojiPacks.mockReset();
   getEmojiPacks.mockResolvedValue([PACK]);
   getThumbnail.mockClear();
@@ -49,9 +56,58 @@ describe("loadCustomEmoji", () => {
 
   it("records each emoticon's mxc so a typed :shortcode: can be sent as an image", async () => {
     await loadCustomEmoji("!r:x", { onPacks: () => {} });
-    expect(_shortcodeToMxc.get("blob")).toBe("mxc://x/blob");
-    expect(_shortcodeToMxc.has("stk")).toBe(false);
-    expect(_shortcodeToMxc.has("web")).toBe(false);
+    expect(customEmojiMxc("!r:x", "blob")).toBe("mxc://x/blob");
+    expect(customEmojiMxc("!r:x", "stk")).toBeUndefined();
+    expect(customEmojiMxc("!r:x", "web")).toBeUndefined();
+  });
+
+  // #12: packs arrive in precedence order (room, spaces, personal, favorites);
+  // the pickers list a shared shortcode once — the winner — so what is picked
+  // is what a typed :shortcode: sends.
+  it("lets the first pack win a shortcode two packs share", async () => {
+    getEmojiPacks.mockResolvedValue([
+      { ...PACK, pack_id: "room", emojis: [{ shortcode: "blob", url: "mxc://x/room-blob", body: null, usage: ["emoticon"] }] },
+      { ...PACK, pack_id: "fav", emojis: [
+        { shortcode: "blob", url: "mxc://x/fav-blob", body: null, usage: ["emoticon"] },
+        { shortcode: "only", url: "mxc://x/only", body: null, usage: ["emoticon"] },
+      ] },
+    ]);
+    const packs = await loadCustomEmoji("!r:x", { onPacks: () => {} });
+    const listed = packs.flatMap((p) => p.emojis.map((e) => `${p.id}:${e.shortcode}`));
+    expect(listed).toEqual(["room:blob", "fav:only"]);
+    expect(customEmojiMxc("!r:x", "blob")).toBe("mxc://x/room-blob");
+  });
+
+  it("replaces a room's shortcodes on reload, so a removed one stops resolving", async () => {
+    await loadCustomEmoji("!r:x", { onPacks: () => {} });
+    getEmojiPacks.mockResolvedValue([{ ...PACK, emojis: [] }]);
+    await loadCustomEmoji("!r:x", { onPacks: () => {} });
+    expect(customEmojiMxc("!r:x", "blob")).toBeUndefined();
+  });
+
+  // Review fix: every edit reloads; a slower, older load used to land last and
+  // put back the packs as they were before the edit.
+  it("keeps a slower, older load from overwriting a newer one", async () => {
+    let finishOld!: (p: EmojiPack[]) => void;
+    getEmojiPacks.mockReturnValueOnce(new Promise((r) => { finishOld = r; }));
+    const oldLoad = loadCustomEmoji("!r:x", { onPacks: () => {} });
+    getEmojiPacks.mockResolvedValueOnce([{ ...PACK, emojis: [{ shortcode: "new", url: "mxc://x/new", body: null, usage: ["emoticon"] }] }]);
+    await loadCustomEmoji("!r:x", { onPacks: () => {} });
+    const heard: string[][] = [];
+    finishOld([{ ...PACK, emojis: [{ shortcode: "old", url: "mxc://x/old", body: null, usage: ["emoticon"] }] }]);
+    await oldLoad;
+    expect(customEmojiMxc("!r:x", "new")).toBe("mxc://x/new");
+    expect(customEmojiMxc("!r:x", "old")).toBeUndefined();
+    expect(cachedCustomEmoji("!r:x").flatMap((p) => p.emojis.map((e) => e.shortcode))).toEqual(["new"]);
+    expect(heard).toEqual([]);
+  });
+
+  it("invalidateCustomEmoji drops cached packs and bumps the version", async () => {
+    await loadCustomEmoji("!r:x", { onPacks: () => {} });
+    const before = customEmojiVersion();
+    invalidateCustomEmoji();
+    expect(cachedCustomEmoji("!r:x")).toEqual([]);
+    expect(customEmojiVersion()).toBe(before + 1);
   });
 
   it("fetches each thumbnail once, even for loads that overlap, and reports it", async () => {
@@ -97,6 +153,64 @@ describe("loadCustomEmoji", () => {
     getEmojiPacks.mockRejectedValueOnce(new Error("offline"));
     const packs = await loadCustomEmoji("!r:x", { onPacks: () => {} });
     expect(packs).toHaveLength(1);
+  });
+
+  // Review fix: the per-room maps fill only when a room's load lands, so a
+  // `:mine:` from the personal pack sent right after switching to a room not
+  // opened yet went out as text — it used to resolve through one app-wide map.
+  describe("in a room whose packs have not loaded yet", () => {
+    const one = (pack_id: string, shortcode: string, over: Partial<EmojiPack> = {}): EmojiPack => ({
+      ...PACK,
+      pack_id,
+      emojis: [{ shortcode, url: `mxc://x/${pack_id}-${shortcode}`, body: null, usage: ["emoticon"] }],
+      ...over,
+    });
+    const roomA = [
+      one("a-room", "roomblob", { scope: "room" }),
+      one("a-space", "spaceblob", { scope: "space" }),
+      one("a-fav-room", "favroom", { scope: "room", favorited: true }),
+      one("user_default", "mine", { source: "user", room_id: null, scope: "user" }),
+      one("fav", "fav", { scope: "favorite", favorited: true }),
+    ];
+
+    it("resolves the personal pack and favorites, never another room's or space's packs", async () => {
+      getEmojiPacks.mockResolvedValue(roomA);
+      await loadCustomEmoji("!a:x", { onPacks: () => {} });
+      expect(customEmojiMxc("!b:x", "mine")).toBe("mxc://x/user_default-mine");
+      expect(customEmojiMxc("!b:x", "fav")).toBe("mxc://x/fav-fav");
+      expect(customEmojiMxc("!b:x", "favroom")).toBe("mxc://x/a-fav-room-favroom");
+      expect(customEmojiMxc("!b:x", "roomblob")).toBeUndefined();
+      expect(customEmojiMxc("!b:x", "spaceblob")).toBeUndefined();
+    });
+
+    it("resolves them while the room's own load is still in flight", async () => {
+      getEmojiPacks.mockResolvedValueOnce(roomA);
+      await loadCustomEmoji("!a:x", { onPacks: () => {} });
+      getEmojiPacks.mockReturnValueOnce(new Promise(() => {}));
+      void loadCustomEmoji("!b:x", { onPacks: () => {} });
+      expect(customEmojiMxc("!b:x", "mine")).toBe("mxc://x/user_default-mine");
+    });
+
+    it("lets the room's own map decide once it has loaded", async () => {
+      getEmojiPacks.mockResolvedValueOnce(roomA);
+      await loadCustomEmoji("!a:x", { onPacks: () => {} });
+      getEmojiPacks.mockResolvedValueOnce([one("b-room", "mine", { scope: "room" }), one("user_default", "mine", { source: "user" })]);
+      await loadCustomEmoji("!b:x", { onPacks: () => {} });
+      expect(customEmojiMxc("!b:x", "mine")).toBe("mxc://x/b-room-mine");
+      expect(customEmojiMxc("!b:x", "fav")).toBeUndefined(); // not in the room's answer
+    });
+
+    it("believes the newest load of any room about the personal pack", async () => {
+      let finishOld!: (p: EmojiPack[]) => void;
+      getEmojiPacks.mockReturnValueOnce(new Promise((r) => { finishOld = r; }));
+      const old = loadCustomEmoji("!a:x", { onPacks: () => {} });
+      getEmojiPacks.mockResolvedValueOnce([one("user_default", "renamed", { source: "user" })]);
+      await loadCustomEmoji("!c:x", { onPacks: () => {} });
+      finishOld([one("user_default", "mine", { source: "user" })]);
+      await old;
+      expect(customEmojiMxc("!b:x", "renamed")).toBe("mxc://x/user_default-renamed");
+      expect(customEmojiMxc("!b:x", "mine")).toBeUndefined();
+    });
   });
 
   it("caches per room", async () => {

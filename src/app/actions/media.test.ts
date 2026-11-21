@@ -81,7 +81,7 @@ vi.mock("./live.js", () => ({
 import { sendStagedAttachments, attachFiles, readCopiedFiles, inlineVideoTransport } from "./media.js";
 import { attachmentKind, type StagedAttachment } from "../../ui/AttachmentTray.js";
 import { showError } from "../../ui/NotificationToast.js";
-import { setComponents, _shortcodeToMxc } from "./context.js";
+import { setComponents, _shortcodeToMxcByRoom } from "./context.js";
 import { AppState } from "../state.js";
 
 const stageAttachment = vi.fn<(file: Blob, filename?: string | null) => void>();
@@ -117,7 +117,7 @@ beforeEach(() => {
     currentTimeline: [],
   });
   // Module-global, so a room's custom emoji would otherwise leak between tests.
-  _shortcodeToMxc.clear();
+  _shortcodeToMxcByRoom.clear();
 });
 
 // jsdom's Blob.arrayBuffer() doesn't round-trip bytes, so give the test blob a
@@ -530,7 +530,7 @@ describe("image captions expand emoji like any other message (#84)", () => {
   });
 
   it("puts a custom emoji in the formatted caption and leaves the plain one alone", async () => {
-    _shortcodeToMxc.set("party", "mxc://example.org/party");
+    _shortcodeToMxcByRoom.set("!room:x", new Map([["party", "mxc://example.org/party"]]));
 
     await sendPendingImage(blob(), "cat.png", "look :party:");
 
@@ -726,7 +726,7 @@ describe("sendStagedAttachments", () => {
   });
 
   it("carries a formatted caption on a video", async () => {
-    _shortcodeToMxc.set("party", "mxc://e/party");
+    _shortcodeToMxcByRoom.set("!room:x", new Map([["party", "mxc://e/party"]]));
     const restore = stubVideoProbe();
     try {
       await sendStagedAttachments([staged(new File(["v"], "clip.mp4", { type: "video/mp4" }), "clip.mp4")], ":party:");
@@ -815,7 +815,7 @@ describe("sendStagedAttachments", () => {
 describe("a captioned image sent into a thread (#78 + #84)", () => {
   it("carries the thread root and the expanded caption in one send", async () => {
     AppState.set("threadRootEventId", "$root");
-    _shortcodeToMxc.set("party", "mxc://e/party");
+    _shortcodeToMxcByRoom.set("!room:x", new Map([["party", "mxc://e/party"]]));
 
     await sendPendingImage(blob(), "cat.png", ":party: see [docs](https://e.com) :smile:");
 

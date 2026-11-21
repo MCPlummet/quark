@@ -14,7 +14,8 @@ import {
   timelineEventToThreadMessage,
   _messageMediaCache,
   _emojiImageCache,
-  _shortcodeToMxc,
+  _shortcodeToMxcByRoom,
+  _shortcodeToMxcEverywhere,
   _memberDisplayName,
   _dmUserByRoom,
   _ownSentEventIds,
@@ -65,7 +66,7 @@ function makeRoom(over: Partial<RoomInfo> = {}): RoomInfo {
 }
 
 beforeEach(() => {
-  for (const m of [_emojiImageCache, _shortcodeToMxc, _memberDisplayName, _dmUserByRoom, _replyPreviewCache]) m.clear();
+  for (const m of [_emojiImageCache, _shortcodeToMxcByRoom, _shortcodeToMxcEverywhere, _memberDisplayName, _dmUserByRoom, _replyPreviewCache]) m.clear();
   _ownSentEventIds.clear();
   AppState.patch({ ownUserId: null });
 });
@@ -241,29 +242,58 @@ describe("roomInfoToEntry", () => {
   });
 });
 
+/** Make a custom shortcode resolvable in room "!r", as its packs loading would. */
+function seedShortcode(shortcode: string, mxc: string): void {
+  const map = _shortcodeToMxcByRoom.get("!r") ?? new Map<string, string>();
+  map.set(shortcode, mxc);
+  _shortcodeToMxcByRoom.set("!r", map);
+}
+
 describe("_buildFormattedBodyWithEmoji", () => {
+  beforeEach(() => {
+    _shortcodeToMxcByRoom.clear();
+    _shortcodeToMxcEverywhere.clear();
+  });
+
+  // #12: a shortcode belongs to the rooms whose packs hold it. The map used to
+  // be app-wide and never cleared, so a space pack's emoji loaded in one room
+  // turned into an image in rooms outside the space.
+  it("does not resolve a shortcode loaded for another room", () => {
+    seedShortcode("party", "mxc://emoji/party");
+    expect(_buildFormattedBodyWithEmoji("yay :party:", "!other")).toBeUndefined();
+  });
+
+  // Review fix: a room not loaded yet still resolves the packs that apply in
+  // every room (personal, favorites); a loaded room's own map decides alone.
+  it("resolves the everywhere packs in a room whose packs have not loaded", () => {
+    _shortcodeToMxcEverywhere.set("mine", "mxc://emoji/mine");
+    expect(_buildFormattedBodyWithEmoji(":mine:", "!fresh")).toContain('src="mxc://emoji/mine"');
+    seedShortcode("party", "mxc://emoji/party");
+    expect(_buildFormattedBodyWithEmoji(":mine:", "!r")).toBeUndefined();
+  });
+
   it("returns undefined when no known custom shortcode is present", () => {
-    expect(_buildFormattedBodyWithEmoji("just text :unknown:")).toBeUndefined();
+    expect(_buildFormattedBodyWithEmoji("just text :unknown:", "!r")).toBeUndefined();
   });
 
   it("replaces a known shortcode with an mx-emoticon img and keeps surrounding text", () => {
-    _shortcodeToMxc.set("party", "mxc://emoji/party");
-    const html = _buildFormattedBodyWithEmoji("yay :party: time");
+    seedShortcode("party", "mxc://emoji/party");
+    const html = _buildFormattedBodyWithEmoji("yay :party: time", "!r");
     expect(html).toBe(
       'yay <img data-mx-emoticon height="32" src="mxc://emoji/party" alt=":party:" title=":party:"> time',
     );
   });
 
   it("HTML-escapes the plain-text segments around the emoji", () => {
-    _shortcodeToMxc.set("ok", "mxc://emoji/ok");
-    const html = _buildFormattedBodyWithEmoji("a < b & c :ok:");
+    seedShortcode("ok", "mxc://emoji/ok");
+    const html = _buildFormattedBodyWithEmoji("a < b & c :ok:", "!r");
     expect(html).toContain("a &lt; b &amp; c ");
     expect(html).toContain("data-mx-emoticon");
   });
 
   it("leaves unknown shortcodes as escaped literal text", () => {
-    _shortcodeToMxc.set("known", "mxc://emoji/known");
-    const html = _buildFormattedBodyWithEmoji(":unknown: :known:");
+    seedShortcode("known", "mxc://emoji/known");
+    const html = _buildFormattedBodyWithEmoji(":unknown: :known:", "!r");
     expect(html).toContain(":unknown:");
     expect(html).toContain("data-mx-emoticon");
   });
@@ -271,37 +301,37 @@ describe("_buildFormattedBodyWithEmoji", () => {
 
 describe("replaceUnicodeEmojiShortcodes", () => {
   it("replaces a built-in Unicode shortcode with its glyph", () => {
-    expect(replaceUnicodeEmojiShortcodes("hi :grinning:!")).toBe("hi 😀!");
+    expect(replaceUnicodeEmojiShortcodes("hi :grinning:!", "!r")).toBe("hi 😀!");
   });
 
   it("replaces multiple shortcodes in one string", () => {
-    expect(replaceUnicodeEmojiShortcodes(":grinning: :grinning:")).toBe("😀 😀");
+    expect(replaceUnicodeEmojiShortcodes(":grinning: :grinning:", "!r")).toBe("😀 😀");
   });
 
   it("leaves unknown shortcodes untouched", () => {
-    expect(replaceUnicodeEmojiShortcodes("nope :definitely_not_real_xyz:")).toBe(
+    expect(replaceUnicodeEmojiShortcodes("nope :definitely_not_real_xyz:", "!r")).toBe(
       "nope :definitely_not_real_xyz:",
     );
   });
 
   it("leaves custom-emoji shortcodes untouched (resolved separately as images)", () => {
     // A custom shortcode is, by construction, not in the built-in Unicode table.
-    _shortcodeToMxc.set("mycustompog", "mxc://emoji/pog");
-    expect(replaceUnicodeEmojiShortcodes("gg :mycustompog:")).toBe("gg :mycustompog:");
+    seedShortcode("mycustompog", "mxc://emoji/pog");
+    expect(replaceUnicodeEmojiShortcodes("gg :mycustompog:", "!r")).toBe("gg :mycustompog:");
   });
 });
 
 describe("prepareOutgoingBody", () => {
   it("converts a Unicode shortcode to a glyph in the plain body, no formatted body", () => {
-    expect(prepareOutgoingBody("hi :grinning:")).toEqual({
+    expect(prepareOutgoingBody("hi :grinning:", "!r")).toEqual({
       body: "hi 😀",
       formattedBody: undefined,
     });
   });
 
   it("keeps a custom shortcode in the plain body and resolves it to an image in the formatted body", () => {
-    _shortcodeToMxc.set("party", "mxc://emoji/party");
-    const { body, formattedBody } = prepareOutgoingBody("yay :party:");
+    seedShortcode("party", "mxc://emoji/party");
+    const { body, formattedBody } = prepareOutgoingBody("yay :party:", "!r");
     expect(body).toBe("yay :party:");
     expect(formattedBody).toBe(
       'yay <img data-mx-emoticon height="32" src="mxc://emoji/party" alt=":party:" title=":party:">',
@@ -309,8 +339,8 @@ describe("prepareOutgoingBody", () => {
   });
 
   it("handles Unicode and custom emoji together", () => {
-    _shortcodeToMxc.set("party", "mxc://emoji/party");
-    const { body, formattedBody } = prepareOutgoingBody(":grinning: :party:");
+    seedShortcode("party", "mxc://emoji/party");
+    const { body, formattedBody } = prepareOutgoingBody(":grinning: :party:", "!r");
     expect(body).toBe("😀 :party:");
     expect(formattedBody).toBe(
       '😀 <img data-mx-emoticon height="32" src="mxc://emoji/party" alt=":party:" title=":party:">',
@@ -318,7 +348,7 @@ describe("prepareOutgoingBody", () => {
   });
 
   it("preserves inline markdown alongside a Unicode glyph", () => {
-    const { body, formattedBody } = prepareOutgoingBody("**bold** :grinning:");
+    const { body, formattedBody } = prepareOutgoingBody("**bold** :grinning:", "!r");
     expect(body).toBe("**bold** 😀");
     expect(formattedBody).toBe("<strong>bold</strong> 😀");
   });

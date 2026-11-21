@@ -52,7 +52,7 @@ export async function sendMessage(body: string): Promise<void> {
   // Resolve emoji up front: Unicode shortcodes (:smile: → 😄) in the plain body,
   // custom (MSC2545) shortcodes into <img> in the formatted body. Doing it here
   // means the optimistic bubble and the fly-in clones already show the glyph.
-  const prepared = prepareOutgoingBody(body);
+  const prepared = prepareOutgoingBody(body, roomId);
   body = prepared.body;
 
   const { timeline, input, replyPreview } = getComponents();
@@ -435,7 +435,7 @@ export async function editMessage(eventId: string, newBody: string): Promise<voi
   // become an HTML formatted body. Without the formatted body the edit would
   // ship `m.new_content` as plain text and every viewer — including this one
   // once the room is reloaded — would see a literal :shortcode:.
-  const { body, formattedBody } = prepareOutgoingBody(newBody);
+  const { body, formattedBody } = prepareOutgoingBody(newBody, roomId);
 
   try {
     const editEventId = await ipcEditMessage(roomId, eventId, body, formattedBody);

@@ -1,8 +1,9 @@
 // Mock IPC layer for browser-only dev mode (no Tauri backend)
 // Provides fake data so the UI renders and can be interacted with
 
-import type { RoomInfo, TimelineEvent, EmojiPack, GifResult, RoomMember, SentMessage, InviteInfo, SpaceChild } from "./types.js";
+import type { RoomInfo, TimelineEvent, GifResult, RoomMember, SentMessage, InviteInfo, SpaceChild } from "./types.js";
 import type { CustomThemeEntry } from "./config.js";
+import { mockPacksInvoke, NOT_HANDLED } from "./mock_packs.js";
 
 export interface CacheStats {
   total_size_bytes: number;
@@ -293,6 +294,14 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
   // Simulate a small network delay
   await new Promise((r) => setTimeout(r, 50 + Math.random() * 150));
 
+  // Emoji/sticker packs (#12) keep their own in-memory store.
+  const packs = mockPacksInvoke(cmd, args, {
+    spaceChildren: MOCK_SPACE_CHILDREN,
+    roomName: (id) =>
+      MOCK_ROOMS.find((r) => r.room_id === id)?.name ?? MOCK_SPACES.find((r) => r.room_id === id)?.name ?? null,
+  });
+  if (packs !== NOT_HANDLED) return packs;
+
   switch (cmd) {
     case "login":
       // Backend now persists the session in the keyring and returns nothing.
@@ -530,36 +539,6 @@ export async function mockInvoke(cmd: string, args?: Record<string, unknown>): P
       return "/mock/themes";
     case "get_cache_stats":
       return { total_size_bytes: 15728640, entry_count: 42, max_size_bytes: 209715200, usage_percent: 7.5 } as CacheStats;
-    case "get_emoji_packs":
-      return [
-        {
-          pack_id: "mock-custom",
-          display_name: "Mock Emoji",
-          avatar_url: null,
-          source: "user",
-          room_id: null,
-          emojis: [
-            { shortcode: "partyblob", url: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>🎉</text></svg>", body: "Party blob", usage: ["emoticon"] },
-            { shortcode: "blobcat", url: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>🐱</text></svg>", body: "Blob cat", usage: ["emoticon"] },
-            { shortcode: "blobwave", url: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>👋</text></svg>", body: "Blob wave", usage: ["emoticon"] },
-          ],
-        },
-      ] as EmojiPack[];
-    case "get_sticker_packs":
-      return [
-        {
-          pack_id: "mock-sticker-pack",
-          display_name: "Mock Stickers",
-          avatar_url: null,
-          source: "user",
-          room_id: null,
-          emojis: [
-            { shortcode: "wave", url: "mxc://matrix.org/mock-wave", usage: ["sticker"], body: "Wave" },
-            { shortcode: "thumbsup", url: "mxc://matrix.org/mock-thumbsup", usage: ["sticker"], body: "Thumbs Up" },
-            { shortcode: "heart", url: "mxc://matrix.org/mock-heart", usage: ["sticker"], body: "Heart" },
-          ],
-        },
-      ] as EmojiPack[];
     case "search_gifs": {
       const query = ((args?.query as string) ?? "").toLowerCase();
       // Placeholder SVG thumbnails so the grid actually renders in dev mode

@@ -52,6 +52,20 @@ describe("SettingsDialog", () => {
     await vi.waitFor(() => expect(pane(d).textContent).toContain("Confirm before redacting"));
   });
 
+  it("moves between tabs with Tab and back with Shift+Tab", () => {
+    d.show();
+    const tabs = Array.from(d.getElement().querySelectorAll<HTMLElement>(".settings-dialog__tab"));
+    const active = () => d.getElement().querySelector(".settings-dialog__tab--active")?.textContent;
+    const press = (shiftKey: boolean) =>
+      d.getElement().dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true }));
+    press(false);
+    expect(active()).toBe(tabs[1].textContent);
+    press(true);
+    expect(active()).toBe(tabs[0].textContent);
+    press(true);
+    expect(active()).toBe(tabs[tabs.length - 1].textContent);
+  });
+
   it("does not let a suspended tab build append into the tab that replaced it", async () => {
     let releaseConfig: () => void = () => {};
     mocks.getAppConfig.mockReturnValue(

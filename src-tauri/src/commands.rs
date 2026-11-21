@@ -1015,6 +1015,137 @@ pub async fn get_emoji_packs(
     crate::matrix::emoji::get_emoji_packs(&client, room_id.as_deref()).await
 }
 
+// ─── Pack Management Commands (#12) ───────────────────────────────────────────
+//
+// One command per kind of edit; each re-reads the pack from the server and
+// patches only what it changes (see matrix/packs.rs).
+
+use crate::matrix::packs::{
+    AddImagesResult, EditablePack, FavoritePack, MetaPatchArg, NewImageArg, PackLocation, RoomPacks,
+};
+
+#[tauri::command]
+pub async fn get_user_pack(state: State<'_, MatrixState>) -> Result<EditablePack, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::get_user_pack(&client).await
+}
+
+#[tauri::command]
+pub async fn get_room_packs(state: State<'_, MatrixState>, room_id: String) -> Result<RoomPacks, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::get_room_packs(&client, &room_id).await
+}
+
+#[tauri::command]
+pub async fn get_favorite_packs(state: State<'_, MatrixState>) -> Result<Vec<FavoritePack>, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::get_favorite_packs(&client).await
+}
+
+#[tauri::command]
+pub async fn upload_pack_media(
+    state: State<'_, MatrixState>,
+    data_base64: String,
+    mimetype: String,
+) -> Result<String, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::upload_pack_media(&client, &data_base64, &mimetype).await
+}
+
+#[tauri::command]
+pub async fn add_pack_images(
+    state: State<'_, MatrixState>,
+    location: PackLocation,
+    images: Vec<NewImageArg>,
+) -> Result<AddImagesResult, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::add_pack_images(&client, &location, images).await
+}
+
+#[tauri::command]
+pub async fn rename_pack_image(
+    state: State<'_, MatrixState>,
+    location: PackLocation,
+    from: String,
+    to: String,
+) -> Result<EditablePack, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::rename_pack_image(&client, &location, &from, &to).await
+}
+
+#[tauri::command]
+pub async fn set_pack_image_usage(
+    state: State<'_, MatrixState>,
+    location: PackLocation,
+    shortcode: String,
+    usage: Option<Vec<String>>,
+) -> Result<EditablePack, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::set_pack_image_usage(&client, &location, &shortcode, usage).await
+}
+
+#[tauri::command]
+pub async fn set_pack_image_body(
+    state: State<'_, MatrixState>,
+    location: PackLocation,
+    shortcode: String,
+    body: Option<String>,
+) -> Result<EditablePack, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::set_pack_image_body(&client, &location, &shortcode, body).await
+}
+
+#[tauri::command]
+pub async fn remove_pack_image(
+    state: State<'_, MatrixState>,
+    location: PackLocation,
+    shortcode: String,
+) -> Result<EditablePack, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::remove_pack_image(&client, &location, &shortcode).await
+}
+
+#[tauri::command]
+pub async fn set_pack_meta(
+    state: State<'_, MatrixState>,
+    location: PackLocation,
+    patch: MetaPatchArg,
+) -> Result<EditablePack, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::set_pack_meta(&client, &location, patch).await
+}
+
+#[tauri::command]
+pub async fn create_room_pack(
+    state: State<'_, MatrixState>,
+    room_id: String,
+    display_name: String,
+) -> Result<EditablePack, String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::create_room_pack(&client, &room_id, &display_name).await
+}
+
+#[tauri::command]
+pub async fn delete_room_pack(
+    state: State<'_, MatrixState>,
+    room_id: String,
+    state_key: String,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::delete_room_pack(&client, &room_id, &state_key).await
+}
+
+#[tauri::command]
+pub async fn set_pack_favorite(
+    state: State<'_, MatrixState>,
+    room_id: String,
+    state_key: String,
+    favorite: bool,
+) -> Result<(), String> {
+    let client = get_client(&state)?;
+    crate::matrix::packs::set_pack_favorite(&client, &room_id, &state_key, favorite).await
+}
+
 // ─── Sticker Commands ─────────────────────────────────────────────────────────
 
 #[tauri::command]

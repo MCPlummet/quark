@@ -269,6 +269,87 @@ export interface EmojiPack {
   source: string;
   room_id: string | null;
   emojis: EmojiEntry[];
+  /** The pack's state key, for a room or space pack. */
+  state_key?: string | null;
+  /** Listed in the user's favorites (im.ponies.emote_rooms). */
+  favorited?: boolean;
+  /**
+   * Why the pack is offered here (#12). Packs arrive in the order a shortcode
+   * resolves — room, space, user, favorite — so the first pack holding a
+   * shortcode wins it.
+   */
+  scope?: "room" | "space" | "user" | "favorite";
+}
+
+// ─── Pack management (#12) — matches matrix::packs ───────────────────────────
+
+export type PackUsage = "emoticon" | "sticker";
+
+/** Where a pack lives. A space is a room, so space packs are `room` too. */
+export type PackLocation = { kind: "user" } | { kind: "room"; room_id: string; state_key: string };
+
+export interface EditableImage {
+  shortcode: string;
+  url: string;
+  body: string | null;
+  /** The image's own usage; null inherits the pack's. */
+  usage: PackUsage[] | null;
+}
+
+export interface EditablePack {
+  room_id: string | null;
+  state_key: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+  /** The pack's own usage; null means both. */
+  usage: PackUsage[] | null;
+  /** Sorted by shortcode. */
+  images: EditableImage[];
+  favorited: boolean;
+  /** Not editable here (set for the legacy images shown apart). */
+  read_only: boolean;
+  /**
+   * The personal pack only: images in the non-standard `{ packs: {…} }` form,
+   * shown read-only and never written (edits go to the standard pack).
+   */
+  legacy_images?: EditableImage[];
+}
+
+export interface RoomPacks {
+  can_edit: boolean;
+  packs: EditablePack[];
+}
+
+export interface FavoritePack {
+  room_id: string;
+  state_key: string;
+  room_name: string | null;
+  joined: boolean;
+  display_name: string | null;
+  avatar_url: string | null;
+  image_count: number;
+}
+
+/** An uploaded image to add to a pack. */
+export interface NewPackImage {
+  url: string;
+  body: string | null;
+  info: { w?: number; h?: number; mimetype: string; size: number } | null;
+  /** The shortcode is derived from it. */
+  filename: string;
+}
+
+/** Pack metadata changes: an omitted field is untouched, an empty one removed. */
+export interface MetaPatch {
+  display_name?: string;
+  avatar_url?: string;
+  usage?: PackUsage[];
+}
+
+export interface AddImagesResult {
+  pack: EditablePack;
+  /** The shortcode each image got, in the order given. */
+  added: string[];
 }
 
 // ─── Media ────────────────────────────────────────────────────────────────────

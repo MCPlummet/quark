@@ -9,11 +9,12 @@
 
 import { getEmojiPacks } from "../../ipc/index.js";
 import type { EmojiPack } from "../../ipc/types.js";
-import type { CustomEmojiPack } from "../../ui/emoji_catalog.js";
+import type { CustomEmoji, CustomEmojiPack } from "../../ui/emoji_catalog.js";
 import {
   _emojiImageCache,
   _resetEmojiThumbnailsInFlight,
-  _shortcodeToMxc,
+  _shortcodeToMxcByRoom,
+  _shortcodeToMxcEverywhere,
   resolveEmojiThumbnail,
 } from "./context.js";
 
@@ -30,6 +31,44 @@ export interface CustomEmojiListener {
 /** Packs by room ID ("" for no room: the account's own packs). */
 const _packCache = new Map<string, CustomEmojiPack[]>();
 
+/** Bumped whenever the packs change under the cache (a pack was edited). */
+let _version = 0;
+
+/**
+ * The latest load started for each room key, and a promise that settles once
+ * it has finished. Every pack edit reloads, so loads overlap; one overtaken by
+ * a newer load must not overwrite that load's packs with its older answer — it
+ * waits for the newer one instead and reports what that one found.
+ */
+const _latestLoad = new Map<string, { seq: number; done: Promise<void> }>();
+let _loadSeq = 0;
+/** The load (by `_loadSeq`) whose answer `_shortcodeToMxcEverywhere` holds. */
+let _everywhereSeq = 0;
+const _invalidationListeners = new Set<() => void>();
+
+/** The cache generation; changes when `invalidateCustomEmoji` runs. */
+export function customEmojiVersion(): number {
+  return _version;
+}
+
+/** Hear about `invalidateCustomEmoji` — e.g. to reload what autocomplete offers. */
+export function onCustomEmojiInvalidated(listener: () => void): () => void {
+  _invalidationListeners.add(listener);
+  return () => _invalidationListeners.delete(listener);
+}
+
+/**
+ * A pack was edited (#12): drop the cached packs so no picker shows the old
+ * ones, and tell the listeners. The per-room shortcode maps are kept until the
+ * next load replaces them, so a message sent meanwhile still resolves its
+ * custom emoji.
+ */
+export function invalidateCustomEmoji(): void {
+  _packCache.clear();
+  _version++;
+  for (const listener of _invalidationListeners) listener();
+}
+
 /** A displayable URL for a custom emoji's source, if one is known yet. */
 export function customEmojiImage(url: string): string | undefined {
   if (!url.startsWith("mxc://")) return url;
@@ -44,23 +83,58 @@ function withImages(packs: readonly CustomEmojiPack[]): CustomEmojiPack[] {
   }));
 }
 
-/** Reduce IPC packs to their emoticon entries, and record shortcode → mxc. */
-function toCustomPacks(raw: readonly EmojiPack[]): CustomEmojiPack[] {
-  const packs: CustomEmojiPack[] = [];
-  for (const pack of raw) {
+/**
+ * Each pack's emoticon entries, a shortcode kept only by the first pack that
+ * holds it. Fills `mxcByShortcode` with each kept entry that has an mxc:// URL,
+ * so the outgoing formatter can turn a typed or inserted `:shortcode:` into
+ * <img data-mx-emoticon>.
+ */
+function firstWins(raw: readonly EmojiPack[], mxcByShortcode: Map<string, string>): Array<[EmojiPack, CustomEmoji[]]> {
+  const seen = new Set<string>();
+  return raw.map((pack) => {
     const emojis = pack.emojis
-      .filter((e) => e.usage.includes("emoticon"))
+      .filter((e) => e.usage.includes("emoticon") && !seen.has(e.shortcode))
       .map((e) => ({ shortcode: e.shortcode, url: e.url, body: e.body }));
-    // Record the mxc for each shortcode so the outgoing formatter can turn a
-    // typed or inserted `:shortcode:` into <img data-mx-emoticon>.
     for (const e of emojis) {
-      if (e.url.startsWith("mxc://")) _shortcodeToMxc.set(e.shortcode, e.url);
+      seen.add(e.shortcode);
+      if (e.url.startsWith("mxc://")) mxcByShortcode.set(e.shortcode, e.url);
     }
-    if (emojis.length > 0) {
-      packs.push({ id: pack.pack_id, name: pack.display_name ?? pack.pack_id, emojis });
-    }
-  }
+    return [pack, emojis];
+  });
+}
+
+/**
+ * Reduce IPC packs to their emoticon entries, and make them the room's
+ * shortcode → mxc map.
+ *
+ * The packs arrive in the order a shortcode resolves (the room's own, its
+ * spaces, the personal pack, favorites — see emoji.rs `order_packs`), so the
+ * first pack holding a shortcode wins it and later ones lose that entry here
+ * (#12). A picker therefore never offers a `:shortcode:` that would send a
+ * different pack's image than the one shown; the losing image stays visible in
+ * its own pack's editor.
+ */
+function toCustomPacks(raw: readonly EmojiPack[], roomKey: string): CustomEmojiPack[] {
+  const mxcByShortcode = new Map<string, string>();
+  const packs = firstWins(raw, mxcByShortcode)
+    .filter(([, emojis]) => emojis.length > 0)
+    .map(([pack, emojis]) => ({ id: pack.pack_id, name: pack.display_name ?? pack.pack_id, emojis }));
+  _shortcodeToMxcByRoom.set(roomKey, mxcByShortcode);
   return packs;
+}
+
+/**
+ * Make the packs of `raw` that apply in every room — the personal pack, then
+ * favorites (a favorite may arrive as the room's or a space's own pack, marked
+ * favorited) — the map a room not loaded yet resolves through.
+ */
+function setEverywhere(raw: readonly EmojiPack[]): void {
+  const personal = raw.filter((p) => p.source === "user");
+  const favorites = raw.filter((p) => p.source !== "user" && p.favorited === true);
+  const map = new Map<string, string>();
+  firstWins([...personal, ...favorites], map);
+  _shortcodeToMxcEverywhere.clear();
+  for (const [code, mxc] of map) _shortcodeToMxcEverywhere.set(code, mxc);
 }
 
 /** The packs last loaded for a room, with resolved images, or none. */
@@ -79,14 +153,31 @@ export async function loadCustomEmoji(
   listener: CustomEmojiListener,
 ): Promise<CustomEmojiPack[]> {
   const key = roomId ?? "";
+  const seq = ++_loadSeq;
+  let finished!: () => void;
+  _latestLoad.set(key, { seq, done: new Promise<void>((r) => { finished = r; }) });
   listener.onPacks(cachedCustomEmoji(roomId));
-  let packs: CustomEmojiPack[];
   try {
-    packs = toCustomPacks(await getEmojiPacks(roomId ?? undefined));
+    const raw: EmojiPack[] = await getEmojiPacks(roomId ?? undefined);
+    // Every room's answer carries the personal pack and favorites; the newest
+    // answer of any room is the one to believe.
+    if (seq > _everywhereSeq) {
+      _everywhereSeq = seq;
+      setEverywhere(raw);
+    }
+    const latest = _latestLoad.get(key);
+    if (latest?.seq === seq) {
+      _packCache.set(key, toCustomPacks(raw, key));
+    } else if (latest) {
+      // Overtaken: the newer load has the say; report what it finds.
+      await latest.done;
+    }
   } catch {
     return _packCache.get(key) ?? [];
+  } finally {
+    finished();
   }
-  _packCache.set(key, packs);
+  const packs = _packCache.get(key) ?? [];
   listener.onPacks(withImages(packs));
   for (const pack of packs) {
     for (const e of pack.emojis) {
@@ -102,5 +193,8 @@ export async function loadCustomEmoji(
 /** Test seam: forget cached packs. */
 export function _resetCustomEmojiCache(): void {
   _packCache.clear();
+  _shortcodeToMxcByRoom.clear();
+  _shortcodeToMxcEverywhere.clear();
+  _everywhereSeq = 0;
   _resetEmojiThumbnailsInFlight();
 }

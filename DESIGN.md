@@ -1349,10 +1349,19 @@ what the action means.
 
 One tabbed dialog covers everything about a room: **Info** (read-only facts,
 mute, raw state, leave), **Settings** (name, topic, your name in this room,
-conversation type, access),
+conversation type, access), **Emoji** (the room's emoji/sticker packs — see
+[Pack management](#pack-management)),
 **Members** (invite, and kick/ban where your power level permits) and
 **Permissions** (power levels). `:info` and `:roomsettings` are two doors into
 it; on mobile it shows the tab list first, like the settings dialog.
+
+**Space settings** (`:spacesettings`) is the same dialog for a space — a space
+is a room — with the tabs **General** (name, topic, facts), **Children** and
+**Emoji**. Both are a `RoomTabsDialog` (`src/ui/room/RoomTabsDialog.ts`) over
+their own tab registry (`room/registry.ts`, `space/registry.ts`) using the
+`RoomTab` contract; space settings used to keep its own copy with its tabs
+hard-coded in three switchyards. In both, as in Settings, `Tab` moves to the
+next tab and `Shift+Tab` to the previous one (it used to be a second "next").
 
 It replaces a pair of dialogs that both stated name, topic, members, encryption
 and directness while only one could change any of it — and that kept mute, leave
@@ -1412,7 +1421,7 @@ Opened via `:settings` or the settings UI affordance. The dialog has eight tabs,
 | **Account** | Devices & Verification — see below |
 | **Media** | Image auto-load, max dimensions, cache-size limit |
 | **GIF** | Provider (Klipy / Giphy), API key, content rating |
-| **Emoji** | Shortcode autocomplete toggle, minimum-character threshold |
+| **Emoji** | Shortcode autocomplete toggle, minimum-character threshold; your own pack; favorite packs — see [Pack management](#pack-management) |
 | **Notifications** | Enable / preview / sender toggles, push controls, test notification |
 | **Themes** | Theme picker, custom themes (with the folder's path on desktop), import from a theme link |
 | **About** | App version, Quark on GitHub link, Updates section (desktop only — see below) |
@@ -1569,9 +1578,34 @@ Shows the running app version, a "Quark on GitHub" link (opens in the system bro
 Full compatibility with Cinny, FluffyChat, Nheko, and SchildiChat.
 
 **Pack sources:**
-- `im.ponies.room_emotes` — room state events (per-room packs)
-- `im.ponies.user_emotes` — account data (personal packs)
-- Packs distinguish emoji (`usage: ["emoticon"]`) from stickers (`usage: ["sticker"]`)
+- `im.ponies.room_emotes` — room state events, one pack per state key (`""` is
+  the default pack). A room's packs, **and the packs of every joined space
+  containing it** (directly or through subspaces, nearest first), are usable in
+  it — a space's packs are the space's emoji.
+- `im.ponies.user_emotes` — account data: the personal pack (one per account;
+  a non-standard `{ packs: {…} }` form is still read, and shown read-only)
+- `im.ponies.emote_rooms` — account data: favorite room packs, usable in every room
+- Packs distinguish emoji (`usage: ["emoticon"]`) from stickers (`usage:
+  ["sticker"]`); an image without `usage` inherits its pack's, a pack without
+  one is both
+
+**Which pack wins a shortcode:** `get_emoji_packs` returns packs in the order a
+shortcode resolves — the room's own, then its spaces nearest first, then the
+personal pack, then favorites (a favorite that is also the room's or a space's
+pack is listed there once, marked favorited). The first pack holding a
+shortcode wins it: the emoji picker, the reaction picker and `:shortcode`
+autocomplete list each shortcode **once**, the winner, so what is picked is what
+a typed `:shortcode:` sends; the losing image stays visible in its own pack's
+editor. (The sticker tab is not deduplicated — a sticker is sent by its exact
+URL.) The shortcode → mxc map the outgoing formatter reads is **per room**
+(`_shortcodeToMxcByRoom`), replaced on each load: it used to be app-wide and
+never cleared, so a space pack's emoji loaded in one room still became an image
+in rooms outside the space. A room whose packs have not loaded yet — a message
+sent right after switching to a room not opened before — resolves through
+`_shortcodeToMxcEverywhere` instead: only the packs that apply in every room
+(the personal pack, then favorites), as the newest load of any room found them.
+So the personal pack's `:mine:` never goes out as text, and a room or space
+pack still never resolves outside the rooms it applies to.
 
 **Sending custom emoji in messages:**
 - User types `:shortcode:` → autocomplete resolves from available packs; the
@@ -1597,11 +1631,66 @@ Full compatibility with Cinny, FluffyChat, Nheko, and SchildiChat.
 - Reply preview renders custom emoji images inline
 - `<mx-reply>` fallback contains `:shortcode:` text
 
-**Pack management UI:**
-- View available packs (room + personal)
-- Create/edit personal packs (set state on account data)
-- Create/edit room packs (if user has state event permissions)
-- Import packs from other rooms
+#### Pack management
+
+Packs are managed in three places, all with one editor (`src/ui/packs/PackEditor.ts`):
+
+| Where | What |
+|---|---|
+| Settings → Emoji | **Your pack** (the personal pack) and **Favorite packs** (each with where it lives — "not joined" for a room since left, whose pack keeps working from the state the store kept — and `[remove]`) |
+| Room dialog → Emoji | The room's packs |
+| Space settings → Emoji | The space's packs — usable in every room of the space |
+
+The editor shows a pack's images as a grid; picking one opens its fields:
+**shortcode** (rename), **use** (pack default / emoji / sticker / both) and
+**description** (alt text), with `[use as pack icon]` and `[delete]`. The header
+holds the pack's **name**, `[upload icon]`, its **default use**, **use in every
+room (favorite)** for a room/space pack, and `[delete pack]`. `[+ add images]`
+takes several files: each is uploaded (unencrypted — other clients fetch pack
+images by plain `mxc://` URL), then all go into the pack in one write, each
+under a shortcode derived from its filename and unique in the pack; failures
+are listed. A room's Emoji tab has a **new pack** field (Enter creates it,
+under a state key slugged from the name). Fields save themselves, as elsewhere
+in the settings dialogs — except that one: a new pack is a state event every
+member sees, so it is created on Enter only, never from a name left in the
+field when focus moves or the dialog closes (`commitOnBlur: false`). Once a grid cell has focus, arrows / `hjkl` move and
+`x` / `Delete` delete after a confirmation; reaching the grid is by click/tap,
+as for every settings field (in-tab keyboard movement is #156).
+
+Without the power level to send `im.ponies.room_emotes` the room's packs are
+shown read-only — a control the homeserver would refuse is worse than none —
+but can still be favorited, which needs no room power. Deleting a pack writes
+`{}` (state can't be removed) and drops it from favorites. The delete has
+succeeded once `{}` is written: a favorite that then can't be dropped is logged
+and stays listed in Settings → Emoji to remove, rather than failing a delete
+that already happened (the tab would keep showing the pack). A favorites entry
+that isn't an object of state keys (`"!room": true`, another client's doing)
+is read as the room's default pack (`""`) everywhere — listed, shown as
+favorited, and removed by `[remove]` — through one helper,
+`favorite_state_keys`.
+
+Shortcodes Quark creates or accepts on rename are `[A-Za-z0-9_+-]+`, the
+characters the outgoing formatter recognises in `:shortcode:`; packs from other
+clients may hold others, which are shown but can't be typed.
+
+**Every edit is its own backend operation** (`src-tauri/src/matrix/packs.rs`,
+thirteen commands): read the pack **from the server** (not the local store),
+apply that one change to the raw JSON with a pure function, write it back —
+under a per-pack lock, so two quick edits can't both start from the state
+before either. The pack an edit returns is built before that lock is released,
+its favorite flag taken from the store rather than asked for (an edit never
+changes it, and the editor keeps its own); the editor draws an edit's answer
+only if no later edit's answer has been drawn. An edit used to fetch the
+favorites after releasing the lock, so a slow answer could land after the next
+edit's and draw the pack as it was between the two — a rename undone on screen. Patching raw JSON keeps every field Quark doesn't model
+(`info`, `attribution`, other clients' extensions); the fresh read keeps an
+edit from overwriting a change another client, or another room admin, made
+while the dialog was open. A room-pack write reaches the store only when sync
+echoes it, so the write is remembered for up to two minutes and preferred over
+the store until the store agrees (the same remedy as space-child ordering) —
+otherwise a second edit right after the first would show the first undone,
+and the pickers would lag. After any edit the pickers' cached packs are
+dropped (`invalidateCustomEmoji`) and autocomplete reloads.
 
 ### GIF Search
 

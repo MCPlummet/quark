@@ -89,7 +89,12 @@ import type { ParsedRc } from "../ipc/types.js";
 import { getAppConfig, setAppConfig } from "../ipc/app_config.js";
 import type { KeyContext } from "../vim/keybindings.js";
 import { BUILTIN_EMOJI } from "../data/unicode-emoji.js";
-import { loadCustomEmoji, customEmojiImage } from "./actions/custom_emoji.js";
+import {
+  loadCustomEmoji,
+  customEmojiImage,
+  customEmojiVersion,
+  onCustomEmojiInvalidated,
+} from "./actions/custom_emoji.js";
 import type { CustomEmojiPack } from "../ui/emoji_catalog.js";
 import { findLoadedEvent } from "./actions/threads.js";
 import { onMobileChange, isMobile } from "./mobile.js";
@@ -467,6 +472,7 @@ export function dispatchAction(action: string, components: AppComponents): void 
 /** The current room's custom emoji packs, from the shared loader. */
 let _customPacks: CustomEmojiPack[] = [];
 let _customEmojiRoomId: string | null = null;
+let _customEmojiVersion = -1;
 
 /**
  * Refresh the custom emoji when the room changes. The shared loader also
@@ -476,8 +482,10 @@ let _customEmojiRoomId: string | null = null;
  */
 async function refreshCustomEmoji(): Promise<void> {
   const roomId = AppState.get("currentRoomId");
-  if (roomId === _customEmojiRoomId) return;
+  // Reload on a room change, and after a pack was edited (#12).
+  if (roomId === _customEmojiRoomId && _customEmojiVersion === customEmojiVersion()) return;
   _customEmojiRoomId = roomId;
+  _customEmojiVersion = customEmojiVersion();
   _customPacks = [];
   await loadCustomEmoji(roomId, {
     onPacks: (packs) => {
@@ -1583,6 +1591,8 @@ export function setupKeyboard(components: AppComponents): void {
     void refreshCustomEmoji();
     void refreshRoomMembers();
   });
+  // …and the custom emoji when a pack is edited (#12).
+  onCustomEmojiInvalidated(() => void refreshCustomEmoji());
 
   // ── quark:action events from UI components ───────────────────────────────
   // Components that can't import actions.ts dispatch quark:action custom events.

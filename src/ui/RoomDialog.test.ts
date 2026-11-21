@@ -107,7 +107,7 @@ afterEach(() => {
 describe("RoomDialog", () => {
   it("collapses room info and settings into one tabbed dialog (#92)", () => {
     d.show();
-    expect(tabLabels(d)).toEqual(["Info", "Settings", "Members", "Permissions"]);
+    expect(tabLabels(d)).toEqual(["Info", "Settings", "Emoji", "Members", "Permissions"]);
   });
 
   // `:info` and `:roomsettings` are now two doors into the same dialog.

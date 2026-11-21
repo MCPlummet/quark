@@ -5168,6 +5168,269 @@ body.quark-mobile .settings-dialog__field-status {
   background: color-mix(in srgb, var(--accent-error) 15%, transparent);
 }
 
+/* ── Prompt dialogs — ConfirmDialog, PasswordPromptDialog ──────────────────
+   Opened from inside other dialogs (Settings → Account, a room's Emoji tab,
+   the room dialog's [leave]), so they stack above every dialog (≤ 320 here) —
+   and below context menus (10000) and toasts (10500). They shipped with no
+   styles at all (#23): unpositioned, they rendered in the page flow under the
+   app, behind the dialog that opened them. dialog_styles.test.ts now holds
+   every dialog to a positioned rule. */
+
+.confirm-dialog,
+.password-prompt-dialog {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--overlay-bg);
+  z-index: 1000;
+  animation: gif-picker-fade-in 0.1s ease;
+}
+
+.confirm-dialog__panel,
+.password-prompt-dialog__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 80px);
+  background-color: var(--bg);
+  border: var(--border-width) solid var(--accent-primary);
+  box-shadow: 0 8px 32px var(--shadow-color), 0 0 0 1px var(--border-color);
+  overflow: auto;
+  outline: none;
+}
+
+.confirm-dialog__header,
+.password-prompt-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: var(--border-width) solid var(--border-color);
+  flex-shrink: 0;
+  background-color: var(--surface-subtle);
+}
+
+.confirm-dialog__title,
+.password-prompt-dialog__title {
+  color: var(--accent-primary);
+  font-size: calc(var(--font-size) - 1px);
+  font-weight: bold;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.confirm-dialog__close-hint,
+.password-prompt-dialog__close-hint {
+  color: var(--msg-timestamp);
+  font-size: calc(var(--font-size) - 2px);
+  opacity: 0.5;
+}
+
+.confirm-dialog__body,
+.password-prompt-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.confirm-dialog__message,
+.password-prompt-dialog__message {
+  margin: 0;
+  color: var(--fg);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.password-prompt-dialog__input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: var(--border-width) solid var(--border-color);
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: calc(var(--font-size) - 1px);
+  padding: 4px 6px;
+  outline: none;
+}
+
+.password-prompt-dialog__input:focus {
+  border-color: var(--accent-primary);
+}
+
+.confirm-dialog__actions,
+.password-prompt-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.confirm-dialog__actions button,
+.password-prompt-dialog__actions button {
+  background: transparent;
+  border: var(--border-width) solid var(--accent-primary);
+  color: var(--accent-primary);
+  font-family: var(--font-mono);
+  font-size: calc(var(--font-size) - 1px);
+  cursor: pointer;
+  padding: 2px 10px;
+  outline: none;
+  letter-spacing: 0.04em;
+}
+
+.confirm-dialog__actions button:hover,
+.confirm-dialog__actions button:focus,
+.password-prompt-dialog__actions button:hover,
+.password-prompt-dialog__actions button:focus {
+  background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+}
+
+.confirm-dialog__actions button.danger {
+  border-color: var(--accent-error);
+  color: var(--accent-error);
+}
+
+.confirm-dialog__actions button.danger:hover,
+.confirm-dialog__actions button.danger:focus {
+  background: color-mix(in srgb, var(--accent-error) 15%, transparent);
+}
+
+.confirm-dialog__actions button[data-act="cancel"],
+.password-prompt-dialog__actions button[data-act="cancel"] {
+  border-color: var(--border-color);
+  color: var(--fg);
+}
+
+/* ── Emoji/sticker pack editor (#12) — src/ui/packs/PackEditor.ts ─────────── */
+
+.pack-editor {
+  border: var(--border-width) solid var(--border-color);
+  padding: 8px 10px;
+  margin: 8px 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pack-editor__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pack-editor__icon {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.pack-editor__title {
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.pack-editor__pack-actions,
+.pack-editor__image-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+
+.pack-editor__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 4px;
+  align-items: stretch;
+}
+
+.pack-editor__cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 2px;
+  background: transparent;
+  border: var(--border-width) solid transparent;
+  border-radius: 4px;
+  color: var(--roomlist-muted);
+  font-family: var(--font-mono);
+  font-size: calc(var(--font-size) - 3px);
+  cursor: pointer;
+  outline: none;
+}
+
+.pack-editor__cell:hover,
+.pack-editor__cell:focus {
+  background-color: var(--surface-hover-active);
+}
+
+.pack-editor__cell--selected {
+  border-color: var(--accent-primary);
+}
+
+.pack-editor__img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
+.pack-editor__img--pending {
+  background-color: var(--surface-subtle);
+}
+
+.pack-editor__code {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pack-editor__add {
+  align-self: center;
+  justify-self: start;
+}
+
+.pack-editor__empty {
+  grid-column: 1 / -1;
+}
+
+.pack-editor__detail {
+  border-top: var(--border-width) dashed var(--border-color);
+  padding-top: 6px;
+}
+
+.pack-editor__detail-title {
+  margin-top: 0;
+}
+
+/* Settings → Emoji → Favorite packs (#12) — src/ui/packs/favorites.ts */
+.favorite-packs__row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.favorite-packs__icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.favorite-packs__where {
+  font-size: calc(var(--font-size) - 2px);
+}
+
+.favorite-packs__remove {
+  margin-left: auto;
+}
+
 .settings-dialog__theme-btn {
   background: transparent;
   border: none;

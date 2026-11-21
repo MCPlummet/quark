@@ -22,7 +22,7 @@ Quark is a [Matrix](https://matrix.org) chat client that looks like a terminal b
 - **Theming** — TOML themes with 11 built-ins, switchable live via `:theme` or Settings.
 - **Vim everything** — Normal / Insert / Command / Visual modes; every binding is remappable via a vimrc-style `quarkrc`.
 
-**Currently password login only.** OIDC (via MAS) and SSO are planned. Other in-progress items — theme filesystem hot-reload, key backup (SSSS), emoji/sticker pack management UI, and mobile (iOS/Android) builds — are tracked in [DESIGN.md](DESIGN.md).
+**Currently password login only.** OIDC (via MAS) and SSO are planned. Other in-progress items — theme filesystem hot-reload, key backup (SSSS), and mobile (iOS/Android) builds — are tracked in [DESIGN.md](DESIGN.md).
 
 ---
 

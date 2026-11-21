@@ -40,6 +40,18 @@ describe("commitTextRow", () => {
     await vi.waitFor(() => expect(save).toHaveBeenCalledWith("new"));
   });
 
+  it("with commitOnBlur off, saves on Enter only", async () => {
+    const create = vi.fn(async () => {});
+    const only = commitTextRow({ label: "new", value: "", placeholder: "", save: create, commitOnBlur: false });
+    host.appendChild(only.row);
+    type(only.control, "Blobs");
+    only.control.dispatchEvent(new FocusEvent("blur"));
+    await Promise.resolve();
+    expect(create).not.toHaveBeenCalled();
+    key(only.control, "Enter");
+    await vi.waitFor(() => expect(create).toHaveBeenCalledExactlyOnceWith("Blobs"));
+  });
+
   it("doesn't save an unchanged value", () => {
     key(field.control, "Enter");
     field.control.dispatchEvent(new FocusEvent("blur"));
