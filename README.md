@@ -232,7 +232,7 @@ quark/
 
 ## Building & releases
 
-Multi-platform bundles are produced by [GitHub Actions](.github/workflows/release.yml) on tagged (`v*`) releases: Linux (`.deb` / `.AppImage` / `.rpm`), Flatpak, Windows (`.exe` / `.msi`), macOS (`.dmg`), and Android (`.apk`). A Flatpak manifest lives under [flatpak/](flatpak/) (app ID `tel.quark.app`).
+Multi-platform bundles are produced by [GitHub Actions](.github/workflows/release.yml) on tagged (`v*`) releases: Linux (`.deb` / `.AppImage` / `.rpm`), Flatpak, Windows (`.exe` / `.msi`), macOS (`.dmg`), and Android (`.apk`, 64-bit ARM only). A Flatpak manifest lives under [flatpak/](flatpak/) (app ID `tel.quark.app`). Each Android release is also published to Quark's own F-Droid repository, `https://quark.tel/fdroid/repo`: add it in the F-Droid app and updates arrive there. The [Android card on quark.tel](https://quark.tel/#android) has a one-tap link and the repo fingerprint to check it against.
 
 Mobile (iOS and Android, via Tauri v2) is **experimental and in progress** — see the mobile sections of [DESIGN.md](DESIGN.md).
 
