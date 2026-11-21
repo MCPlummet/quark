@@ -57,7 +57,7 @@
         <span class="btn-arrow">★</span> Star on GitHub
       </a>
     </div>
-    <p class="meta reveal d3"><span id="hero-version">v0.15.2</span>&ensp;·&ensp;AGPL-3.0&ensp;·&ensp;Linux&ensp;·&ensp;macOS&ensp;·&ensp;Windows</p>
+    <p class="meta reveal d3"><span id="hero-version">v0.15.2</span>&ensp;·&ensp;AGPL-3.0&ensp;·&ensp;Linux&ensp;·&ensp;macOS&ensp;·&ensp;Windows&ensp;·&ensp;Android&nbsp;(experimental)</p>
 
     <!-- Live demo: the REAL frontend built in ?debug mock mode (docs/demo),
          lazy-loaded on click so the page stays light. main.js injects the
@@ -126,7 +126,7 @@
   <!-- ───────────── DOWNLOAD ───────────── -->
   <section class="section" id="download">
     <h2 class="marker"><span class="c">:</span>download</h2>
-    <p class="dl-lede">Pre-release <span class="kbd" id="dl-version">v0.15.2</span>. Grab an installer from GitHub Releases, or build it yourself.</p>
+    <p class="dl-lede">Pre-release <span class="kbd" id="dl-version">v0.15.2</span>. Grab an installer from GitHub Releases, add the F-Droid repo on Android, or build it yourself.</p>
     <div class="grid dl-grid">
       <a class="dl" href="https://github.com/MCPlummet/quark/releases/latest" rel="noopener">
         <span class="dl-os">Linux</span><span class="dl-fmt">.deb · .rpm · Flatpak</span><span class="dl-go">releases ↗</span>
@@ -140,6 +140,17 @@
       <a class="dl" href="https://github.com/MCPlummet/quark#getting-started" rel="noopener">
         <span class="dl-os">From source</span><span class="dl-fmt">Rust + pnpm, or the Nix flake</span><span class="dl-go">how-to ↗</span>
       </a>
+      <!-- Spans the whole row so the four cards above keep full rows at every width. -->
+      <div class="dl dl-wide" id="android">
+        <span class="dl-os">Android <span class="dl-tag">experimental</span></span>
+        <span class="dl-fmt">.apk for 64-bit ARM (arm64-v8a) only. Quark's own F-Droid repository: add it once and updates arrive through the F-Droid app.</span>
+        <span class="dl-links">
+          <a class="dl-go" href="https://fdroid.link/#https://quark.tel/fdroid/repo?fingerprint=4BE916DC6D4B4112E15FE8D11326E69E29F6D20ADFC64D81F2300D7F460128FE" rel="noopener">add to F-Droid ↗</a>
+          <a class="dl-go" href="fdroid/repo/">repo page &amp; QR code</a>
+          <a class="dl-go" href="https://github.com/MCPlummet/quark/releases/latest" rel="noopener">.apk on releases ↗</a>
+        </span>
+        <span class="dl-fp">repo <code>https://quark.tel/fdroid/repo</code> · fingerprint <code>4BE916DC6D4B4112E15FE8D11326E69E29F6D20ADFC64D81F2300D7F460128FE</code></span>
+      </div>
     </div>
   </section>
 </main>

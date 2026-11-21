@@ -31,11 +31,13 @@
   --glow:0 0 18px rgba(0,255,65,.45), 0 0 42px rgba(0,255,65,.18);
   --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
   --maxw:1060px;
+  --topbar-h:60px;
   --ease:cubic-bezier(.2,.7,.2,1);
 }
 
 *,*::before,*::after{box-sizing:border-box}
-html{scroll-behavior:smooth}
+/* In-page jumps (#features, #download, the hero's #android) land below the sticky top bar, not under it. */
+html{scroll-behavior:smooth;scroll-padding-top:var(--topbar-h)}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 
 body{
@@ -82,7 +84,7 @@ a:hover{color:var(--green)}
 .topbar{
   position:sticky;top:0;z-index:100;
   display:flex;align-items:center;justify-content:space-between;
-  height:60px;max-width:var(--maxw);margin:0 auto;
+  height:var(--topbar-h);max-width:var(--maxw);margin:0 auto;
 }
 .topbar::before{
   content:"";position:absolute;inset:0;z-index:-1;
@@ -228,6 +230,17 @@ h1 .glow{color:var(--green);text-shadow:var(--glow)}
 .dl-fmt{font-size:.8rem;color:var(--ink-2)}
 .dl-go{margin-top:.5rem;font-size:.78rem;color:var(--green-soft);font-weight:700}
 .dl:hover .dl-go{color:var(--green)}
+/* Android: a full-width card holding several links, so the card itself is not one. */
+.dl-wide{grid-column:1/-1}
+.dl-wide:hover{background:var(--panel)}
+.dl-wide:hover .dl-go{color:var(--green-soft)}
+.dl-wide .dl-go:hover{color:var(--green)}
+.dl-tag{margin-left:.4rem;font-size:.7rem;font-weight:700;color:var(--dim);vertical-align:middle}
+.dl-links{display:flex;flex-wrap:wrap;gap:.2rem 1.4rem;margin-top:.5rem}
+/* The row carries the .5rem above it; a per-link margin would add to the row gap when the links wrap. */
+.dl-links .dl-go{margin-top:0}
+.dl-fp{margin-top:.4rem;font-size:.72rem;color:var(--dim);line-height:1.6;overflow-wrap:anywhere}
+.dl-fp code{font-family:inherit;color:var(--ink-2)}
 
 /* ---------- footer ---------- */
 .footer{max-width:var(--maxw);margin:0 auto;padding-block:2.4rem 3rem;border-top:1px solid var(--border-2)}

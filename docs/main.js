@@ -1,5 +1,7 @@
 /* Landing-page progressive enhancement. Three independent pieces:
-   1. Relabel the download button for the visitor's OS.
+   1. Relabel the download button for the visitor's OS (on Android, point it
+      at the F-Droid card instead of GitHub Releases; on iOS, which has no
+      build to offer, say so and point it at the download section).
    2. Show the latest released version, fetched from the update feed.
    3. Lazy-launch the live demo (the real frontend in ?debug mock mode).
    All degrade gracefully with JS off: the download button points at the
@@ -26,8 +28,15 @@
     }
 
     var os = detectOS();
-    if (os === "iOS" || os === "Android") {
-      label.textContent = "Get Quark (mobile is experimental)";
+    var btn = document.getElementById("download-btn");
+    if (os === "Android") {
+      // Android installs come through the F-Droid repo, not a release asset.
+      label.textContent = "Get Quark for Android (experimental)";
+      if (btn) btn.setAttribute("href", "#android");
+    } else if (os === "iOS") {
+      // GitHub Releases carries no iOS build, so don't send iOS visitors there.
+      label.textContent = "No iOS build yet";
+      if (btn) btn.setAttribute("href", "#download");
     } else if (os) {
       label.textContent = "Download for " + os;
     }
