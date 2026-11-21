@@ -411,7 +411,13 @@ export class PackEditor {
   }
 
   private _renderGrid(): void {
-    const focusedCode = (document.activeElement as HTMLElement | null)?.dataset?.shortcode ?? null;
+    // Keep focus on the cell it was on — this grid's cell only: another
+    // editor in the tab may hold a cell with the same shortcode, and moving
+    // focus there would aim the next `x` at the wrong pack.
+    const active = document.activeElement;
+    const focusedCode = active instanceof HTMLElement && this._gridEl.contains(active)
+      ? (active.dataset.shortcode ?? null)
+      : null;
     this._gridEl.replaceChildren();
     for (const image of this._pack.images) {
       this._gridEl.appendChild(this._cell(image));

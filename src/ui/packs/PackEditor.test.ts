@@ -265,6 +265,36 @@ describe("PackEditor", () => {
     expect(cells(el).map((c) => c.dataset.shortcode)).toEqual(["blobcat"]);
   });
 
+  // Review fix: a redraw put focus back on any cell whose shortcode matched
+  // the focused element, even one in another pack's editor.
+  it("leaves focus in another editor alone when it redraws", async () => {
+    ipc.setPackImageBody.mockResolvedValue(pack());
+    const el = mount();
+    const other = new PackEditor({ location: { kind: "room", room_id: "!r:x", state_key: "other" }, pack: pack({ state_key: "other" }), canEdit: true, favoritable: true });
+    document.body.appendChild(other.getElement());
+    cell(el, "blobwave").click();
+    const desc = detailInput(el, "Description");
+    desc.value = "a wave";
+    desc.dispatchEvent(new Event("input"));
+    desc.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const theirs = cell(other.getElement(), "blobwave");
+    theirs.focus();
+    await flush();
+    expect(ipc.setPackImageBody).toHaveBeenCalled();
+    expect(document.activeElement).toBe(theirs);
+  });
+
+  it("keeps focus on its own cell when it redraws", async () => {
+    ipc.removePackImage.mockResolvedValue(pack());
+    const el = mount();
+    const target = cell(el, "blobcat");
+    target.focus();
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    await flush();
+    await flush();
+    expect(document.activeElement).toBe(cell(el, "blobcat"));
+  });
+
   it("deletes nothing when the confirmation is declined", async () => {
     askConfirm.mockResolvedValue(false);
     const el = mount();
