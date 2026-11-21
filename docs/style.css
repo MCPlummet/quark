@@ -228,6 +228,15 @@ h1 .glow{color:var(--green);text-shadow:var(--glow)}
 .dl-fmt{font-size:.8rem;color:var(--ink-2)}
 .dl-go{margin-top:.5rem;font-size:.78rem;color:var(--green-soft);font-weight:700}
 .dl:hover .dl-go{color:var(--green)}
+/* Android: a full-width card holding several links, so the card itself is not one. */
+.dl-wide{grid-column:1/-1}
+.dl-wide:hover{background:var(--panel)}
+.dl-wide:hover .dl-go{color:var(--green-soft)}
+.dl-wide .dl-go:hover{color:var(--green)}
+.dl-tag{margin-left:.4rem;font-size:.7rem;font-weight:700;color:var(--dim);vertical-align:middle}
+.dl-links{display:flex;flex-wrap:wrap;gap:.2rem 1.4rem}
+.dl-fp{margin-top:.4rem;font-size:.72rem;color:var(--dim);line-height:1.6;overflow-wrap:anywhere}
+.dl-fp code{font-family:inherit;color:var(--ink-2)}
 
 /* ---------- footer ---------- */
 .footer{max-width:var(--maxw);margin:0 auto;padding-block:2.4rem 3rem;border-top:1px solid var(--border-2)}
