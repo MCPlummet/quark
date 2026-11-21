@@ -318,6 +318,7 @@ export class ComposeNormalEditor {
     }
 
     // Past this point a dangling operator is abandoned (vim cancels d<x>).
+    const cancelledOperator = this.operator !== null;
     this.reset();
 
     switch (key) {
@@ -373,7 +374,9 @@ export class ComposeNormalEditor {
       case "P": this.paste(field, pos, false); return CONSUMED;
       case "r": this.pendingReplace = true; return CONSUMED;
       case "u":
-        this.reset();
+        // `du` / `cu` / `yu` is not an undo: vim cancels the operator and
+        // does nothing else.
+        if (cancelledOperator) return CONSUMED;
         return { consumed: true, history: "undo", times: count };
       default:
         // Leave v / : / clipboard etc. to the existing text-select handler.

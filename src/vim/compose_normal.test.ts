@@ -112,6 +112,17 @@ describe("ComposeNormalEditor", () => {
     expect(field.value).toBe("hello");
   });
 
+  // Review fix: a pending operator was dropped and the undo ran anyway.
+  it.each(["d", "c", "y"])("%su cancels the operator and does not undo", (op) => {
+    place("hello", 2);
+    ed.handleKey(op, field);
+    expect(ed.handleKey("u", field)).toEqual({ consumed: true });
+    expect(ed.hasPending).toBe(false);
+    expect(field.value).toBe("hello");
+    // …and the next u is an undo again.
+    expect(ed.handleKey("u", field)).toEqual({ consumed: true, history: "undo", times: 1 });
+  });
+
   it("a count before u undoes that many times", () => {
     place("hello", 0);
     ed.handleKey("3", field);
