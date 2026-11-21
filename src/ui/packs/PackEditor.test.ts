@@ -165,8 +165,8 @@ describe("PackEditor", () => {
     await flush();
     expect(cells(el).map((c) => c.dataset.shortcode)).toEqual(["blobcat", "wave"]);
     expect(detailInput(el, "Shortcode").value).toBe("wave");
-    const headerStatus = [...el.querySelectorAll(".pack-editor__header > .settings-dialog__field-status")].at(-1);
-    expect(headerStatus?.textContent).toBe("icon set");
+    const headerStatus = [...el.querySelectorAll(".pack-editor__header > .settings-dialog__field-status")];
+    expect(headerStatus[headerStatus.length - 1]?.textContent).toBe("icon set");
   });
 
   it("keeps a favorite just toggled over an edit's answer that predates it", async () => {
