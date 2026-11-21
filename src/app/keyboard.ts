@@ -649,8 +649,7 @@ function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents)
     composeEditor.reset();
     if (chord === "undo") components.input.undo();
     else components.input.redo();
-    composeEditor.settle(field);
-    return true;
+    return true; // the block cursor is re-settled by onHistoryApplied
   }
 
   // Other modifier combos (clipboard, Ctrl+K palette, …) and bare modifier
@@ -668,7 +667,6 @@ function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents)
     for (let i = 0; i < (res.times ?? 1); i++) {
       if (!components.input.undo()) break;
     }
-    composeEditor.settle(field);
   } else if (res.exitUp) {
     // `k` on the first line: leave the compose box upward into the timeline.
     // Falls back to staying put (and re-priming the block) when there's no
@@ -1347,6 +1345,16 @@ export function setupKeyboard(components: AppComponents): void {
   // Track activePanel when focus lands on the space strip
   components.spaceStrip.getElement().addEventListener("quark:space-focused", () => {
     AppState.set("activePanel", "spaces");
+  });
+
+  // However an undo or redo reached the compose box (#117) — chord, `u`,
+  // `:undo`, or the platform's own undo command — in compose Normal the text
+  // may have changed under the block cursor: bring it back onto a character,
+  // and drop any half-typed operator, as vim does.
+  input.onHistoryApplied(() => {
+    if (AppState.get("textSelectMode") !== "compose" || modeManager.current !== Mode.Normal) return;
+    composeEditor.reset();
+    composeEditor.settle(input.getFieldElement());
   });
 
   // Clicking the input field while not in Insert mode switches to Insert mode

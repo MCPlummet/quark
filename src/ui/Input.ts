@@ -212,6 +212,7 @@ export class Input {
   private _collapsedBefore = true;
   /** Where the IME composition in progress started, if one is. */
   private _compositionStart: CompositionStart | null = null;
+  private _onHistoryApplied: (() => void) | null = null;
 
   constructor() {
     this._el = document.createElement("div");
@@ -830,6 +831,17 @@ export class Input {
     } finally {
       this._applyingHistory = false;
     }
+    this._onHistoryApplied?.();
+  }
+
+  /**
+   * Register what runs once an undo or redo has rewritten the field, whichever
+   * route asked for it — a chord, `u`, `:undo`, or the platform's own undo
+   * command (macOS Edit menu, iOS shake), which arrives here through
+   * `beforeinput` without passing the key handlers at all.
+   */
+  onHistoryApplied(handler: () => void): void {
+    this._onHistoryApplied = handler;
   }
 
   /**

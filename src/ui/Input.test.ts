@@ -294,6 +294,22 @@ describe("Input", () => {
       expect(input.getValue()).toBe("");
     });
 
+    it("reports every undo and redo, by whatever route, to onHistoryApplied", () => {
+      const applied = vi.fn();
+      input.onHistoryApplied(applied);
+      typeChars("ab cd");
+      input.undo();
+      input.redo();
+      input.getFieldElement().dispatchEvent(
+        new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true }),
+      );
+      expect(applied).toHaveBeenCalledTimes(3);
+      // Nothing applied, nothing reported.
+      input.undo();
+      expect(input.undo()).toBe(false);
+      expect(applied).toHaveBeenCalledTimes(4);
+    });
+
     it("tells input listeners about an undo without recording it as a new change", () => {
       typeChars("abc");
       const seen: string[] = [];
