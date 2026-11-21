@@ -240,25 +240,46 @@ pub fn set_meta(pack: &Value, patch: &MetaPatch) -> Value {
     Value::Object(pack)
 }
 
+/// The state keys a room's entry in `im.ponies.emote_rooms` favorites.
+///
+/// MSC2545 makes the entry an object keyed by state key. An entry that isn't
+/// one (`true`, `null` — another client's doing) has always been read as the
+/// room's default pack, `""`. Listing, `is_favorite` and `set_favorite` all go
+/// through here, so such a favorite is shown, recognised and removable alike:
+/// it used to be listed but not recognised, so [remove] wrote nothing and the
+/// row came back.
+pub fn favorite_state_keys(entry: &Value) -> Vec<String> {
+    match entry.as_object() {
+        Some(keys) => keys.keys().cloned().collect(),
+        None => vec![String::new()],
+    }
+}
+
 /// Add or remove one room pack in `im.ponies.emote_rooms` content. A room left
-/// with no packs is removed from the map.
+/// with no packs is removed from the map. Content that already says so is
+/// returned unchanged.
 pub fn set_favorite(emote_rooms: &Value, room_id: &str, state_key: &str, favorite: bool) -> Value {
+    if is_favorite(emote_rooms, room_id, state_key) == favorite {
+        return emote_rooms.clone();
+    }
     let mut content = as_object(emote_rooms);
     let rooms = content.entry("rooms").or_insert_with(|| Value::Object(Map::new()));
     if !rooms.is_object() {
         *rooms = Value::Object(Map::new());
     }
     let rooms = rooms.as_object_mut().expect("just made an object");
+    // An entry that isn't an object stands for the packs `favorite_state_keys`
+    // reads in it; spell those out before changing them.
+    let keys = rooms.entry(room_id).or_insert_with(|| Value::Object(Map::new()));
+    if !keys.is_object() {
+        *keys = Value::Object(
+            favorite_state_keys(keys).into_iter().map(|k| (k, Value::Object(Map::new()))).collect(),
+        );
+    }
+    let keys = keys.as_object_mut().expect("just made an object");
     if favorite {
-        let keys = rooms.entry(room_id).or_insert_with(|| Value::Object(Map::new()));
-        if !keys.is_object() {
-            *keys = Value::Object(Map::new());
-        }
-        keys.as_object_mut()
-            .expect("just made an object")
-            .entry(state_key)
-            .or_insert_with(|| Value::Object(Map::new()));
-    } else if let Some(keys) = rooms.get_mut(room_id).and_then(Value::as_object_mut) {
+        keys.entry(state_key).or_insert_with(|| Value::Object(Map::new()));
+    } else {
         keys.remove(state_key);
         if keys.is_empty() {
             rooms.remove(room_id);
@@ -272,8 +293,7 @@ pub fn is_favorite(emote_rooms: &Value, room_id: &str, state_key: &str) -> bool 
     emote_rooms
         .get("rooms")
         .and_then(|r| r.get(room_id))
-        .and_then(Value::as_object)
-        .is_some_and(|keys| keys.contains_key(state_key))
+        .is_some_and(|entry| favorite_state_keys(entry).iter().any(|k| k == state_key))
 }
 
 /// A deleted room pack: state can't be removed, so deleting writes `{}`.
@@ -724,11 +744,7 @@ pub async fn get_favorite_packs(client: &Client) -> Result<Vec<FavoritePack>, St
             None => Vec::new(),
         };
         let room_name = room.as_ref().and_then(|r| r.name().or_else(|| r.canonical_alias().map(|a| a.to_string())));
-        let state_keys: Vec<String> = keys
-            .as_object()
-            .map(|o| o.keys().cloned().collect())
-            .unwrap_or_else(|| vec![String::new()]);
-        for state_key in state_keys {
+        for state_key in favorite_state_keys(keys) {
             let content = stored.iter().find(|(k, _)| *k == state_key).map(|(_, c)| c);
             let view = content.map(|c| to_editable(c, Some(room_id), Some(&state_key), true));
             out.push(FavoritePack {
@@ -1001,6 +1017,34 @@ mod tests {
         assert!(!is_favorite(&removed, "!r:x", "blobs"));
         assert!(removed["rooms"].get("!r:x").is_none(), "an emptied room entry goes");
         assert!(is_favorite(&removed, "!other:x", ""));
+    }
+
+    // Review fix: an entry that isn't an object was listed as the default
+    // pack but not recognised as a favorite, so removing it wrote nothing.
+    #[test]
+    fn a_favorite_entry_that_is_not_an_object_is_the_default_pack_throughout() {
+        for entry in [json!(true), Value::Null, json!(1)] {
+            let content = json!({ "rooms": { "!r:x": entry.clone(), "!other:x": { "": {} } } });
+            assert_eq!(favorite_state_keys(&entry), vec![String::new()]);
+            assert!(is_favorite(&content, "!r:x", ""), "{entry}");
+            assert!(!is_favorite(&content, "!r:x", "blobs"), "{entry}");
+
+            let removed = set_favorite(&content, "!r:x", "", false);
+            assert!(!is_favorite(&removed, "!r:x", ""), "{entry}");
+            assert!(removed["rooms"].get("!r:x").is_none(), "{entry}");
+            assert!(is_favorite(&removed, "!other:x", ""), "{entry}");
+
+            let added = set_favorite(&content, "!r:x", "blobs", true);
+            assert!(is_favorite(&added, "!r:x", "blobs"), "{entry}");
+            assert!(is_favorite(&added, "!r:x", ""), "the default pack stays a favorite: {entry}");
+        }
+    }
+
+    #[test]
+    fn set_favorite_leaves_content_that_already_says_so_alone() {
+        let content = json!({ "rooms": { "!r:x": true }, "x.other": 1 });
+        assert_eq!(set_favorite(&content, "!r:x", "blobs", false), content);
+        assert_eq!(set_favorite(&content, "!r:x", "", true), content);
     }
 
     #[test]

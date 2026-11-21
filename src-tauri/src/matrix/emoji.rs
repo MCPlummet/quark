@@ -260,10 +260,7 @@ pub async fn get_emoji_packs(
             let Some(room) = RoomId::parse(fav_rid.as_str()).ok().and_then(|id| client.get_room(&id)) else {
                 continue;
             };
-            let wanted: Vec<String> = keys
-                .as_object()
-                .map(|o| o.keys().cloned().collect())
-                .unwrap_or_else(|| vec![String::new()]);
+            let wanted = packs::favorite_state_keys(keys);
             for mut pack in packs_of_room(&room, "favorite", &favorites).await {
                 if pack.state_key.as_deref().is_some_and(|k| wanted.iter().any(|w| w == k)) {
                     pack.favorited = true;

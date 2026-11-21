@@ -1612,7 +1612,11 @@ as for every settings field (in-tab keyboard movement is #156).
 Without the power level to send `im.ponies.room_emotes` the room's packs are
 shown read-only — a control the homeserver would refuse is worse than none —
 but can still be favorited, which needs no room power. Deleting a pack writes
-`{}` (state can't be removed) and drops it from favorites.
+`{}` (state can't be removed) and drops it from favorites. A favorites entry
+that isn't an object of state keys (`"!room": true`, another client's doing)
+is read as the room's default pack (`""`) everywhere — listed, shown as
+favorited, and removed by `[remove]` — through one helper,
+`favorite_state_keys`.
 
 Shortcodes Quark creates or accepts on rename are `[A-Za-z0-9_+-]+`, the
 characters the outgoing formatter recognises in `:shortcode:`; packs from other
