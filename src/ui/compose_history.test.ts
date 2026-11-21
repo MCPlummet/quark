@@ -156,4 +156,11 @@ describe("caretForRestore", () => {
   it("lands after a change in the middle", () => {
     expect(caretForRestore("say hi now", "say hello now")).toBe(9);
   });
+
+  // Review fix: undoing a 😂 typed before a 😀 put the caret between the 😀's
+  // two halves (both emoji start with D83D), where `x` then split it.
+  it("never lands inside a surrogate pair", () => {
+    expect(caretForRestore("😂😀", "😀")).toBe(0);
+    expect(caretForRestore("😀", "😂😀")).toBe(2);
+  });
 });

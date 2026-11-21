@@ -108,6 +108,18 @@ describe("Input", () => {
       expect(input.getValue()).toBe("hello ");
     });
 
+    // Review fix: the caret landed between the halves of the 😀, and compose
+    // Normal's `x` then deleted one of them.
+    it("leaves the caret on a character boundary after undoing an emoji", () => {
+      const f = input.getFieldElement();
+      input.resetValue("😀");
+      f.setSelectionRange(0, 0);
+      browserEdit("insertText", "😂", "😂😀", 2);
+      input.undo();
+      expect(input.getValue()).toBe("😀");
+      expect(f.selectionStart).toBe(0);
+    });
+
     it("undoes a programmatic setValue (autocomplete, quoting)", () => {
       typeChars("hi :jo");
       input.setValue("hi 😂 ");

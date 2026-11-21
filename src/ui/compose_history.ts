@@ -14,6 +14,8 @@
 // caret is not stored either — `caretForRestore` puts it where the text changed,
 // which is where the user is looking after an undo.
 
+import { changedRange } from "./text_change.js";
+
 /** How a change was made, which decides whether it joins the step before it. */
 export type EditKind = "insert" | "delete" | "edit";
 
@@ -122,16 +124,8 @@ export class ComposeHistory {
 /**
  * Where the caret belongs after the field changes from `from` to `to`: the end
  * of the changed region in `to` — after re-inserted text, or where removed text
- * used to be.
+ * used to be. Never inside a surrogate pair (see {@link changedRange}).
  */
 export function caretForRestore(from: string, to: string): number {
-  const max = Math.min(from.length, to.length);
-  let prefix = 0;
-  while (prefix < max && from[prefix] === to[prefix]) prefix++;
-  let suffix = 0;
-  while (
-    suffix < max - prefix &&
-    from[from.length - 1 - suffix] === to[to.length - 1 - suffix]
-  ) suffix++;
-  return to.length - suffix;
+  return changedRange(from, to).afterEnd;
 }

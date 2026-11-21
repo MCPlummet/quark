@@ -5,6 +5,7 @@ import { isMobile, onMobileChange, guardViewportPan } from "../app/mobile.js";
 import { AttachmentProgressList, type AttachmentProgressHandle } from "./AttachmentProgress.js";
 import { AttachmentTray, type StagedAttachment } from "./AttachmentTray.js";
 import { ComposeHistory, caretForRestore, type EditKind } from "./compose_history.js";
+import { changedRange } from "./text_change.js";
 
 export type { StagedAttachment };
 
@@ -35,15 +36,8 @@ interface PasteUndo {
  * hold it.
  */
 function insertedText(before: string, after: string): string {
-  let start = 0;
-  while (start < before.length && before[start] === after[start]) start++;
-  let end = 0;
-  while (
-    end < after.length - start &&
-    end < before.length - start &&
-    before[before.length - 1 - end] === after[after.length - 1 - end]
-  ) end++;
-  return after.slice(start, after.length - end);
+  const { start, afterEnd } = changedRange(before, after);
+  return after.slice(start, afterEnd);
 }
 
 /**
