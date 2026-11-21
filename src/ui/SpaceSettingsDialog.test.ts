@@ -44,6 +44,17 @@ describe("SpaceSettingsDialog", () => {
     expect(active()).toBe("Children");
   });
 
+  // Review fix: the shared tab host took Shift+Tab as Tab, so it moved on.
+  it("goes back a tab with Shift+Tab", async () => {
+    await d.show("!space:x");
+    const shiftTab = () =>
+      d.getElement().dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true }));
+    shiftTab();
+    expect(active()).toBe("Emoji");
+    shiftTab();
+    expect(active()).toBe("Children");
+  });
+
   it("loads the space's packs on the Emoji tab", async () => {
     await d.show("!space:x");
     tabs().find((t) => t.textContent === "Emoji")!.click();

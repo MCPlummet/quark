@@ -1313,7 +1313,8 @@ is a room — with the tabs **General** (name, topic, facts), **Children** and
 **Emoji**. Both are a `RoomTabsDialog` (`src/ui/room/RoomTabsDialog.ts`) over
 their own tab registry (`room/registry.ts`, `space/registry.ts`) using the
 `RoomTab` contract; space settings used to keep its own copy with its tabs
-hard-coded in three switchyards.
+hard-coded in three switchyards. In both, as in Settings, `Tab` moves to the
+next tab and `Shift+Tab` to the previous one (it used to be a second "next").
 
 It replaces a pair of dialogs that both stated name, topic, members, encryption
 and directness while only one could change any of it — and that kept mute, leave

@@ -204,10 +204,14 @@ export abstract class RoomTabsDialog extends DialogBase {
       return;
     }
 
+    // Tab moves to the next section, Shift+Tab back to the previous one. Space
+    // settings once left Shift+Tab to the browser; on this shared host it had
+    // become a second "next" (as it still was in Settings).
     if (e.key === "Tab") {
       e.preventDefault();
+      const n = this._tabs.length;
       const idx = this._tabs.findIndex((t) => t.id === this._activeId);
-      this._switchTab(this._tabs[(idx + 1) % this._tabs.length].id);
+      this._switchTab(this._tabs[(idx + (e.shiftKey ? n - 1 : 1)) % n].id);
       return;
     }
 
