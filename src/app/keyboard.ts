@@ -1586,10 +1586,6 @@ export function setupKeyboard(components: AppComponents): void {
   document.addEventListener("keydown", (e) => {
     const mode = modeManager.current;
 
-    // Inline autocomplete popups are not modals — they own their keys while
-    // visible (handled inside Insert-mode routing) but must block global nav.
-    if (mentionPreview.isVisible()) return;
-
     // Any open modal overlay (dialog / picker / context menu / lightbox) owns
     // its own keys; each stopPropagation's on its own keydown listener, so this
     // document-level guard only fires when focus has escaped the overlay. In
@@ -1601,6 +1597,16 @@ export function setupKeyboard(components: AppComponents): void {
         e.preventDefault();
         modalManager.closeTopMost();
       }
+      return;
+    }
+
+    // The mention popup is not a modal: while it is up it owns its keys, and
+    // global nav and Escape-to-Normal must not run. Insert routing gives it
+    // them first, then the Insert chords — undo and redo among them (#117).
+    // This used to return here outright, which left the popup's Enter / Tab /
+    // arrows / Esc dead along with the chords.
+    if (mentionPreview.isVisible()) {
+      if (resolveModeRoute(mode, AppState.get("vimMode")) === "insert") handleInsertKeydown(e, components);
       return;
     }
 

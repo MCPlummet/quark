@@ -192,3 +192,43 @@ describe("compose Normal history chords", () => {
     }
   });
 });
+
+describe("Insert undo with the mention popup open", () => {
+  const alice = { userId: "@alice:x", displayName: "alice" };
+
+  /** "hi @al" typed in Insert, with the popup offering a completion. */
+  function mentionInProgress(): void {
+    enterInsert();
+    typeChars("hi @al");
+    mentionPreview.show([alice]);
+    expect(mentionPreview.isVisible()).toBe(true);
+  }
+
+  // Review fix: the global keydown returned before Insert routing while the
+  // popup was up, so Ctrl-Z / Ctrl-Shift-Z / Ctrl-Y never reached the history.
+  it("undoes and redoes, and the popup follows the text", () => {
+    mentionInProgress();
+    const e = press("z", { ctrlKey: true });
+    expect(e.defaultPrevented).toBe(true);
+    expect(input.getValue()).toBe("hi ");
+    expect(mentionPreview.isVisible()).toBe(false); // no @query left to complete
+
+    mentionPreview.show([alice]);
+    press("y", { ctrlKey: true });
+    expect(input.getValue()).toBe("hi @al");
+  });
+
+  // The same early return left the popup's own keys dead.
+  it("gives the popup its own keys", () => {
+    mentionInProgress();
+    press("Enter");
+    expect(input.getValue()).toBe("hi @alice ");
+    expect(mentionPreview.isVisible()).toBe(false);
+
+    typeChars("@al");
+    mentionPreview.show([alice]);
+    press("Escape");
+    expect(mentionPreview.isVisible()).toBe(false);
+    expect(modeManager.current).toBe(Mode.Insert); // Esc closed the popup, not Insert
+  });
+});
