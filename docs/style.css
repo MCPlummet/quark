@@ -31,11 +31,13 @@
   --glow:0 0 18px rgba(0,255,65,.45), 0 0 42px rgba(0,255,65,.18);
   --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
   --maxw:1060px;
+  --topbar-h:60px;
   --ease:cubic-bezier(.2,.7,.2,1);
 }
 
 *,*::before,*::after{box-sizing:border-box}
-html{scroll-behavior:smooth}
+/* In-page jumps (#features, #download, the hero's #android) land below the sticky top bar, not under it. */
+html{scroll-behavior:smooth;scroll-padding-top:var(--topbar-h)}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 
 body{
@@ -82,7 +84,7 @@ a:hover{color:var(--green)}
 .topbar{
   position:sticky;top:0;z-index:100;
   display:flex;align-items:center;justify-content:space-between;
-  height:60px;max-width:var(--maxw);margin:0 auto;
+  height:var(--topbar-h);max-width:var(--maxw);margin:0 auto;
 }
 .topbar::before{
   content:"";position:absolute;inset:0;z-index:-1;
