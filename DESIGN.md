@@ -1092,7 +1092,7 @@ failed creation keeps the dialog open with the error inline.
 | Insert        | `Ctrl-Shift-x`| Strikethrough                 |
 | Insert        | `Ctrl-z`      | Undo (see [Compose undo](#compose-undo)) |
 | Insert        | `Ctrl-Shift-z` / `Ctrl-y` | Redo              |
-| Compose Normal| `u` / `Ctrl-r`| Undo (with a count) / redo    |
+| Compose Normal| `u` / `Ctrl-r`| Undo / redo, with a count (the Insert chords work too) |
 | Insert        | `Enter`       | Send (see send-key behaviour) |
 | Insert        | `:word:`      | Autocomplete :shortcode:      |
 | Picker        | `j/k/h/l`     | Navigate grid                 |
@@ -1130,11 +1130,16 @@ bottom of the timeline; press `i` to start composing.
 #### Compose undo
 
 The compose box keeps its own undo history (`src/ui/compose_history.ts`, owned
-by `Input`): `Ctrl-z` / `Ctrl-Shift-z` / `Ctrl-y` in Insert, `u` (with a count)
-/ `Ctrl-r` in compose Normal, and `:undo` / `:u`, `:redo` / `:red`. It records
-every change from the field's `input` event — whoever made it — plus
-`setValue`, so vim operators, autocomplete, quoting, the markdown wrappers and a
-select-all-delete all undo. Typing undoes a word at a time (whitespace closes a
+by `Input`): `Ctrl-z` / `Ctrl-Shift-z` / `Ctrl-y` in Insert and compose Normal,
+`u` / `Ctrl-r` (with a count) in compose Normal, and `:undo` / `:u`, `:redo` /
+`:red`. The chords are the `compose-undo` / `compose-redo` bindings of the
+insert context; compose Normal resolves them there too — they belong to the
+box, not to the mode — so an `imap` or `iunmap` moves them in both. `u` and
+`Ctrl-r` are compose Normal's own vim grammar, like `x` and `d`, not bindings.
+
+The history records every change from the field's `input` event — whoever made
+it — plus `setValue`, so vim operators, autocomplete, quoting, the markdown
+wrappers and a select-all-delete all undo. Typing undoes a word at a time (whitespace closes a
 step; typing and deleting are separate steps, and typing over a selection
 starts one; anything else is a step of its own), and the caret lands where the
 text changed, never inside a surrogate pair. An IME composition that only

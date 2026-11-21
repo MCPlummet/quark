@@ -143,3 +143,52 @@ describe("compose Normal undo", () => {
     expect(input.getValue()).toBe("ab");
   });
 });
+
+describe("compose Normal history chords", () => {
+  /** A draft with two undo steps, in compose Normal. */
+  function draftInComposeNormal(): void {
+    enterInsert();
+    typeChars("one two");
+    press("Escape");
+  }
+
+  it("redoes with vim's Ctrl-r, counts included", () => {
+    draftInComposeNormal();
+    press("u");
+    press("u");
+    expect(input.getValue()).toBe("");
+    press("2");
+    const e = press("r", { ctrlKey: true });
+    expect(e.defaultPrevented).toBe(true); // not the webview's "reload"
+    expect(input.getValue()).toBe("one two");
+  });
+
+  it("undoes and redoes with the Insert chords", () => {
+    draftInComposeNormal();
+    press("z", { ctrlKey: true });
+    expect(input.getValue()).toBe("one ");
+    press("y", { ctrlKey: true });
+    expect(input.getValue()).toBe("one two");
+    press("z", { ctrlKey: true });
+    press("Z", { ctrlKey: true, shiftKey: true });
+    expect(input.getValue()).toBe("one two");
+  });
+
+  // Review fix: the chords were hardcoded here, so a quarkrc remap applied in
+  // Insert and not in compose Normal.
+  it("follows a quarkrc's iunmap and imap", () => {
+    keymapManager.unmap("insert", "Ctrl-y");
+    keymapManager.map("insert", "Ctrl-Alt-z", "compose-undo");
+    try {
+      draftInComposeNormal();
+      press("z", { ctrlKey: true, altKey: true });
+      expect(input.getValue()).toBe("one ");
+      const e = press("y", { ctrlKey: true });
+      expect(e.defaultPrevented).toBe(false); // no longer claimed
+      expect(input.getValue()).toBe("one ");
+    } finally {
+      keymapManager.unmap("insert", "Ctrl-Alt-z");
+      keymapManager.map("insert", "Ctrl-y", "compose-redo");
+    }
+  });
+});

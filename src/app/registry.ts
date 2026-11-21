@@ -496,8 +496,9 @@ const ACTION_LITERALS = [
       "Keyboard-only by decision (#54): a custom mobile format bar duplicates the native selection callout poorly, and doing it properly needs native UIEditMenuInteraction / Android ActionMode work.",
   },
   {
-    // #117. In compose Normal mode `u` / Ctrl-r do the same, through the vim
-    // editor's own grammar (counts included) rather than these bindings.
+    // #117. Compose Normal resolves these insert-context chords too (they are
+    // the box's, not the mode's), beside vim's own `u` / Ctrl-r, which are the
+    // editor's grammar (counts included) rather than bindings.
     id: "compose-undo",
     description: "Undo the last change to the message being written",
     requires: ["room"],

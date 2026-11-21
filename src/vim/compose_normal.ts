@@ -5,7 +5,9 @@
 // module turns that from a read-only navigation layer into a real vim editor:
 // motions (h l w b e 0 ^ $ j k), operators (d c y, doubled dd/cc/yy, and the
 // to-end D C Y), x to delete a char, insert-entry (i a A I o O), an internal
-// yank register with p/P, and r to replace a char — all with optional counts.
+// yank register with p/P, r to replace a char, and u / Ctrl-r (which the
+// caller carries out: the history is the compose box's) — all with optional
+// counts. Keys are bare characters, except Ctrl-r, spelled as its chord.
 //
 // The pure core (motions + spans) is unit-tested; the editor class is the thin
 // stateful adapter that reads/writes a textarea.
@@ -188,9 +190,9 @@ export interface ComposeKeyResult {
    *  line, where the caret can't rise any further. The compose box reads as the
    *  bottom-most "message", so this hands focus up to the timeline (#15). */
   exitUp?: boolean;
-  /** `u`: the caller should undo (#117) — `times` times, for a count. The
-   *  history belongs to the compose box, not to this editor. */
-  history?: "undo";
+  /** `u` / Ctrl-r: the caller should undo / redo (#117) — `times` times, for
+   *  a count. The history belongs to the compose box, not to this editor. */
+  history?: "undo" | "redo";
   times?: number;
 }
 
@@ -374,10 +376,11 @@ export class ComposeNormalEditor {
       case "P": this.paste(field, pos, false); return CONSUMED;
       case "r": this.pendingReplace = true; return CONSUMED;
       case "u":
+      case "Ctrl-r":
         // `du` / `cu` / `yu` is not an undo: vim cancels the operator and
         // does nothing else.
         if (cancelledOperator) return CONSUMED;
-        return { consumed: true, history: "undo", times: count };
+        return { consumed: true, history: key === "u" ? "undo" : "redo", times: count };
       default:
         // Leave v / : / clipboard etc. to the existing text-select handler.
         return NOT_CONSUMED;

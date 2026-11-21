@@ -607,22 +607,19 @@ function translateComposeKey(key: string): string {
 }
 
 /**
- * The undo/redo a chord asks for in compose Normal mode (#117), or null.
- * Ctrl and Cmd are one modifier here, as in every other chord.
+ * The undo/redo a chord asks of the compose box (#117), or null: whatever the
+ * keymap binds to compose-undo / compose-redo. Those bindings live in the
+ * insert context (`imap`) and apply in compose Normal too — they belong to the
+ * box, not to the mode — so a quarkrc that moves or unmaps one does so in both.
+ * Vim's own `u` and Ctrl-r are not bindings but compose Normal grammar, with
+ * counts (see ComposeNormalEditor).
  */
-export function composeHistoryChord(e: {
-  key: string;
-  ctrlKey: boolean;
-  metaKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-}): "undo" | "redo" | null {
-  switch (eventChord(e)) {
-    case "Ctrl-z":
+export function composeHistoryChord(chord: string | null): "undo" | "redo" | null {
+  if (!chord) return null;
+  switch (keymapManager.actionForKey(chord, "insert")) {
+    case "compose-undo":
       return "undo";
-    case "Ctrl-Shift-z":
-    case "Ctrl-y":
-    case "Ctrl-r":
+    case "compose-redo":
       return "redo";
     default:
       return null;
@@ -631,41 +628,47 @@ export function composeHistoryChord(e: {
 
 /**
  * Routes keys for compose-box Normal mode (#45) through the vim editor:
- * motions, operators, counts, x/D/C/Y, insert-entry, p/P, r. Returns true if
- * the key was handled. Keys the editor doesn't own (v, :, copy/quote/paste)
- * fall through to {@link handleTextSelectKeydown}.
+ * motions, operators, counts, x/D/C/Y, insert-entry, p/P, r, u / Ctrl-r.
+ * Returns true if the key was handled. Keys the editor doesn't own (v, :,
+ * copy/quote/paste) fall through to {@link handleTextSelectKeydown}.
  */
 function handleComposeNormalKeydown(e: KeyboardEvent, components: AppComponents): boolean {
   const field = components.input.getFieldElement();
+  const chord = eventChord(e);
 
-  // Undo/redo chords (#117): vim's Ctrl-r, and the Ctrl-Z / Ctrl-Shift-Z /
-  // Ctrl-Y every editor has. Claimed here, ahead of the modifier pass-through
-  // below, or the webview takes Ctrl-r as "reload" and the others as its own
-  // undo — outside the compose box's history.
-  const chord = composeHistoryChord(e);
-  if (chord) {
+  // The compose box's undo/redo chords (#117), as the keymap has them. Claimed
+  // here, ahead of the modifier pass-through below, or the webview takes them
+  // as its own undo — outside the compose box's history.
+  const history = composeHistoryChord(chord);
+  if (history) {
     e.preventDefault();
     e.stopPropagation();
     composeEditor.reset();
-    if (chord === "undo") components.input.undo();
+    if (history === "undo") components.input.undo();
     else components.input.redo();
     return true; // the block cursor is re-settled by onHistoryApplied
   }
 
   // Other modifier combos (clipboard, Ctrl+K palette, …) and bare modifier
-  // presses are not editor commands — let them reach their handlers.
-  if (e.ctrlKey || e.metaKey || e.altKey) return false;
-  if (e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") return false;
+  // presses are not editor commands — let them reach their handlers. The one
+  // chord vim's grammar has is Ctrl-r, redo; claiming it also keeps the
+  // webview from taking it as "reload".
+  let key: string;
+  if (chord === "Ctrl-r") key = chord;
+  else if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  else if (e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") return false;
+  else key = translateComposeKey(e.key);
 
-  const res = composeEditor.handleKey(translateComposeKey(e.key), field);
+  const res = composeEditor.handleKey(key, field);
   if (!res.consumed) return false;
 
   e.preventDefault();
   e.stopPropagation();
 
-  if (res.history === "undo") {
+  if (res.history) {
+    const step = res.history === "undo" ? () => components.input.undo() : () => components.input.redo();
     for (let i = 0; i < (res.times ?? 1); i++) {
-      if (!components.input.undo()) break;
+      if (!step()) break;
     }
   } else if (res.exitUp) {
     // `k` on the first line: leave the compose box upward into the timeline.

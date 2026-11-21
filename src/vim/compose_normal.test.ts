@@ -123,6 +123,16 @@ describe("ComposeNormalEditor", () => {
     expect(ed.handleKey("u", field)).toEqual({ consumed: true, history: "undo", times: 1 });
   });
 
+  it("Ctrl-r asks the caller to redo, with a count", () => {
+    place("hello", 0);
+    expect(ed.handleKey("Ctrl-r", field)).toEqual({ consumed: true, history: "redo", times: 1 });
+    ed.handleKey("2", field);
+    expect(ed.handleKey("Ctrl-r", field)).toEqual({ consumed: true, history: "redo", times: 2 });
+    ed.handleKey("d", field);
+    expect(ed.handleKey("Ctrl-r", field)).toEqual({ consumed: true });
+    expect(field.value).toBe("hello");
+  });
+
   it("a count before u undoes that many times", () => {
     place("hello", 0);
     ed.handleKey("3", field);
