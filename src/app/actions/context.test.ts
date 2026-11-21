@@ -15,6 +15,7 @@ import {
   _messageMediaCache,
   _emojiImageCache,
   _shortcodeToMxcByRoom,
+  _shortcodeToMxcEverywhere,
   _memberDisplayName,
   _dmUserByRoom,
   _ownSentEventIds,
@@ -65,7 +66,7 @@ function makeRoom(over: Partial<RoomInfo> = {}): RoomInfo {
 }
 
 beforeEach(() => {
-  for (const m of [_emojiImageCache, _shortcodeToMxcByRoom, _memberDisplayName, _dmUserByRoom, _replyPreviewCache]) m.clear();
+  for (const m of [_emojiImageCache, _shortcodeToMxcByRoom, _shortcodeToMxcEverywhere, _memberDisplayName, _dmUserByRoom, _replyPreviewCache]) m.clear();
   _ownSentEventIds.clear();
   AppState.patch({ ownUserId: null });
 });
@@ -249,7 +250,10 @@ function seedShortcode(shortcode: string, mxc: string): void {
 }
 
 describe("_buildFormattedBodyWithEmoji", () => {
-  beforeEach(() => _shortcodeToMxcByRoom.clear());
+  beforeEach(() => {
+    _shortcodeToMxcByRoom.clear();
+    _shortcodeToMxcEverywhere.clear();
+  });
 
   // #12: a shortcode belongs to the rooms whose packs hold it. The map used to
   // be app-wide and never cleared, so a space pack's emoji loaded in one room
@@ -257,6 +261,15 @@ describe("_buildFormattedBodyWithEmoji", () => {
   it("does not resolve a shortcode loaded for another room", () => {
     seedShortcode("party", "mxc://emoji/party");
     expect(_buildFormattedBodyWithEmoji("yay :party:", "!other")).toBeUndefined();
+  });
+
+  // Review fix: a room not loaded yet still resolves the packs that apply in
+  // every room (personal, favorites); a loaded room's own map decides alone.
+  it("resolves the everywhere packs in a room whose packs have not loaded", () => {
+    _shortcodeToMxcEverywhere.set("mine", "mxc://emoji/mine");
+    expect(_buildFormattedBodyWithEmoji(":mine:", "!fresh")).toContain('src="mxc://emoji/mine"');
+    seedShortcode("party", "mxc://emoji/party");
+    expect(_buildFormattedBodyWithEmoji(":mine:", "!r")).toBeUndefined();
   });
 
   it("returns undefined when no known custom shortcode is present", () => {

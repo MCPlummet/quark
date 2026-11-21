@@ -9,11 +9,12 @@
 
 import { getEmojiPacks } from "../../ipc/index.js";
 import type { EmojiPack } from "../../ipc/types.js";
-import type { CustomEmojiPack } from "../../ui/emoji_catalog.js";
+import type { CustomEmoji, CustomEmojiPack } from "../../ui/emoji_catalog.js";
 import {
   _emojiImageCache,
   _resetEmojiThumbnailsInFlight,
   _shortcodeToMxcByRoom,
+  _shortcodeToMxcEverywhere,
   resolveEmojiThumbnail,
 } from "./context.js";
 
@@ -41,6 +42,8 @@ let _version = 0;
  */
 const _latestLoad = new Map<string, { seq: number; done: Promise<void> }>();
 let _loadSeq = 0;
+/** The load (by `_loadSeq`) whose answer `_shortcodeToMxcEverywhere` holds. */
+let _everywhereSeq = 0;
 const _invalidationListeners = new Set<() => void>();
 
 /** The cache generation; changes when `invalidateCustomEmoji` runs. */
@@ -81,6 +84,26 @@ function withImages(packs: readonly CustomEmojiPack[]): CustomEmojiPack[] {
 }
 
 /**
+ * Each pack's emoticon entries, a shortcode kept only by the first pack that
+ * holds it. Fills `mxcByShortcode` with each kept entry that has an mxc:// URL,
+ * so the outgoing formatter can turn a typed or inserted `:shortcode:` into
+ * <img data-mx-emoticon>.
+ */
+function firstWins(raw: readonly EmojiPack[], mxcByShortcode: Map<string, string>): Array<[EmojiPack, CustomEmoji[]]> {
+  const seen = new Set<string>();
+  return raw.map((pack) => {
+    const emojis = pack.emojis
+      .filter((e) => e.usage.includes("emoticon") && !seen.has(e.shortcode))
+      .map((e) => ({ shortcode: e.shortcode, url: e.url, body: e.body }));
+    for (const e of emojis) {
+      seen.add(e.shortcode);
+      if (e.url.startsWith("mxc://")) mxcByShortcode.set(e.shortcode, e.url);
+    }
+    return [pack, emojis];
+  });
+}
+
+/**
  * Reduce IPC packs to their emoticon entries, and make them the room's
  * shortcode → mxc map.
  *
@@ -92,25 +115,26 @@ function withImages(packs: readonly CustomEmojiPack[]): CustomEmojiPack[] {
  * its own pack's editor.
  */
 function toCustomPacks(raw: readonly EmojiPack[], roomKey: string): CustomEmojiPack[] {
-  const packs: CustomEmojiPack[] = [];
-  const seen = new Set<string>();
   const mxcByShortcode = new Map<string, string>();
-  for (const pack of raw) {
-    const emojis = pack.emojis
-      .filter((e) => e.usage.includes("emoticon") && !seen.has(e.shortcode))
-      .map((e) => ({ shortcode: e.shortcode, url: e.url, body: e.body }));
-    for (const e of emojis) {
-      seen.add(e.shortcode);
-      // So the outgoing formatter can turn a typed or inserted `:shortcode:`
-      // into <img data-mx-emoticon>.
-      if (e.url.startsWith("mxc://")) mxcByShortcode.set(e.shortcode, e.url);
-    }
-    if (emojis.length > 0) {
-      packs.push({ id: pack.pack_id, name: pack.display_name ?? pack.pack_id, emojis });
-    }
-  }
+  const packs = firstWins(raw, mxcByShortcode)
+    .filter(([, emojis]) => emojis.length > 0)
+    .map(([pack, emojis]) => ({ id: pack.pack_id, name: pack.display_name ?? pack.pack_id, emojis }));
   _shortcodeToMxcByRoom.set(roomKey, mxcByShortcode);
   return packs;
+}
+
+/**
+ * Make the packs of `raw` that apply in every room — the personal pack, then
+ * favorites (a favorite may arrive as the room's or a space's own pack, marked
+ * favorited) — the map a room not loaded yet resolves through.
+ */
+function setEverywhere(raw: readonly EmojiPack[]): void {
+  const personal = raw.filter((p) => p.source === "user");
+  const favorites = raw.filter((p) => p.source !== "user" && p.favorited === true);
+  const map = new Map<string, string>();
+  firstWins([...personal, ...favorites], map);
+  _shortcodeToMxcEverywhere.clear();
+  for (const [code, mxc] of map) _shortcodeToMxcEverywhere.set(code, mxc);
 }
 
 /** The packs last loaded for a room, with resolved images, or none. */
@@ -135,6 +159,12 @@ export async function loadCustomEmoji(
   listener.onPacks(cachedCustomEmoji(roomId));
   try {
     const raw: EmojiPack[] = await getEmojiPacks(roomId ?? undefined);
+    // Every room's answer carries the personal pack and favorites; the newest
+    // answer of any room is the one to believe.
+    if (seq > _everywhereSeq) {
+      _everywhereSeq = seq;
+      setEverywhere(raw);
+    }
     const latest = _latestLoad.get(key);
     if (latest?.seq === seq) {
       _packCache.set(key, toCustomPacks(raw, key));
@@ -164,5 +194,7 @@ export async function loadCustomEmoji(
 export function _resetCustomEmojiCache(): void {
   _packCache.clear();
   _shortcodeToMxcByRoom.clear();
+  _shortcodeToMxcEverywhere.clear();
+  _everywhereSeq = 0;
   _resetEmojiThumbnailsInFlight();
 }

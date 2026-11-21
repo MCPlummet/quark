@@ -282,9 +282,20 @@ export const _seenReactionEventIds = new Set<string>();
  */
 export const _shortcodeToMxcByRoom = new Map<string, Map<string, string>>();
 
+/**
+ * Shortcode → mxc:// URL of the packs that apply in every room — the personal
+ * pack and favorites — as the latest load of any room found them (first pack
+ * wins). A room whose own packs have not loaded yet resolves through this, so
+ * `:blob:` from the personal pack, sent right after switching to a room not
+ * opened before, still goes out as an image. Room and space packs are never in
+ * it: they resolve only once the room's own map says they apply there.
+ */
+export const _shortcodeToMxcEverywhere = new Map<string, string>();
+
 /** The mxc:// URL a custom `:shortcode:` resolves to in a room, if any. */
 export function customEmojiMxc(roomId: string | null, shortcode: string): string | undefined {
-  return _shortcodeToMxcByRoom.get(roomId ?? "")?.get(shortcode);
+  const room = _shortcodeToMxcByRoom.get(roomId ?? "");
+  return room ? room.get(shortcode) : _shortcodeToMxcEverywhere.get(shortcode);
 }
 
 // ── Shared low-level helpers ───────────────────────────────────────────────────

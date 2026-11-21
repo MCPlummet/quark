@@ -1552,7 +1552,12 @@ editor. (The sticker tab is not deduplicated — a sticker is sent by its exact
 URL.) The shortcode → mxc map the outgoing formatter reads is **per room**
 (`_shortcodeToMxcByRoom`), replaced on each load: it used to be app-wide and
 never cleared, so a space pack's emoji loaded in one room still became an image
-in rooms outside the space.
+in rooms outside the space. A room whose packs have not loaded yet — a message
+sent right after switching to a room not opened before — resolves through
+`_shortcodeToMxcEverywhere` instead: only the packs that apply in every room
+(the personal pack, then favorites), as the newest load of any room found them.
+So the personal pack's `:mine:` never goes out as text, and a room or space
+pack still never resolves outside the rooms it applies to.
 
 **Sending custom emoji in messages:**
 - User types `:shortcode:` → autocomplete resolves from available packs; the
