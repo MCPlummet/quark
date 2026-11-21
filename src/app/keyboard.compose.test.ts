@@ -232,3 +232,41 @@ describe("Insert undo with the mention popup open", () => {
     expect(modeManager.current).toBe(Mode.Insert); // Esc closed the popup, not Insert
   });
 });
+
+describe("an emptied draft", () => {
+  /** The review's repro: a draft, select-all + Backspace, Esc. */
+  function emptyTheDraft(): void {
+    enterInsert();
+    typeChars("hello world");
+    field.setSelectionRange(0, field.value.length);
+    browserEdit("deleteContentBackward", null, "", 0);
+    press("Escape");
+  }
+
+  // Review fix: Esc on an empty box always left it for the timeline, where `u`
+  // is unbound — so the headline case, bringing back a deleted draft, did nothing.
+  it("Esc keeps the box in compose Normal, where u brings the draft back", () => {
+    emptyTheDraft();
+    expect(inComposeNormal()).toBe(true);
+    press("u");
+    expect(input.getValue()).toBe("hello world");
+  });
+
+  it("j from the bottom of the timeline comes back to it", () => {
+    emptyTheDraft();
+    press("k"); // up into the timeline
+    expect(inComposeNormal()).toBe(false);
+    press("j");
+    expect(inComposeNormal()).toBe(true);
+    press("u");
+    expect(input.getValue()).toBe("hello world");
+  });
+
+  it("an empty box with nothing to undo is still left for the timeline", () => {
+    enterInsert();
+    press("Escape");
+    expect(inComposeNormal()).toBe(false);
+    press("j");
+    expect(inComposeNormal()).toBe(false);
+  });
+});

@@ -707,16 +707,27 @@ function exitComposeToTimeline(components: AppComponents): boolean {
 }
 
 /**
+ * Whether the compose box holds a draft to come back to in compose Normal:
+ * text, or a draft emptied by hand that undo can bring back (#117). An empty
+ * box with nothing to undo has nothing to edit, so Esc and `j` leave it to the
+ * panels.
+ */
+function composeHoldsDraft(input: AppComponents["input"]): boolean {
+  return input.getValue().length > 0 || input.canUndo();
+}
+
+/**
  * Enter the compose box from the timeline's bottom edge (#15). Triggered when
  * `nav-down` can't move the timeline selection any further and the compose box
  * holds a draft: focus the field in compose-Normal mode with the caret at the
- * top so a subsequent `k` returns to the timeline. No-op on an empty draft, so
- * plain timeline navigation in an empty room is unaffected — `i` still composes.
+ * top so a subsequent `k` returns to the timeline. No-op when it holds none
+ * (see {@link composeHoldsDraft}), so plain timeline navigation in an empty
+ * room is unaffected — `i` still composes.
  */
 function enterComposeFromTimeline(components: AppComponents): void {
   const { input, timeline, threadView } = components;
   if (modeManager.current !== Mode.Normal) return;
-  if (input.getValue().length === 0) return;
+  if (!composeHoldsDraft(input)) return;
   timeline.clearSelection();
   threadView.clearSelection();
   input.focus();
@@ -1418,14 +1429,14 @@ export function setupKeyboard(components: AppComponents): void {
       shortcodePreview.hide();
       mentionPreview.hide();
 
-      // Insert → Normal with content in the compose box: keep the caret in
+      // Insert → Normal with a draft in the compose box: keep the caret in
       // the field so the user can navigate/select text and `p` to paste at the
       // cursor position. The keyboard handler routes keys through text-select
       // instead of the normal panel keymap while textSelectMode is "compose".
+      // A draft just deleted counts, so that `u` is there to bring it back.
       const enteringFromInsert = from === Mode.Insert;
-      const hasContent = input.getValue().length > 0;
       const alreadyInTextSelect = AppState.get("textSelectMode") !== null;
-      if (enteringFromInsert && hasContent && AppState.get("vimMode")) {
+      if (enteringFromInsert && AppState.get("vimMode") && composeHoldsDraft(input)) {
         enterComposeTextSelect(input.getFieldElement());
         composeEditor.reset(); // fresh sequence state for this editing session
         // Don't blur — the input field stays focused for caret-driven editing.

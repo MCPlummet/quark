@@ -776,6 +776,12 @@ export class Input {
     this._autoGrow();
   }
 
+  /** Whether the draft has a change to undo. */
+  canUndo(): boolean {
+    this._syncHistory();
+    return this._history.canUndo;
+  }
+
   /** Step the draft back one change. False when there is nothing to undo. */
   undo(): boolean {
     this._syncHistory();

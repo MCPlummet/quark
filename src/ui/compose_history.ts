@@ -62,6 +62,11 @@ export class ComposeHistory {
     return this.steps[this.pos].value;
   }
 
+  /** Whether there is a change to undo. */
+  get canUndo(): boolean {
+    return this.pos > 0;
+  }
+
   /** Record the field's value after a change. */
   record(after: string, opts: RecordOpts): void {
     if (after === this.current) return;

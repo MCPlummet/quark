@@ -259,6 +259,16 @@ describe("Input", () => {
       expect(input.getValue()).toBe("");
     });
 
+    it("canUndo says whether undo has a change to take back", () => {
+      expect(input.canUndo()).toBe(false);
+      typeChars("abc");
+      expect(input.canUndo()).toBe(true);
+      input.undo();
+      expect(input.canUndo()).toBe(false);
+      input.getFieldElement().value = "written behind its back";
+      expect(input.canUndo()).toBe(true);
+    });
+
     it("resetValue starts a fresh history", () => {
       typeChars("abc");
       input.resetValue("");

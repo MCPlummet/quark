@@ -1124,8 +1124,11 @@ Normal-mode editing of the draft (vim motions/operators on the text). The
 compose box then behaves like the message just below the timeline — pressing the
 up key (`k`) on the draft's first line moves focus up into the timeline, and the
 down key (`j`) past the last message drops back into the draft (caret at the
-top). `i` resumes editing. An empty compose box is left untouched by `j` at the
-bottom of the timeline; press `i` to start composing.
+top). `i` resumes editing. A draft deleted by hand still counts while undo can
+bring it back: `Esc` stays in the emptied box, where `u` restores it, and `j`
+comes back down to it. An empty compose box with nothing to undo (a fresh one,
+or one just sent) is left untouched by `Esc` and by `j` at the bottom of the
+timeline; press `i` to start composing.
 
 #### Compose undo
 
