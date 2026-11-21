@@ -75,10 +75,12 @@ fn parse_ponies_pack(
     let mut emojis = Vec::new();
 
     for (shortcode, img_data) in images {
-        let url = img_data
-            .get("url")
-            .and_then(|v| v.as_str())
-            .map(String::from)?;
+        // An image without a usable url is skipped on its own: one malformed
+        // entry (another client's bug, a half-finished edit) must not hide the
+        // rest of the pack.
+        let Some(url) = img_data.get("url").and_then(|v| v.as_str()).map(String::from) else {
+            continue;
+        };
 
         let body = img_data
             .get("body")
@@ -329,6 +331,28 @@ mod tests {
             favorited: false,
             scope: source.to_string(),
         }
+    }
+
+    // --- Parsing ---
+
+    // One malformed image (no url, a non-string url, not an object) used to
+    // drop the whole pack from the pickers; it now drops only that image.
+    #[test]
+    fn test_parse_skips_malformed_images_keeps_the_rest() {
+        let content = serde_json::json!({
+            "pack": { "display_name": "Blobs" },
+            "images": {
+                "good": { "url": "mxc://x/good" },
+                "no_url": { "body": "missing" },
+                "number_url": { "url": 42 },
+                "not_an_object": "mxc://x/bare",
+            }
+        });
+        let pack = parse_ponies_pack("blobs", "room", Some("!r:x"), &content).expect("pack kept");
+        let shortcodes: Vec<&str> = pack.emojis.iter().map(|e| e.shortcode.as_str()).collect();
+        assert_eq!(shortcodes, vec!["good"]);
+        assert_eq!(pack.emojis[0].url, "mxc://x/good");
+        assert_eq!(pack.display_name.as_deref(), Some("Blobs"));
     }
 
     // --- Serialization roundtrip ---
