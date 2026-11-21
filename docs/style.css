@@ -236,7 +236,9 @@ h1 .glow{color:var(--green);text-shadow:var(--glow)}
 .dl-wide:hover .dl-go{color:var(--green-soft)}
 .dl-wide .dl-go:hover{color:var(--green)}
 .dl-tag{margin-left:.4rem;font-size:.7rem;font-weight:700;color:var(--dim);vertical-align:middle}
-.dl-links{display:flex;flex-wrap:wrap;gap:.2rem 1.4rem}
+.dl-links{display:flex;flex-wrap:wrap;gap:.2rem 1.4rem;margin-top:.5rem}
+/* The row carries the .5rem above it; a per-link margin would add to the row gap when the links wrap. */
+.dl-links .dl-go{margin-top:0}
 .dl-fp{margin-top:.4rem;font-size:.72rem;color:var(--dim);line-height:1.6;overflow-wrap:anywhere}
 .dl-fp code{font-family:inherit;color:var(--ink-2)}
 

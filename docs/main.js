@@ -31,10 +31,7 @@
       // Android installs come through the F-Droid repo, not a release asset.
       label.textContent = "Get Quark for Android (experimental)";
       var btn = document.getElementById("download-btn");
-      if (btn) {
-        btn.setAttribute("href", "#android");
-        btn.removeAttribute("rel");
-      }
+      if (btn) btn.setAttribute("href", "#android");
     } else if (os === "iOS") {
       label.textContent = "Get Quark (mobile is experimental)";
     } else if (os) {
