@@ -88,6 +88,37 @@ describe("ComposeNormalEditor", () => {
   };
   const cursor = () => field.selectionStart;
 
+  // #117: `u` is vim's undo. The editor doesn't own the history (Input does);
+  // it reports the request, with its count, for the caller to carry out.
+  // Review fix: an undo restoring a deleted last character left the caret past
+  // the end of the line, where `x` and the block cursor do nothing.
+  it("settle keeps the caret on a character after an undo", () => {
+    place("abc", 3);
+    ed.settle(field);
+    expect(field.selectionStart).toBe(2);
+    expect(field.selectionEnd).toBe(3);
+  });
+
+  it("settle leaves an empty line's caret where it is", () => {
+    place("ab\n\ncd", 3);
+    ed.settle(field);
+    expect(field.selectionStart).toBe(3);
+  });
+
+  it("u asks the caller to undo, leaving the text alone", () => {
+    place("hello", 2);
+    const res = ed.handleKey("u", field);
+    expect(res).toEqual({ consumed: true, history: "undo", times: 1 });
+    expect(field.value).toBe("hello");
+  });
+
+  it("a count before u undoes that many times", () => {
+    place("hello", 0);
+    ed.handleKey("3", field);
+    expect(ed.handleKey("u", field)).toEqual({ consumed: true, history: "undo", times: 3 });
+    expect(ed.hasPending).toBe(false);
+  });
+
   it("dw deletes a word", () => {
     place("hello world", 0);
     expect(ed.handleKey("d", field).consumed).toBe(true);

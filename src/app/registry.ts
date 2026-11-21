@@ -495,6 +495,29 @@ const ACTION_LITERALS = [
     parityExempt:
       "Keyboard-only by decision (#54): a custom mobile format bar duplicates the native selection callout poorly, and doing it properly needs native UIEditMenuInteraction / Android ActionMode work.",
   },
+  {
+    // #117. In compose Normal mode `u` / Ctrl-r do the same, through the vim
+    // editor's own grammar (counts included) rather than these bindings.
+    id: "compose-undo",
+    description: "Undo the last change to the message being written",
+    requires: ["room"],
+    command: { name: "undo", aliases: ["u"] },
+    bindings: [{ sequence: "Ctrl-z", context: "insert" }],
+    parityExempt:
+      "Editing history of the text field itself, reached by keyboard and by :undo (palette). No on-screen control: where the platform has an undo command (macOS Edit menu, iOS shake) it reaches the same history through beforeinput; Android has none.",
+  },
+  {
+    id: "compose-redo",
+    description: "Redo the change last undone in the message being written",
+    requires: ["room"],
+    command: { name: "redo", aliases: ["red"] },
+    bindings: [
+      { sequence: "Ctrl-Shift-z", context: "insert" },
+      { sequence: "Ctrl-y", context: "insert" },
+    ],
+    parityExempt:
+      "Editing history of the text field itself, reached by keyboard and by :redo (palette). The platform's own redo never has anything to redo (no native undo runs), so there is no touch route.",
+  },
 
   // ── Panels and dialogs ─────────────────────────────────────────────────
   {

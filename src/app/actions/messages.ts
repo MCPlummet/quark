@@ -99,7 +99,7 @@ export async function sendMessage(body: string): Promise<void> {
   const hiddenEl = timeline.getLastHiddenEl();
   const isMerge = !!hiddenEl && !hiddenEl.classList.contains("message-group-wrapper");
 
-  input.setValue("");
+  input.resetValue("");
 
   if (isMerge) {
     // ── Merge: border fades out, text clone flies up into the bubble ─────────
@@ -378,7 +378,9 @@ export function startEdit(eventId: string, body: string): void {
   setEditSnippet(body);
   AppState.set("editingEventId", eventId);
   refreshComposeBanner();
-  input.setValue(body);
+  // A fresh history: undo must not step from the message being edited back
+  // into the draft it displaced (and so send that as the edit).
+  input.resetValue(body);
 }
 
 /**
@@ -388,7 +390,7 @@ export function cancelEdit(): void {
   const { input } = getComponents();
   if (AppState.get("editingEventId") === null) return;
   AppState.set("editingEventId", null);
-  input.setValue("");
+  input.resetValue("");
   refreshComposeBanner();
 }
 

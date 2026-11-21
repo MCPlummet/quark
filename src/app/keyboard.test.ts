@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { dispatchAction, resolveModeRoute, escapeRunsPanelClose } from "./keyboard.js";
+import { dispatchAction, resolveModeRoute, escapeRunsPanelClose, composeHistoryChord } from "./keyboard.js";
 import { Mode } from "../vim/mode.js";
 import { confirmAndLeaveRoom, redactMessage, startEdit } from "./actions.js";
 import { AppState } from "./state.js";
@@ -84,6 +84,39 @@ describe("dispatchAction — chord-bound actions", () => {
       dispatchAction(action, components);
       expect(wrapSelection).toHaveBeenLastCalledWith(marker);
     }
+  });
+});
+
+describe("dispatchAction — compose undo (#117)", () => {
+  it("undoes and redoes the compose box", () => {
+    const undo = vi.fn();
+    const redo = vi.fn();
+    const components = { input: { undo, redo } } as unknown as AppComponents;
+    dispatchAction("compose-undo", components);
+    expect(undo).toHaveBeenCalledOnce();
+    dispatchAction("compose-redo", components);
+    expect(redo).toHaveBeenCalledOnce();
+  });
+});
+
+// Review fix: in compose Normal mode only Ctrl-r was claimed; Ctrl-Z / Ctrl-Shift-Z
+// / Ctrl-Y fell through to the webview's own undo, outside this history.
+describe("composeHistoryChord", () => {
+  const key = (k: string, mods: Partial<{ ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) =>
+    ({ key: k, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...mods });
+
+  it("maps the undo and redo chords", () => {
+    expect(composeHistoryChord(key("z", { ctrlKey: true }))).toBe("undo");
+    expect(composeHistoryChord(key("z", { metaKey: true }))).toBe("undo");
+    expect(composeHistoryChord(key("Z", { ctrlKey: true, shiftKey: true }))).toBe("redo");
+    expect(composeHistoryChord(key("y", { ctrlKey: true }))).toBe("redo");
+    expect(composeHistoryChord(key("r", { ctrlKey: true }))).toBe("redo");
+  });
+
+  it("ignores everything else", () => {
+    expect(composeHistoryChord(key("z"))).toBeNull();
+    expect(composeHistoryChord(key("u"))).toBeNull();
+    expect(composeHistoryChord(key("c", { ctrlKey: true }))).toBeNull();
   });
 });
 

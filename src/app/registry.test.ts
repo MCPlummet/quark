@@ -227,6 +227,19 @@ describe("default bindings", () => {
     expect(liveSequences("open-emoji-picker", "insert")).toEqual(["Ctrl-e"]);
   });
 
+  // #117: undo/redo in Insert, by the chords every editor uses.
+  it("binds compose undo and redo in Insert", () => {
+    expect(liveSequences("compose-undo", "insert")).toEqual(["Ctrl-z"]);
+    expect(liveSequences("compose-redo", "insert")).toEqual(["Ctrl-Shift-z", "Ctrl-y"]);
+  });
+
+  it("answers vim's :u / :undo and :red / :redo", () => {
+    expect(actionByCommand("u")?.id).toBe("compose-undo");
+    expect(actionByCommand("undo")?.id).toBe("compose-undo");
+    expect(actionByCommand("red")?.id).toBe("compose-redo");
+    expect(actionByCommand("redo")?.id).toBe("compose-redo");
+  });
+
   it("reports the first live sequence as the menu hint", () => {
     expect(menuHint("edit")).toBe("E");
     expect(menuHint("view-raw-event")).toBeUndefined();

@@ -66,6 +66,145 @@ describe("Input", () => {
     });
   });
 
+  // #117: Ctrl-Z / `u` / `:undo` had nothing to call. Most of the field's edits
+  // write `value` directly, which the browser's own undo never sees.
+  describe("undo history", () => {
+    /** Mutate the field the way the browser does for one InputEvent, firing beforeinput + input. */
+    function browserEdit(inputType: string, data: string | null, next: string, caret: number) {
+      const f = input.getFieldElement();
+      f.dispatchEvent(new InputEvent("beforeinput", { inputType, data, bubbles: true, cancelable: true }));
+      f.value = next;
+      f.setSelectionRange(caret, caret);
+      f.dispatchEvent(new InputEvent("input", { inputType, data, bubbles: true }));
+    }
+
+    function typeChars(text: string) {
+      const f = input.getFieldElement();
+      for (const ch of text) {
+        const at = f.selectionStart ?? f.value.length;
+        browserEdit("insertText", ch, f.value.slice(0, at) + ch + f.value.slice(f.selectionEnd ?? at), at + 1);
+      }
+    }
+
+    it("brings a message back after select-all and delete", () => {
+      typeChars("hello world");
+      const f = input.getFieldElement();
+      f.setSelectionRange(0, f.value.length);
+      browserEdit("deleteContentBackward", null, "", 0);
+
+      expect(input.undo()).toBe(true);
+      expect(input.getValue()).toBe("hello world");
+      expect(f.selectionStart).toBe(11);
+    });
+
+    it("undoes typing a word at a time and redoes it", () => {
+      typeChars("hello world");
+      input.undo();
+      expect(input.getValue()).toBe("hello ");
+      input.undo();
+      expect(input.getValue()).toBe("");
+      expect(input.undo()).toBe(false);
+      input.redo();
+      expect(input.getValue()).toBe("hello ");
+    });
+
+    it("undoes a programmatic setValue (autocomplete, quoting)", () => {
+      typeChars("hi :jo");
+      input.setValue("hi 😂 ");
+      input.undo();
+      expect(input.getValue()).toBe("hi :jo");
+    });
+
+    it("undoes a write that fired a plain input event (vim operators, wrapSelection)", () => {
+      typeChars("bold");
+      input.getFieldElement().setSelectionRange(0, 4);
+      input.wrapSelection("**");
+      input.undo();
+      expect(input.getValue()).toBe("bold");
+    });
+
+    // Review fix: the first character typed over a selection was its own step,
+    // so select-all + "new" + Ctrl-Z left "n".
+    it("undoes typing over a selection in one step", () => {
+      typeChars("hello world");
+      input.getFieldElement().setSelectionRange(0, 11);
+      typeChars("new");
+      input.undo();
+      expect(input.getValue()).toBe("hello world");
+    });
+
+    it("keeps typing after a room's history comes back apart from its old steps", () => {
+      input.switchContext("!a", "");
+      typeChars("abc");
+      input.switchContext("!b", "");
+      input.switchContext("!a", "abc");
+      input.getFieldElement().setSelectionRange(3, 3);
+      typeChars("d");
+      input.undo();
+      expect(input.getValue()).toBe("abc");
+    });
+
+    it("routes the platform's own redo into this history", () => {
+      typeChars("abc");
+      input.undo();
+      const evt = new InputEvent("beforeinput", { inputType: "historyRedo", bubbles: true, cancelable: true });
+      input.getFieldElement().dispatchEvent(evt);
+      expect(evt.defaultPrevented).toBe(true);
+      expect(input.getValue()).toBe("abc");
+    });
+
+    it("covers a change no event reported", () => {
+      input.getFieldElement().value = "written behind its back";
+      expect(input.undo()).toBe(true);
+      expect(input.getValue()).toBe("");
+    });
+
+    it("resetValue starts a fresh history", () => {
+      typeChars("abc");
+      input.resetValue("");
+      expect(input.undo()).toBe(false);
+      expect(input.getValue()).toBe("");
+    });
+
+    it("keeps each room's history across a room switch", () => {
+      input.switchContext("!a", "");
+      typeChars("draft in a");
+      input.switchContext("!b", "");
+      expect(input.getValue()).toBe("");
+      expect(input.undo()).toBe(false);
+      input.switchContext("!a", "draft in a");
+      input.undo();
+      expect(input.getValue()).toBe("draft in ");
+    });
+
+    it("drops a room's history if the draft it returns to is not the one it left", () => {
+      input.switchContext("!a", "");
+      typeChars("abc");
+      input.switchContext("!b", "");
+      input.switchContext("!a", "something else");
+      expect(input.undo()).toBe(false);
+      expect(input.getValue()).toBe("something else");
+    });
+
+    it("routes the platform's own undo (Edit menu, shake) into this history", () => {
+      typeChars("abc");
+      const evt = new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true });
+      input.getFieldElement().dispatchEvent(evt);
+      expect(evt.defaultPrevented).toBe(true);
+      expect(input.getValue()).toBe("");
+    });
+
+    it("tells input listeners about an undo without recording it as a new change", () => {
+      typeChars("abc");
+      const seen: string[] = [];
+      input.onInput((v) => seen.push(v));
+      input.undo();
+      expect(seen).toEqual([""]);
+      expect(input.redo()).toBe(true);
+      expect(input.getValue()).toBe("abc");
+    });
+  });
+
   // What an emoji picked from the picker does: it used to be appended to the
   // end of the draft wherever the caret was.
   describe("insertText", () => {
@@ -425,6 +564,23 @@ describe("Input", () => {
 
         expect(f.value).toBe("hello");
         expect(input.hasStagedAttachments()).toBe(true);
+      });
+
+      // The stand-in text came and went in one gesture; undo must not resurrect it.
+      it("leaves no undo step behind for the stand-in text it removed", async () => {
+        const f = field()!;
+        f.value = "hello";
+        f.selectionStart = f.selectionEnd = 5;
+
+        const { deliverImage } = pasteWithClipboardImage();
+        f.value = "hello https://example.org/img.png";
+        await settle();
+        await deliverImage();
+
+        input.undo();
+        expect(f.value).toBe("");
+        input.redo();
+        expect(f.value).toBe("hello");
       });
 
       // `clipboard.read()` can sit behind a permission prompt, so the window is

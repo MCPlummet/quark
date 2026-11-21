@@ -15,6 +15,12 @@ const input = {
   setValue: vi.fn((text: string) => {
     fieldValue = text;
   }),
+  resetValue: vi.fn((text: string) => {
+    fieldValue = text;
+  }),
+  switchContext: vi.fn((_key: string | null, text: string) => {
+    fieldValue = text;
+  }),
 };
 const replyPreview = { hide: vi.fn(), show: vi.fn(), showEdit: vi.fn(), showThread: vi.fn() };
 
@@ -33,6 +39,14 @@ describe("swapComposeDraft", () => {
     swapComposeDraft("!a:x", "!b:x");
     expect(_composeDrafts.get("!a:x")).toBe("typed in a");
     expect(fieldValue).toBe("draft for b");
+  });
+
+  // #117: each room keeps its own undo history alongside its draft.
+  it("hands the compose box the incoming room, so its undo history comes back too", () => {
+    _composeDrafts.set("!b:x", "draft for b");
+    swapComposeDraft("!a:x", "!b:x");
+    expect(input.switchContext).toHaveBeenCalledExactlyOnceWith("!b:x", "draft for b");
+    expect(input.setValue).not.toHaveBeenCalled();
   });
 
   it("clears the box when the incoming room has no draft", () => {
